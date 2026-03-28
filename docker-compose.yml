@@ -24,8 +24,6 @@ services:
     environment:
       DATABASE_URL: postgresql://mtg:${POSTGRES_PASSWORD}@db:5432/mtg
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
-    volumes:
-      - backend-models:/root/.cache
 
   frontend:
     build: ./frontend
@@ -36,4 +34,3 @@ services:
 
 volumes:
   pgdata:
-  backend-models:
