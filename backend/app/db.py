@@ -99,6 +99,9 @@ async def filter_cards(filters: dict) -> list[str]:
     return [row["id"] for row in rows]
 
 
+_ALLOWED_EMBEDDING_COLUMNS = {"name_embedding", "type_line_embedding", "oracle_text_embedding"}
+
+
 async def vector_search_cards(
     column: str,
     query_embedding: list[float],
@@ -106,6 +109,9 @@ async def vector_search_cards(
     card_ids: list[str] | None = None,
 ) -> list[tuple[str, float]]:
     """Vector search on a specific embedding column. Returns [(id, distance), ...]."""
+    if column not in _ALLOWED_EMBEDDING_COLUMNS:
+        raise ValueError(f"Invalid embedding column: {column!r}")
+
     pool = await get_pool()
     embedding_str = "[" + ",".join(str(x) for x in query_embedding) + "]"
 
@@ -144,18 +150,18 @@ async def search_abilities(
         """
         SELECT name, description, embedding <=> $1::vector AS distance
         FROM keyword_abilities
-        WHERE embedding IS NOT NULL
+        WHERE embedding IS NOT NULL AND embedding <=> $1::vector < $3
         ORDER BY distance
         LIMIT $2
         """,
         embedding_str,
         n_results,
+        distance_threshold,
     )
 
     return [
         {"name": row["name"], "description": row["description"], "distance": row["distance"]}
         for row in rows
-        if row["distance"] < distance_threshold
     ]
 
 
