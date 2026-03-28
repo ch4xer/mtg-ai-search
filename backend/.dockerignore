@@ -1,0 +1,6 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+cards.db
+chroma_data/
