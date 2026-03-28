@@ -12,8 +12,11 @@ import time
 
 import psycopg2
 from psycopg2.extras import execute_values
+from dotenv import load_dotenv
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env"))
 
 from app.data_loader import download_scryfall_cards, parse_keyword_abilities
 from app.embedding import encode
@@ -24,7 +27,7 @@ KEYWORD_ABILITY_FILE = os.path.join(
 )
 
 DATABASE_URL = os.getenv(
-    "DATABASE_URL", "postgresql://mtg:mtg_password@localhost:5432/mtg"
+    "DATABASE_URL", "postgresql://mtg:mtg_password@localhost:5433/mtg"
 )
 
 
