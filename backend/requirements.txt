@@ -3,7 +3,8 @@ uvicorn[standard]
 langchain
 langchain-openai
 langgraph
-chromadb
+asyncpg
+psycopg2-binary
 sentence-transformers
 requests
 httpx
