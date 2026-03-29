@@ -21,19 +21,11 @@ load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file_
 from app.data_loader import download_scryfall_cards, parse_keyword_abilities
 from app.embedding import encode
 
-def _find_keyword_file() -> str:
-    """Locate keyword_ability.txt - works both standalone and when imported."""
-    candidates = [
-        os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "keyword_ability.txt"),
-        os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "keyword_ability.txt"),
-    ]
-    for path in candidates:
-        if os.path.isfile(path):
-            return path
-    return candidates[0]
-
-
-KEYWORD_ABILITY_FILE = _find_keyword_file()
+KEYWORD_ABILITY_FILE = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "data",
+    "keyword_ability.txt",
+)
 
 DATABASE_URL = os.getenv(
     "DATABASE_URL", "postgresql://mtg:mtg_password@localhost:5433/mtg"
