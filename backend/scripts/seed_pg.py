@@ -1,8 +1,8 @@
-"""Migration script: download Scryfall data, populate PostgreSQL + pgvector.
+"""Seed script: download Scryfall data, populate PostgreSQL + pgvector.
 
 Usage:
     1. Start PostgreSQL: docker compose up db -d
-    2. Run: cd backend && python scripts/migrate_to_pg.py
+    2. Run: cd backend && python scripts/seed_pg.py
 """
 
 import json
@@ -21,10 +21,19 @@ load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file_
 from app.data_loader import download_scryfall_cards, parse_keyword_abilities
 from app.embedding import encode
 
-KEYWORD_ABILITY_FILE = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-    "keyword_ability.txt",
-)
+def _find_keyword_file() -> str:
+    """Locate keyword_ability.txt - works both standalone and when imported."""
+    candidates = [
+        os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "keyword_ability.txt"),
+        os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "keyword_ability.txt"),
+    ]
+    for path in candidates:
+        if os.path.isfile(path):
+            return path
+    return candidates[0]
+
+
+KEYWORD_ABILITY_FILE = _find_keyword_file()
 
 DATABASE_URL = os.getenv(
     "DATABASE_URL", "postgresql://mtg:mtg_password@localhost:5433/mtg"
@@ -62,6 +71,7 @@ def create_schema(conn):
                 power                 TEXT,
                 toughness             TEXT,
                 colors                TEXT[],
+                keywords              TEXT[] DEFAULT '{}',
                 data                  JSONB NOT NULL,
                 name_embedding        vector(1024),
                 type_line_embedding   vector(1024),
@@ -80,6 +90,7 @@ def create_schema(conn):
         cur.execute("CREATE INDEX IF NOT EXISTS idx_cards_released_at ON cards(released_at)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_cards_cmc ON cards(cmc)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_cards_colors ON cards USING GIN(colors)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_cards_keywords ON cards USING GIN(keywords)")
     conn.commit()
     log("Schema created.")
 
@@ -95,7 +106,8 @@ def insert_cards(conn, cards: list[dict]):
             values = []
             for card in batch:
                 image_uris = card.get("image_uris") or {}
-                colors = card.get("colors") or []
+                colors = card.get("colors") or card.get("color_identity") or ["C"]
+                keywords = card.get("keywords") or []
                 values.append((
                     card["id"],
                     card.get("name", ""),
@@ -113,6 +125,7 @@ def insert_cards(conn, cards: list[dict]):
                     card.get("power"),
                     card.get("toughness"),
                     colors,
+                    keywords,
                     json.dumps(card),
                 ))
             execute_values(
@@ -120,7 +133,7 @@ def insert_cards(conn, cards: list[dict]):
                 """INSERT INTO cards (
                     id, name, lang, released_at, uri, scryfall_uri, layout,
                     image_art_crop, image_border_crop, mana_cost, cmc, type_line,
-                    oracle_text, power, toughness, colors, data
+                    oracle_text, power, toughness, colors, keywords, data
                 ) VALUES %s ON CONFLICT (id) DO NOTHING""",
                 values,
             )

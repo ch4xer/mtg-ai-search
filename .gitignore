@@ -7,3 +7,4 @@ dist/
 chroma_data/
 .env
 backend/.env
+pgdata/

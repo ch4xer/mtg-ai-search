@@ -28,21 +28,38 @@ llm = ChatOpenAI(
     temperature=0.3,
 )
 
-ABILITY_DISTANCE_THRESHOLD = 0.2
+ABILITY_DISTANCE_THRESHOLD = 0.18
+VECTOR_SEARCH_N_RESULTS = 50
 RRF_K = 60
 
 
 class SearchState(TypedDict):
     query: str
-    optimized_query: str
-    colors: list[str]
-    type: str
+    oracle_text: str
     name: str
-    filters: dict
-    filtered_card_ids: list[str]
+    type: str
+    colors: str
+    released_at: str
+    layout: str
+    mana_cost: str
+    cmc: str
+    power: str
+    toughness: str
+    filtered_card_ids: list[str] | None
     abilities: list[dict]
     vector_queries: dict
     ranked_results: list[dict]
+
+
+def _extract_json(text: str) -> dict:
+    """Extract JSON from LLM response, stripping markdown code fences if present."""
+    text = text.strip()
+    if text.startswith("```"):
+        # Remove ```json ... ``` wrapper
+        lines = text.split("\n")
+        lines = [l for l in lines if not l.strip().startswith("```")]
+        text = "\n".join(lines).strip()
+    return json.loads(text)
 
 
 # ── Node 1: optimize_query ──────────────────────────────────────────────
@@ -52,29 +69,31 @@ def optimize_query(state: SearchState) -> dict:
     response = llm.invoke([
         SystemMessage(content=(
             "You are a Magic: The Gathering expert. Given a user's card search query, "
-            "extract structured information and generate an optimized ability search query.\n\n"
+            "extract structured information.\n\n"
             "Return a JSON object with these fields:\n"
-            '- "optimized_query": English query for ability vector search (focus on mechanics/effects)\n'
-            '- "colors": array of color codes (W, U, B, R, G) if specified\n'
-            '- "type": card type if specified (Creature, Instant, Sorcery, Enchantment, Artifact, Land, etc.)\n'
-            '- "name": exact card name if the user specified a specific card\n'
-            '- "filters": object with optional keys: released_at, layout, mana_cost, cmc, power, toughness, colors.\n'
-            '  - For non-enumerable fields (cmc, power, toughness, released_at, mana_cost), use condition expressions like ">5", ">=2020-01-01"\n'
-            '  - For enumerable fields (colors, layout), use exact values like "B R", "transform"\n'
-            '  - Use null for fields not mentioned in the query\n\n'
+            '- "oracle_text": English description of the card effect/mechanics for vector search. Leave empty if the user only specified a card name.\n'
+            '- "name": exact card name if the user specified one, otherwise empty string\n'
+            '- "type": card type and/or subtype if specified, space-separated (e.g. "Creature", "Creature Eldrazi", "Instant", "Artifact Equipment"). '
+            'Include supertypes (Legendary), card types (Creature, Instant, Sorcery, Enchantment, Artifact, Land, Planeswalker), '
+            'and subtypes/creature types (Eldrazi, Dragon, Human, Goblin, Angel, etc.). Otherwise empty string\n'
+            '- "colors": color codes for filtering, space-separated. W=White, U=Blue, B=Black, R=Red, G=Green, C=Colorless. '
+            'For example "B", "B R", "C" for colorless. Otherwise empty string\n'
+            '- "released_at": date condition if specified (e.g. ">2020-01-01"), otherwise empty string\n'
+            '- "layout": card layout if specified (e.g. "transform"), otherwise empty string\n'
+            '- "mana_cost": mana cost condition if specified, otherwise empty string\n'
+            '- "cmc": mana value condition if specified (e.g. "<3", ">5"), otherwise empty string\n'
+            '- "power": power condition if specified (e.g. ">10"), otherwise empty string\n'
+            '- "toughness": toughness condition if specified, otherwise empty string\n\n'
             "Examples:\n"
             'Input: "能让对手弃牌的黑色生物"\n'
-            'Output: {"optimized_query": "discard cards from opponent hand", "colors": ["B"], "type": "Creature", "name": "", '
-            '"filters": {"colors": "B", "released_at": null, "layout": null, "mana_cost": null, "cmc": null, "power": null, "toughness": null}}\n\n'
+            'Output: {"oracle_text": "discard cards from opponent hand", "name": "", "type": "Creature", '
+            '"colors": "B", "released_at": "", "layout": "", "mana_cost": "", "cmc": "", "power": "", "toughness": ""}\n\n'
             'Input: "red instant that deals damage with cmc less than 3"\n'
-            'Output: {"optimized_query": "deal direct damage to target", "colors": ["R"], "type": "Instant", "name": "", '
-            '"filters": {"colors": "R", "cmc": "<3", "released_at": null, "layout": null, "mana_cost": null, "power": null, "toughness": null}}\n\n'
+            'Output: {"oracle_text": "deal direct damage to target", "name": "", "type": "Instant", '
+            '"colors": "R", "released_at": "", "layout": "", "mana_cost": "", "cmc": "<3", "power": "", "toughness": ""}\n\n'
             'Input: "creatures with power greater than 10 released after 2020"\n'
-            'Output: {"optimized_query": "powerful creature", "colors": [], "type": "Creature", "name": "", '
-            '"filters": {"power": ">10", "released_at": ">2020-01-01", "colors": null, "layout": null, "mana_cost": null, "cmc": null, "toughness": null}}\n\n'
-            'Input: "Liliana of the Veil"\n'
-            'Output: {"optimized_query": "", "colors": [], "type": "", "name": "Liliana of the Veil", '
-            '"filters": {"colors": null, "released_at": null, "layout": null, "mana_cost": null, "cmc": null, "power": null, "toughness": null}}\n\n'
+            'Output: {"oracle_text": "", "name": "", "type": "Creature", '
+            '"colors": "", "released_at": ">2020-01-01", "layout": "", "mana_cost": "", "cmc": "", "power": ">10", "toughness": ""}\n\n'
             "Return ONLY the JSON object, nothing else."
         )),
         HumanMessage(content=state["query"]),
@@ -87,41 +106,45 @@ def optimize_query(state: SearchState) -> dict:
     logger.info(">>> Original query: %s", state["query"])
 
     try:
-        data = json.loads(content)
-        optimized = data.get("optimized_query", state["query"])
-        colors = data.get("colors", [])
-        card_type = data.get("type", "")
-        card_name = data.get("name", "")
-        filters = data.get("filters", {})
-        # Clean null values from filters
-        filters = {k: v for k, v in filters.items() if v is not None}
+        data = _extract_json(content)
     except (json.JSONDecodeError, TypeError):
-        optimized = content if isinstance(content, str) else str(content)
-        colors = []
-        card_type = ""
-        card_name = ""
-        filters = {}
+        logger.warning("Failed to parse LLM response as JSON: %s", content)
+        data = {}
 
-    logger.info("<<< Optimized: %s, Colors: %s, Type: %s, Name: %s, Filters: %s",
-                optimized, colors, card_type, card_name, filters)
-
-    return {
-        "optimized_query": optimized,
-        "colors": colors,
-        "type": card_type,
-        "name": card_name,
-        "filters": filters,
+    result = {
+        "oracle_text": data.get("oracle_text", ""),
+        "name": data.get("name", ""),
+        "type": data.get("type", ""),
+        "colors": data.get("colors", ""),
+        "released_at": data.get("released_at", ""),
+        "layout": data.get("layout", ""),
+        "mana_cost": data.get("mana_cost", ""),
+        "cmc": data.get("cmc", ""),
+        "power": data.get("power", ""),
+        "toughness": data.get("toughness", ""),
     }
+
+    logger.info("<<< Parsed: %s", {k: v for k, v in result.items() if v})
+
+    return result
 
 
 # ── Node 2a: filter_cards_node (parallel) ───────────────────────────────
 
 async def filter_cards_node(state: SearchState) -> dict:
-    """Filter cards by structured conditions from optimize_query."""
-    filters = state.get("filters", {})
+    """Filter cards by structured conditions and keyword abilities."""
+    # Build filters dict from flat state fields
+    filter_keys = ["colors", "type", "released_at", "layout", "mana_cost", "cmc", "power", "toughness"]
+    filters = {k: state[k] for k in filter_keys if state.get(k)}
+
+    # Add keyword abilities as filter
+    abilities = state.get("abilities", [])
+    if abilities:
+        filters["keywords"] = [a["name"] for a in abilities]
+
     if not filters:
         logger.info("<<< No filters, skipping structured filtering")
-        return {"filtered_card_ids": []}
+        return {"filtered_card_ids": None}
 
     card_ids = await filter_cards(filters)
     logger.info("<<< Filtered to %d cards", len(card_ids))
@@ -132,7 +155,7 @@ async def filter_cards_node(state: SearchState) -> dict:
 
 async def search_abilities_node(state: SearchState) -> dict:
     """Search keyword abilities by vector similarity."""
-    query = state.get("optimized_query") or state["query"]
+    query = state.get("oracle_text", "")
     if not query:
         return {"abilities": []}
 
@@ -151,11 +174,9 @@ async def search_abilities_node(state: SearchState) -> dict:
 # ── Node 3: prepare_vector_queries ───────────────────────────────────────
 
 def prepare_vector_queries(state: SearchState) -> dict:
-    """Prepare vector query texts for 3-way search."""
-    optimized = state.get("optimized_query") or state["query"]
-    abilities = state.get("abilities", [])
+    """Prepare vector query texts for vector search."""
+    oracle_text = state.get("oracle_text", "")
     card_name = state.get("name", "")
-    card_type = state.get("type", "")
 
     queries = {}
 
@@ -163,15 +184,13 @@ def prepare_vector_queries(state: SearchState) -> dict:
     if card_name:
         queries["name"] = card_name
 
-    # type_line query: only if a card type was specified
-    if card_type:
-        queries["type_line"] = card_type
+    # oracle_text query: only if LLM extracted a card effect description
+    if oracle_text:
+        queries["oracle_text"] = oracle_text
 
-    # oracle_text query: always present, combine with abilities
-    oracle_parts = [optimized] if optimized else []
-    for a in abilities:
-        oracle_parts.append(a["name"])
-    queries["oracle_text"] = " ".join(oracle_parts) if oracle_parts else ""
+    # If no queries at all, fall back to raw query for oracle_text
+    if not queries:
+        queries["oracle_text"] = state["query"]
 
     logger.info("<<< Vector queries: %s", queries)
     return {"vector_queries": queries}
@@ -182,13 +201,19 @@ def prepare_vector_queries(state: SearchState) -> dict:
 async def vector_search_node(state: SearchState) -> dict:
     """3-way vector search with RRF fusion."""
     queries = state.get("vector_queries", {})
-    filtered_ids = state.get("filtered_card_ids", [])
-    card_ids_filter = filtered_ids if filtered_ids else None
+    filtered_ids = state.get("filtered_card_ids")
+
+    # None = no filters applied, search all cards
+    # [] = filters applied but no cards matched, return empty
+    if filtered_ids is not None and len(filtered_ids) == 0:
+        logger.info("<<< Filters matched 0 cards, returning empty")
+        return {"ranked_results": []}
+
+    card_ids_filter = filtered_ids
 
     # Map query keys to embedding column names
     column_map = {
         "name": "name_embedding",
-        "type_line": "type_line_embedding",
         "oracle_text": "oracle_text_embedding",
     }
 
@@ -199,7 +224,7 @@ async def vector_search_node(state: SearchState) -> dict:
             continue
         col = column_map[key]
         query_vec = encode([text])[0]
-        results = await vector_search_cards(col, query_vec, n_results=20, card_ids=card_ids_filter)
+        results = await vector_search_cards(col, query_vec, n_results=VECTOR_SEARCH_N_RESULTS, card_ids=card_ids_filter)
         rankings[key] = [r[0] for r in results]  # list of card IDs in rank order
         logger.info("  Vector search [%s]: %d results", key, len(results))
 
@@ -210,7 +235,7 @@ async def vector_search_node(state: SearchState) -> dict:
             scores[card_id] += 1.0 / (RRF_K + rank)
 
     # Sort by RRF score descending, take top 10
-    top_ids = sorted(scores, key=lambda card_id: scores[card_id], reverse=True)[:10]
+    top_ids = sorted(scores, key=lambda card_id: scores[card_id], reverse=True)[:VECTOR_SEARCH_N_RESULTS]
 
     # Fetch full card data
     cards = await get_cards_by_ids(top_ids)
@@ -232,13 +257,10 @@ def build_graph():
 
     graph.set_entry_point("optimize_query")
 
-    # Fan out: optimize_query -> [filter_cards, search_abilities] in parallel
-    graph.add_edge("optimize_query", "filter_cards")
+    # Sequential: abilities must be found before filtering by keywords
     graph.add_edge("optimize_query", "search_abilities")
-
-    # Fan in: both -> prepare_vector_queries
+    graph.add_edge("search_abilities", "filter_cards")
     graph.add_edge("filter_cards", "prepare_vector_queries")
-    graph.add_edge("search_abilities", "prepare_vector_queries")
 
     graph.add_edge("prepare_vector_queries", "vector_search")
     graph.add_edge("vector_search", END)
@@ -253,12 +275,17 @@ async def run_search(query: str) -> list[dict]:
     """Run the search agent with a query."""
     result = await search_agent.ainvoke({
         "query": query,
-        "optimized_query": "",
-        "colors": [],
-        "type": "",
+        "oracle_text": "",
         "name": "",
-        "filters": {},
-        "filtered_card_ids": [],
+        "type": "",
+        "colors": "",
+        "released_at": "",
+        "layout": "",
+        "mana_cost": "",
+        "cmc": "",
+        "power": "",
+        "toughness": "",
+        "filtered_card_ids": None,
         "abilities": [],
         "vector_queries": {},
         "ranked_results": [],

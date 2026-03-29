@@ -1,3 +1,5 @@
+import asyncio
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -7,10 +9,30 @@ from pydantic import BaseModel
 from .agent import run_search
 from .db import close_pool, get_pool
 
+logger = logging.getLogger(__name__)
+
+
+async def _ensure_data(pool):
+    """Check if card data exists; if not, run the seed script."""
+    try:
+        count = await pool.fetchval("SELECT COUNT(*) FROM cards")
+    except Exception:
+        count = 0
+
+    if count > 0:
+        logger.info("Database has %d cards, skipping seed.", count)
+        return
+
+    logger.info("No card data found. Running seed script...")
+    from scripts.seed_pg import main as seed_main
+    await asyncio.to_thread(seed_main)
+    logger.info("Seed complete.")
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await get_pool()
+    pool = await get_pool()
+    await _ensure_data(pool)
     yield
     await close_pool()
 

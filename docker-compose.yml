@@ -1,5 +1,5 @@
 services:
-  db:
+  mtg-db:
     image: pgvector/pgvector:pg17
     volumes:
       - pgdata:/var/lib/postgresql/data
@@ -14,23 +14,27 @@ services:
       interval: 5s
       retries: 5
 
-  backend:
-    build: ./backend
+  mtg-backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
     ports:
       - "8000:8000"
     depends_on:
-      db:
+      mtg-db:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgresql://mtg:${POSTGRES_PASSWORD}@db:5432/mtg
+      DATABASE_URL: postgresql://mtg:${POSTGRES_PASSWORD}@mtg-db:5432/mtg
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
+      TRANSFORMERS_OFFLINE: "1"
+      HF_HUB_OFFLINE: "1"
 
-  frontend:
+  mtg-frontend:
     build: ./frontend
     ports:
       - "5173:80"
     depends_on:
-      - backend
+      - mtg-backend
 
 volumes:
   pgdata:

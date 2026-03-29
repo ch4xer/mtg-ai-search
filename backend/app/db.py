@@ -59,10 +59,23 @@ async def filter_cards(filters: dict) -> list[str]:
             continue
 
         if key == "colors":
-            # "B R" means colors must contain both B and R
+            # "B R" means colors must contain both B and R; "C" for colorless
             color_list = value.split()
             clauses.append(f"colors @> ${idx}::text[]")
             params.append(color_list)
+            idx += 1
+
+        elif key == "type":
+            # "Creature Avatar" means type_line must contain both words
+            for word in value.split():
+                clauses.append(f"type_line ILIKE ${idx}")
+                params.append(f"%{word}%")
+                idx += 1
+
+        elif key == "keywords":
+            # keywords && ARRAY[...] means at least one keyword matches
+            clauses.append(f"keywords && ${idx}::text[]")
+            params.append(value)  # already a list
             idx += 1
 
         elif key == "layout":
@@ -81,8 +94,9 @@ async def filter_cards(filters: dict) -> list[str]:
                 clauses.append(f"CAST(NULLIF({col}, '*') AS real) {op} ${idx}::real")
                 params.append(float(val))
             elif key == "released_at":
+                from datetime import date as date_type
                 clauses.append(f"{col} {op} ${idx}::date")
-                params.append(val)
+                params.append(date_type.fromisoformat(val))
             elif key == "mana_cost":
                 clauses.append(f"{col} {op} ${idx}")
                 params.append(val)

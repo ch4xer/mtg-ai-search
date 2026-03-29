@@ -10,6 +10,9 @@ function App() {
   const [results, setResults] = useState([]);
   const [loading, setLoading] = useState(false);
   const [searched, setSearched] = useState(false);
+  const [imageMode, setImageMode] = useState(() => {
+    return localStorage.getItem("mtg-image-mode") || "border_crop";
+  });
 
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
@@ -18,6 +21,14 @@ function App() {
 
   const toggleTheme = () => {
     setTheme((prev) => (prev === "dark" ? "light" : "dark"));
+  };
+
+  const toggleImageMode = () => {
+    setImageMode((prev) => {
+      const next = prev === "border_crop" ? "art_crop" : "border_crop";
+      localStorage.setItem("mtg-image-mode", next);
+      return next;
+    });
   };
 
   const handleSearch = async (query) => {
@@ -44,7 +55,7 @@ function App() {
     <div className="app">
       <Header theme={theme} onToggleTheme={toggleTheme} />
       <main className="main-content">
-        <SearchBar onSearch={handleSearch} loading={loading} />
+        <SearchBar onSearch={handleSearch} loading={loading} imageMode={imageMode} onToggleImageMode={toggleImageMode} />
         {loading && (
           <div className="loading">
             <div className="loading-spinner" />
@@ -56,7 +67,7 @@ function App() {
             <p>未找到匹配的卡牌，请尝试其他描述</p>
           </div>
         )}
-        {!loading && results.length > 0 && <CardGrid cards={results} />}
+        {!loading && results.length > 0 && <CardGrid cards={results} imageMode={imageMode} />}
       </main>
     </div>
   );
