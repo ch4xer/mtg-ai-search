@@ -8,6 +8,7 @@ from pydantic import BaseModel
 
 from .agent import run_search
 from .db import close_pool, get_pool
+from .decks import auth_router, deck_router
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +33,34 @@ async def _ensure_data(pool):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     pool = await get_pool()
+    # Ensure user/deck tables exist (idempotent)
+    async with pool.acquire() as conn:
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                username      TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL,
+                created_at    TIMESTAMPTZ DEFAULT now()
+            );
+            CREATE TABLE IF NOT EXISTS decks (
+                id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                user_id    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                name       TEXT NOT NULL,
+                created_at TIMESTAMPTZ DEFAULT now(),
+                updated_at TIMESTAMPTZ DEFAULT now()
+            );
+            CREATE TABLE IF NOT EXISTS deck_cards (
+                id       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                deck_id  UUID NOT NULL REFERENCES decks(id) ON DELETE CASCADE,
+                card_id  TEXT NOT NULL REFERENCES cards(id),
+                quantity INT NOT NULL DEFAULT 1,
+                added_at TIMESTAMPTZ DEFAULT now(),
+                UNIQUE(deck_id, card_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
+            CREATE INDEX IF NOT EXISTS idx_decks_user_id ON decks(user_id);
+            CREATE INDEX IF NOT EXISTS idx_deck_cards_deck_id ON deck_cards(deck_id);
+        """)
     await _ensure_data(pool)
     yield
     await close_pool()
@@ -46,6 +75,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(auth_router)
+app.include_router(deck_router)
 
 
 class SearchRequest(BaseModel):
