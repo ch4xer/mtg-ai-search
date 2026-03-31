@@ -192,3 +192,128 @@ async def get_cards_by_ids(card_ids: list[str]) -> list[dict]:
         card_map[row["id"]] = json.loads(row["data"]) if isinstance(row["data"], str) else row["data"]
 
     return [card_map[cid] for cid in card_ids if cid in card_map]
+
+
+# ── User functions ──────────────────────────────────────────────────────
+
+
+async def create_user(username: str, password_hash: str) -> dict:
+    pool = await get_pool()
+    row = await pool.fetchrow(
+        "INSERT INTO users (username, password_hash) VALUES ($1, $2) RETURNING id, username, created_at",
+        username, password_hash,
+    )
+    return {"id": str(row["id"]), "username": row["username"]}
+
+
+async def get_user_by_username(username: str) -> dict | None:
+    pool = await get_pool()
+    row = await pool.fetchrow(
+        "SELECT id, username, password_hash FROM users WHERE username = $1",
+        username,
+    )
+    if not row:
+        return None
+    return {"id": str(row["id"]), "username": row["username"], "password_hash": row["password_hash"]}
+
+
+# ── Deck functions ──────────────────────────────────────────────────────
+
+
+async def create_deck(user_id: str, name: str) -> dict:
+    pool = await get_pool()
+    row = await pool.fetchrow(
+        "INSERT INTO decks (user_id, name) VALUES ($1::uuid, $2) RETURNING id, name, created_at",
+        user_id, name,
+    )
+    return {"id": str(row["id"]), "name": row["name"], "created_at": row["created_at"].isoformat()}
+
+
+async def get_user_decks(user_id: str) -> list[dict]:
+    pool = await get_pool()
+    rows = await pool.fetch(
+        """SELECT d.id, d.name, d.created_at, d.updated_at,
+                  COALESCE(SUM(dc.quantity), 0) AS card_count
+           FROM decks d
+           LEFT JOIN deck_cards dc ON dc.deck_id = d.id
+           WHERE d.user_id = $1::uuid
+           GROUP BY d.id
+           ORDER BY d.updated_at DESC""",
+        user_id,
+    )
+    return [
+        {
+            "id": str(r["id"]),
+            "name": r["name"],
+            "card_count": int(r["card_count"]),
+            "created_at": r["created_at"].isoformat(),
+            "updated_at": r["updated_at"].isoformat(),
+        }
+        for r in rows
+    ]
+
+
+async def get_deck(deck_id: str) -> dict | None:
+    pool = await get_pool()
+    row = await pool.fetchrow("SELECT id, user_id, name, created_at, updated_at FROM decks WHERE id = $1::uuid", deck_id)
+    if not row:
+        return None
+    return {
+        "id": str(row["id"]),
+        "user_id": str(row["user_id"]),
+        "name": row["name"],
+        "created_at": row["created_at"].isoformat(),
+        "updated_at": row["updated_at"].isoformat(),
+    }
+
+
+async def update_deck(deck_id: str, name: str) -> dict:
+    pool = await get_pool()
+    row = await pool.fetchrow(
+        "UPDATE decks SET name = $1, updated_at = now() WHERE id = $2::uuid RETURNING id, name, updated_at",
+        name, deck_id,
+    )
+    return {"id": str(row["id"]), "name": row["name"], "updated_at": row["updated_at"].isoformat()}
+
+
+async def delete_deck(deck_id: str):
+    pool = await get_pool()
+    await pool.execute("DELETE FROM decks WHERE id = $1::uuid", deck_id)
+
+
+async def get_deck_cards(deck_id: str) -> list[dict]:
+    pool = await get_pool()
+    rows = await pool.fetch(
+        """SELECT dc.card_id, dc.quantity, dc.added_at, c.data
+           FROM deck_cards dc
+           JOIN cards c ON c.id = dc.card_id
+           WHERE dc.deck_id = $1::uuid
+           ORDER BY dc.added_at DESC""",
+        deck_id,
+    )
+    return [
+        {
+            "card": json.loads(r["data"]) if isinstance(r["data"], str) else r["data"],
+            "quantity": r["quantity"],
+            "added_at": r["added_at"].isoformat(),
+        }
+        for r in rows
+    ]
+
+
+async def add_card_to_deck(deck_id: str, card_id: str, quantity: int = 1) -> dict:
+    pool = await get_pool()
+    row = await pool.fetchrow(
+        """INSERT INTO deck_cards (deck_id, card_id, quantity)
+           VALUES ($1::uuid, $2, $3)
+           ON CONFLICT (deck_id, card_id)
+           DO UPDATE SET quantity = deck_cards.quantity + EXCLUDED.quantity
+           RETURNING card_id, quantity""",
+        deck_id, card_id, quantity,
+    )
+    return {"card_id": row["card_id"], "quantity": row["quantity"]}
+
+
+async def remove_card_from_deck(deck_id: str, card_id: str):
+    pool = await get_pool()
+    await pool.execute("DELETE FROM deck_cards WHERE deck_id = $1::uuid AND card_id = $2", deck_id, card_id)
