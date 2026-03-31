@@ -15,9 +15,7 @@ services:
       retries: 5
 
   mtg-backend:
-    build:
-      context: .
-      dockerfile: backend/Dockerfile
+    build: ./backend
     ports:
       - "8000:8000"
     depends_on:
@@ -26,8 +24,8 @@ services:
     environment:
       DATABASE_URL: postgresql://mtg:${POSTGRES_PASSWORD}@mtg-db:5432/mtg
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
-      TRANSFORMERS_OFFLINE: "1"
-      HF_HUB_OFFLINE: "1"
+      SILICONFLOW_API_KEY: ${SILICONFLOW_API_KEY}
+      JWT_SECRET: ${JWT_SECRET}
 
   mtg-frontend:
     build: ./frontend

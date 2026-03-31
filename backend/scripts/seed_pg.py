@@ -10,8 +10,7 @@ import os
 import sys
 import time
 
-import psycopg2
-from psycopg2.extras import execute_values
+import psycopg
 from dotenv import load_dotenv
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -37,7 +36,7 @@ def log(msg: str):
 
 
 def get_conn():
-    return psycopg2.connect(DATABASE_URL)
+    return psycopg.connect(DATABASE_URL)
 
 
 def create_schema(conn):
@@ -54,6 +53,7 @@ def create_schema(conn):
                 uri                   TEXT,
                 scryfall_uri          TEXT,
                 layout                TEXT,
+                image_png             TEXT,
                 image_art_crop        TEXT,
                 image_border_crop     TEXT,
                 mana_cost             TEXT,
@@ -65,9 +65,9 @@ def create_schema(conn):
                 colors                TEXT[],
                 keywords              TEXT[] DEFAULT '{}',
                 data                  JSONB NOT NULL,
-                name_embedding        vector(1024),
-                type_line_embedding   vector(1024),
-                oracle_text_embedding vector(1024)
+                name_embedding        vector(2560),
+                type_line_embedding   vector(2560),
+                oracle_text_embedding vector(2560)
             )
         """)
         cur.execute("""
@@ -75,9 +75,39 @@ def create_schema(conn):
                 id          TEXT PRIMARY KEY,
                 name        TEXT NOT NULL,
                 description TEXT NOT NULL,
-                embedding   vector(1024)
+                embedding   vector(2560)
             )
         """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                username      TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL,
+                created_at    TIMESTAMPTZ DEFAULT now()
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS decks (
+                id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                user_id    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                name       TEXT NOT NULL,
+                created_at TIMESTAMPTZ DEFAULT now(),
+                updated_at TIMESTAMPTZ DEFAULT now()
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS deck_cards (
+                id       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                deck_id  UUID NOT NULL REFERENCES decks(id) ON DELETE CASCADE,
+                card_id  TEXT NOT NULL REFERENCES cards(id),
+                quantity INT NOT NULL DEFAULT 1,
+                added_at TIMESTAMPTZ DEFAULT now(),
+                UNIQUE(deck_id, card_id)
+            )
+        """)
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_decks_user_id ON decks(user_id)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_deck_cards_deck_id ON deck_cards(deck_id)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_cards_name ON cards(name)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_cards_released_at ON cards(released_at)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_cards_cmc ON cards(cmc)")
@@ -108,6 +138,7 @@ def insert_cards(conn, cards: list[dict]):
                     card.get("uri"),
                     card.get("scryfall_uri"),
                     card.get("layout"),
+                    image_uris.get("png"),
                     image_uris.get("art_crop"),
                     image_uris.get("border_crop"),
                     card.get("mana_cost"),
@@ -120,13 +151,14 @@ def insert_cards(conn, cards: list[dict]):
                     keywords,
                     json.dumps(card),
                 ))
-            execute_values(
-                cur,
+            cur.executemany(
                 """INSERT INTO cards (
                     id, name, lang, released_at, uri, scryfall_uri, layout,
-                    image_art_crop, image_border_crop, mana_cost, cmc, type_line,
+                    image_png, image_art_crop, image_border_crop, mana_cost, cmc, type_line,
                     oracle_text, power, toughness, colors, keywords, data
-                ) VALUES %s ON CONFLICT (id) DO NOTHING""",
+                ) VALUES (
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                ) ON CONFLICT (id) DO NOTHING""",
                 values,
             )
             conn.commit()
@@ -141,9 +173,8 @@ def insert_abilities(conn, abilities: dict[str, str]):
             (name.lower().replace(" ", "_"), name, desc)
             for name, desc in abilities.items()
         ]
-        execute_values(
-            cur,
-            "INSERT INTO keyword_abilities (id, name, description) VALUES %s ON CONFLICT (id) DO NOTHING",
+        cur.executemany(
+            "INSERT INTO keyword_abilities (id, name, description) VALUES (%s, %s, %s) ON CONFLICT (id) DO NOTHING",
             values,
         )
     conn.commit()
@@ -213,23 +244,13 @@ def generate_ability_embeddings(conn):
 
 
 def create_vector_indexes(conn):
-    """Create ivfflat indexes after data is loaded."""
-    log("Creating vector indexes...")
+    """Create HNSW indexes after data is loaded."""
+    log("Creating vector indexes (HNSW)...")
     with conn.cursor() as cur:
-        # ivfflat needs lists parameter; use sqrt(n) as a reasonable default
-        cur.execute("SELECT COUNT(*) FROM cards WHERE name_embedding IS NOT NULL")
-        card_count = cur.fetchone()[0]
-        lists = max(1, int(card_count ** 0.5))
-        log(f"  Using {lists} lists for ivfflat (based on {card_count} cards)")
-
-        cur.execute(f"CREATE INDEX IF NOT EXISTS idx_cards_name_vec ON cards USING ivfflat(name_embedding vector_cosine_ops) WITH (lists = {lists})")
-        cur.execute(f"CREATE INDEX IF NOT EXISTS idx_cards_type_vec ON cards USING ivfflat(type_line_embedding vector_cosine_ops) WITH (lists = {lists})")
-        cur.execute(f"CREATE INDEX IF NOT EXISTS idx_cards_oracle_vec ON cards USING ivfflat(oracle_text_embedding vector_cosine_ops) WITH (lists = {lists})")
-
-        cur.execute("SELECT COUNT(*) FROM keyword_abilities WHERE embedding IS NOT NULL")
-        ability_count = cur.fetchone()[0]
-        ability_lists = max(1, int(ability_count ** 0.5))
-        cur.execute(f"CREATE INDEX IF NOT EXISTS idx_abilities_vec ON keyword_abilities USING ivfflat(embedding vector_cosine_ops) WITH (lists = {ability_lists})")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_cards_name_vec ON cards USING hnsw(name_embedding vector_cosine_ops)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_cards_type_vec ON cards USING hnsw(type_line_embedding vector_cosine_ops)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_cards_oracle_vec ON cards USING hnsw(oracle_text_embedding vector_cosine_ops)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_abilities_vec ON keyword_abilities USING hnsw(embedding vector_cosine_ops)")
     conn.commit()
     log("Vector indexes created.")
 
