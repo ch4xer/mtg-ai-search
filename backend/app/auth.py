@@ -49,3 +49,12 @@ def decode_token(token: str, expected_type: str = "access") -> str:
 async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> str:
     """FastAPI dependency that extracts user_id from Bearer token."""
     return decode_token(credentials.credentials, expected_type="access")
+
+
+async def require_admin(user_id: str = Depends(get_current_user)) -> str:
+    """FastAPI dependency that requires the current user to be an admin."""
+    from .db import get_user_by_id
+    user = await get_user_by_id(user_id)
+    if not user or user["role"] != "admin":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
+    return user_id
