@@ -33,45 +33,5 @@
 
 ## 新增需求
 
-
-1. 将原始数据从sqlite迁移到postgresql+JSONB中，数据库使用Docker部署，将数据挂载到容器中，原始数据中的以下字段将会得到被迁移：
-```
-id
-name
-lang
-released_at
-uri
-scryfall_uri
-layout
-image_uris: {
-  art_crop
-  border_crop
-}
-mana_cost
-cmc
-type_line
-oracle_text
-power
-toughness
-colors
-```
-2. postgresql需要支持pgvector，并将以下字段的数据向量化存储，使用bge-largn-en，这个步骤你写一个脚本让我执行，不需要你执行
-  
-```
-(RAG) name
-(RAG) type_line
-(RAG) oracle_text
-```
-
-1. 用户输入查询语句后
-   1. 大模型优化查询语句得到优化后的查询语句A
-   2. 大模型解析查询语句A中的条件（例如发布时间在2012年以后、法力值大于5），调用mcp工具从数据库中进行卡片的初步筛选，支持根据released_at、layout、mana_cost、cmc、power、toughness、colors生成查询语句，如果查询语句中没有相关的字段，那么就省略。对于MCP工具的输入参数，遵循以下法则：
-      1. 对于不可穷举的参数，使用条件语句，例如对于power参数，可以输入 ">10"，对于released_at，可以输入表示“在xx日期之后”的逻辑表达式
-      2. 对于可穷举的参数，可以使用精准匹配，例如对于colors参数，可以输入 “B R”，MCP工具查询colors中包括Blue和Red的卡片，在例如layout参数，可以指定是否为双面牌
-   3. 大模型根据查询语句A，去向量化搜索相关的ability（例如Lifelink）
-   4. 大模型根据查询语句A和步骤3中得到的ability，准备向量化查询语句：
-      1. 如果查询语句A中指定了卡片名，那么将其作为name向量化查询语句
-      2. 如果查询语句A中指定了卡片类型，那么将其作为type_line向量化查询语句
-      3. 如果查询语句A中指定了卡片效果，那么将其与ability拼接起来作为oracle_text向量化查询语句
-   5. 从卡片数据库中向量化搜索name、type_line、oracle_text，将结果根据RRF (Reciprocal Rank Fusion)算法进行排名
-
+1. 添加用户登录功能，每一个用户可以创建自己的卡组，可以点击搜索结果中的卡片将卡片添加到指定卡组中去,
+2. 添加卡组导出功能，让每9张万智牌以3x3的形式均匀排列在同一张a4纸上，每一张万智牌都使用image_png链接的高清图片，尺寸缩放到2.5 × 3.5 英寸，最后导出多个pdf文件，每个pdf文件上都是9张卡牌图片
