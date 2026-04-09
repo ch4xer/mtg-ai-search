@@ -64,10 +64,11 @@ def create_schema(conn):
                 toughness             TEXT,
                 colors                TEXT[],
                 keywords              TEXT[] DEFAULT '{}',
+                is_playtest           BOOLEAN NOT NULL DEFAULT FALSE,
                 data                  JSONB NOT NULL,
-                name_embedding        vector(2560),
-                type_line_embedding   vector(2560),
-                oracle_text_embedding vector(2560)
+                name_embedding        halfvec(2560),
+                type_line_embedding   halfvec(2560),
+                oracle_text_embedding halfvec(2560)
             )
         """)
         cur.execute("""
@@ -75,7 +76,7 @@ def create_schema(conn):
                 id          TEXT PRIMARY KEY,
                 name        TEXT NOT NULL,
                 description TEXT NOT NULL,
-                embedding   vector(2560)
+                embedding   halfvec(2560)
             )
         """)
         cur.execute("""
@@ -149,15 +150,16 @@ def insert_cards(conn, cards: list[dict]):
                     card.get("toughness"),
                     colors,
                     keywords,
+                    card.get("set_type") == "funny",
                     json.dumps(card),
                 ))
             cur.executemany(
                 """INSERT INTO cards (
                     id, name, lang, released_at, uri, scryfall_uri, layout,
                     image_png, image_art_crop, image_border_crop, mana_cost, cmc, type_line,
-                    oracle_text, power, toughness, colors, keywords, data
+                    oracle_text, power, toughness, colors, keywords, is_playtest, data
                 ) VALUES (
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
                 ) ON CONFLICT (id) DO NOTHING""",
                 values,
             )
@@ -181,78 +183,112 @@ def insert_abilities(conn, abilities: dict[str, str]):
     log("Abilities inserted.")
 
 
-def generate_card_embeddings(conn, batch_size: int = 200):
-    """Generate and store embeddings for cards."""
-    log("Generating card embeddings...")
+def generate_card_embeddings(conn, batch_size: int = 200, max_rounds: int = 10):
+    """Generate and store embeddings for cards. Skips failed batches and retries in later rounds."""
+    from app.embedding import encode_batch_safe
+
+    for round_num in range(1, max_rounds + 1):
+        with conn.cursor() as cur:
+            cur.execute("SELECT id, name, type_line, oracle_text FROM cards WHERE name_embedding IS NULL")
+            rows = cur.fetchall()
+
+        if not rows:
+            log("All card embeddings complete.")
+            return
+
+        log(f"Generating card embeddings (round {round_num}/{max_rounds}): {len(rows)} cards remaining...")
+        total = len(rows)
+        failed = 0
+
+        for i in range(0, total, batch_size):
+            batch = rows[i:i + batch_size]
+            ids = [r[0] for r in batch]
+            names = [r[1] or "" for r in batch]
+            type_lines = [r[2] or "" for r in batch]
+            oracle_texts = [r[3] or "" for r in batch]
+
+            t0 = time.time()
+            name_vecs = encode_batch_safe(names)
+            type_vecs = encode_batch_safe(type_lines)
+            oracle_vecs = encode_batch_safe(oracle_texts)
+
+            if name_vecs is None or type_vecs is None or oracle_vecs is None:
+                failed += len(batch)
+                log(f"  [{min(i + batch_size, total)}/{total}] SKIPPED {len(batch)} cards (API error)")
+                continue
+
+            with conn.cursor() as cur:
+                for j, card_id in enumerate(ids):
+                    cur.execute(
+                        """UPDATE cards SET
+                            name_embedding = %s::halfvec,
+                            type_line_embedding = %s::halfvec,
+                            oracle_text_embedding = %s::halfvec
+                        WHERE id = %s""",
+                        (str(name_vecs[j]), str(type_vecs[j]), str(oracle_vecs[j]), card_id),
+                    )
+            conn.commit()
+
+            elapsed = time.time() - t0
+            log(f"  [{min(i + batch_size, total)}/{total}] Embedded {len(batch)} cards ({elapsed:.1f}s)")
+
+        if failed == 0:
+            return
+        log(f"Round {round_num} done. {failed} cards failed, will retry...")
+        time.sleep(10)
+
+    # Check remaining after all rounds
     with conn.cursor() as cur:
-        cur.execute("SELECT id, name, type_line, oracle_text FROM cards WHERE name_embedding IS NULL")
-        rows = cur.fetchall()
+        cur.execute("SELECT COUNT(*) FROM cards WHERE name_embedding IS NULL")
+        remaining = cur.fetchone()[0]
+    if remaining > 0:
+        log(f"WARNING: {remaining} cards still missing embeddings after {max_rounds} rounds.")
+    else:
+        log("All card embeddings complete.")
 
-    log(f"  {len(rows)} cards need embeddings")
-    total = len(rows)
 
-    for i in range(0, total, batch_size):
-        batch = rows[i:i + batch_size]
-        ids = [r[0] for r in batch]
-        names = [r[1] or "" for r in batch]
-        type_lines = [r[2] or "" for r in batch]
-        oracle_texts = [r[3] or "" for r in batch]
+def generate_ability_embeddings(conn, max_rounds: int = 10):
+    """Generate and store embeddings for keyword abilities with retry."""
+    from app.embedding import encode_batch_safe
 
-        t0 = time.time()
-        name_vecs = encode(names)
-        type_vecs = encode(type_lines)
-        oracle_vecs = encode(oracle_texts)
+    for round_num in range(1, max_rounds + 1):
+        with conn.cursor() as cur:
+            cur.execute("SELECT id, name, description FROM keyword_abilities WHERE embedding IS NULL")
+            rows = cur.fetchall()
+
+        if not rows:
+            log("All ability embeddings complete.")
+            return
+
+        log(f"Generating ability embeddings (round {round_num}/{max_rounds}): {len(rows)} remaining...")
+        texts = [f"{r[1]}: {r[2]}" for r in rows]
+        vecs = encode_batch_safe(texts)
+
+        if vecs is None:
+            log(f"  Round {round_num} failed, retrying in 10s...")
+            time.sleep(10)
+            continue
 
         with conn.cursor() as cur:
-            for j, card_id in enumerate(ids):
+            for i, row in enumerate(rows):
                 cur.execute(
-                    """UPDATE cards SET
-                        name_embedding = %s::vector,
-                        type_line_embedding = %s::vector,
-                        oracle_text_embedding = %s::vector
-                    WHERE id = %s""",
-                    (str(name_vecs[j]), str(type_vecs[j]), str(oracle_vecs[j]), card_id),
+                    "UPDATE keyword_abilities SET embedding = %s::halfvec WHERE id = %s",
+                    (str(vecs[i]), row[0]),
                 )
         conn.commit()
-
-        elapsed = time.time() - t0
-        log(f"  [{min(i + batch_size, total)}/{total}] Embedded {len(batch)} cards ({elapsed:.1f}s)")
-
-
-def generate_ability_embeddings(conn):
-    """Generate and store embeddings for keyword abilities."""
-    log("Generating ability embeddings...")
-    with conn.cursor() as cur:
-        cur.execute("SELECT id, name, description FROM keyword_abilities WHERE embedding IS NULL")
-        rows = cur.fetchall()
-
-    if not rows:
-        log("  No abilities need embeddings.")
+        log(f"  Embedded {len(rows)} abilities.")
         return
 
-    texts = [f"{r[1]}: {r[2]}" for r in rows]
-    vecs = encode(texts)
-
     with conn.cursor() as cur:
-        for i, row in enumerate(rows):
-            cur.execute(
-                "UPDATE keyword_abilities SET embedding = %s::vector WHERE id = %s",
-                (str(vecs[i]), row[0]),
-            )
-    conn.commit()
-    log(f"  Embedded {len(rows)} abilities.")
+        cur.execute("SELECT COUNT(*) FROM keyword_abilities WHERE embedding IS NULL")
+        remaining = cur.fetchone()[0]
+    if remaining > 0:
+        log(f"WARNING: {remaining} abilities still missing embeddings after {max_rounds} rounds.")
 
 
 def create_vector_indexes(conn):
-    """Create HNSW indexes after data is loaded."""
-    log("Creating vector indexes (HNSW)...")
-    with conn.cursor() as cur:
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_cards_name_vec ON cards USING hnsw(name_embedding vector_cosine_ops)")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_cards_type_vec ON cards USING hnsw(type_line_embedding vector_cosine_ops)")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_cards_oracle_vec ON cards USING hnsw(oracle_text_embedding vector_cosine_ops)")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_abilities_vec ON keyword_abilities USING hnsw(embedding vector_cosine_ops)")
-    conn.commit()
-    log("Vector indexes created.")
+    """Skipped – halfvec columns are searched via sequential scan."""
+    log("Skipping vector index creation (halfvec sequential scan).")
 
 
 def main():

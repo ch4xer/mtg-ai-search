@@ -10,7 +10,7 @@ from langchain_openai import ChatOpenAI
 from langgraph.graph import END, StateGraph
 
 from .db import filter_cards, get_cards_by_ids, search_abilities, vector_search_cards
-from .embedding import encode
+from .embedding import encode_query
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(message)s")
@@ -159,7 +159,7 @@ async def search_abilities_node(state: SearchState) -> dict:
     if not query:
         return {"abilities": []}
 
-    query_vec = encode([query])[0]
+    query_vec = encode_query([query])[0]
     abilities = await search_abilities(
         query_vec, n_results=5, distance_threshold=ABILITY_DISTANCE_THRESHOLD
     )
@@ -188,8 +188,8 @@ def prepare_vector_queries(state: SearchState) -> dict:
     if oracle_text:
         queries["oracle_text"] = oracle_text
 
-    # If no queries at all, fall back to raw query for oracle_text
-    if not queries:
+    # If no queries at all and no structured filters, fall back to raw query
+    if not queries and state.get("filtered_card_ids") is None:
         queries["oracle_text"] = state["query"]
 
     logger.info("<<< Vector queries: %s", queries)
@@ -209,6 +209,12 @@ async def vector_search_node(state: SearchState) -> dict:
         logger.info("<<< Filters matched 0 cards, returning empty")
         return {"ranked_results": []}
 
+    # No vector queries but have filtered results: return filter results directly
+    if not queries and filtered_ids:
+        cards = await get_cards_by_ids(filtered_ids[:VECTOR_SEARCH_N_RESULTS])
+        logger.info("<<< No vector queries, returning %d filtered cards directly", len(cards))
+        return {"ranked_results": cards}
+
     card_ids_filter = filtered_ids
 
     # Map query keys to embedding column names
@@ -223,7 +229,7 @@ async def vector_search_node(state: SearchState) -> dict:
         if not text:
             continue
         col = column_map[key]
-        query_vec = encode([text])[0]
+        query_vec = encode_query([text])[0]
         results = await vector_search_cards(col, query_vec, n_results=VECTOR_SEARCH_N_RESULTS, card_ids=card_ids_filter)
         rankings[key] = [r[0] for r in results]  # list of card IDs in rank order
         logger.info("  Vector search [%s]: %d results", key, len(results))

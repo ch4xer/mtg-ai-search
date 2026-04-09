@@ -131,7 +131,7 @@ async def vector_search_cards(
 
     if card_ids:
         query = f"""
-            SELECT id, {column} <=> $1::vector AS distance
+            SELECT id, {column} <=> $1::halfvec AS distance
             FROM cards
             WHERE id = ANY($2) AND {column} IS NOT NULL
             ORDER BY distance
@@ -140,7 +140,7 @@ async def vector_search_cards(
         rows = await pool.fetch(query, embedding_str, card_ids, n_results)
     else:
         query = f"""
-            SELECT id, {column} <=> $1::vector AS distance
+            SELECT id, {column} <=> $1::halfvec AS distance
             FROM cards
             WHERE {column} IS NOT NULL
             ORDER BY distance
@@ -162,9 +162,9 @@ async def search_abilities(
 
     rows = await pool.fetch(
         """
-        SELECT name, description, embedding <=> $1::vector AS distance
+        SELECT name, description, embedding <=> $1::halfvec AS distance
         FROM keyword_abilities
-        WHERE embedding IS NOT NULL AND embedding <=> $1::vector < $3
+        WHERE embedding IS NOT NULL AND embedding <=> $1::halfvec < $3
         ORDER BY distance
         LIMIT $2
         """,
@@ -197,24 +197,61 @@ async def get_cards_by_ids(card_ids: list[str]) -> list[dict]:
 # ── User functions ──────────────────────────────────────────────────────
 
 
-async def create_user(username: str, password_hash: str) -> dict:
+async def create_user(username: str, password_hash: str, role: str = "user") -> dict:
     pool = await get_pool()
     row = await pool.fetchrow(
-        "INSERT INTO users (username, password_hash) VALUES ($1, $2) RETURNING id, username, created_at",
-        username, password_hash,
+        "INSERT INTO users (username, password_hash, role) VALUES ($1, $2, $3) RETURNING id, username, role, created_at",
+        username, password_hash, role,
     )
-    return {"id": str(row["id"]), "username": row["username"]}
+    return {"id": str(row["id"]), "username": row["username"], "role": row["role"]}
 
 
 async def get_user_by_username(username: str) -> dict | None:
     pool = await get_pool()
     row = await pool.fetchrow(
-        "SELECT id, username, password_hash FROM users WHERE username = $1",
+        "SELECT id, username, password_hash, role FROM users WHERE username = $1",
         username,
     )
     if not row:
         return None
-    return {"id": str(row["id"]), "username": row["username"], "password_hash": row["password_hash"]}
+    return {"id": str(row["id"]), "username": row["username"], "password_hash": row["password_hash"], "role": row["role"]}
+
+
+async def get_user_by_id(user_id: str) -> dict | None:
+    pool = await get_pool()
+    row = await pool.fetchrow(
+        "SELECT id, username, role, created_at FROM users WHERE id = $1::uuid",
+        user_id,
+    )
+    if not row:
+        return None
+    return {"id": str(row["id"]), "username": row["username"], "role": row["role"], "created_at": row["created_at"].isoformat()}
+
+
+async def list_all_users() -> list[dict]:
+    pool = await get_pool()
+    rows = await pool.fetch("SELECT id, username, role, created_at FROM users ORDER BY created_at")
+    return [
+        {"id": str(r["id"]), "username": r["username"], "role": r["role"], "created_at": r["created_at"].isoformat()}
+        for r in rows
+    ]
+
+
+async def delete_user(user_id: str):
+    pool = await get_pool()
+    await pool.execute("DELETE FROM decks WHERE user_id = $1::uuid", user_id)
+    await pool.execute("DELETE FROM users WHERE id = $1::uuid", user_id)
+
+
+async def update_user_role(user_id: str, role: str) -> dict | None:
+    pool = await get_pool()
+    row = await pool.fetchrow(
+        "UPDATE users SET role = $2 WHERE id = $1::uuid RETURNING id, username, role",
+        user_id, role,
+    )
+    if not row:
+        return None
+    return {"id": str(row["id"]), "username": row["username"], "role": row["role"]}
 
 
 # ── Deck functions ──────────────────────────────────────────────────────
@@ -284,7 +321,7 @@ async def delete_deck(deck_id: str):
 async def get_deck_cards(deck_id: str) -> list[dict]:
     pool = await get_pool()
     rows = await pool.fetch(
-        """SELECT dc.card_id, dc.quantity, dc.added_at, c.data
+        """SELECT dc.card_id, dc.quantity, dc.added_at, dc.image_url, dc.display_url, c.data
            FROM deck_cards dc
            JOIN cards c ON c.id = dc.card_id
            WHERE dc.deck_id = $1::uuid
@@ -293,27 +330,332 @@ async def get_deck_cards(deck_id: str) -> list[dict]:
     )
     return [
         {
+            "card_id": r["card_id"],
             "card": json.loads(r["data"]) if isinstance(r["data"], str) else r["data"],
             "quantity": r["quantity"],
+            "image_url": r["image_url"],
+            "display_url": r["display_url"],
             "added_at": r["added_at"].isoformat(),
         }
         for r in rows
     ]
 
 
-async def add_card_to_deck(deck_id: str, card_id: str, quantity: int = 1) -> dict:
+async def add_card_to_deck(
+    deck_id: str, card_id: str, quantity: int = 1,
+    image_url: str | None = None, display_url: str | None = None,
+    update_image: bool = False,
+) -> dict:
     pool = await get_pool()
-    row = await pool.fetchrow(
-        """INSERT INTO deck_cards (deck_id, card_id, quantity)
-           VALUES ($1::uuid, $2, $3)
-           ON CONFLICT (deck_id, card_id)
-           DO UPDATE SET quantity = deck_cards.quantity + EXCLUDED.quantity
-           RETURNING card_id, quantity""",
-        deck_id, card_id, quantity,
-    )
+    if update_image:
+        row = await pool.fetchrow(
+            """INSERT INTO deck_cards (deck_id, card_id, quantity, image_url, display_url)
+               VALUES ($1::uuid, $2, $3, $4, $5)
+               ON CONFLICT (deck_id, card_id)
+               DO UPDATE SET quantity = deck_cards.quantity + EXCLUDED.quantity,
+                             image_url = $4,
+                             display_url = $5
+               RETURNING card_id, quantity""",
+            deck_id, card_id, quantity, image_url, display_url,
+        )
+    else:
+        row = await pool.fetchrow(
+            """INSERT INTO deck_cards (deck_id, card_id, quantity, image_url, display_url)
+               VALUES ($1::uuid, $2, $3, $4, $5)
+               ON CONFLICT (deck_id, card_id)
+               DO UPDATE SET quantity = deck_cards.quantity + EXCLUDED.quantity,
+                             image_url = COALESCE(EXCLUDED.image_url, deck_cards.image_url),
+                             display_url = COALESCE(EXCLUDED.display_url, deck_cards.display_url)
+               RETURNING card_id, quantity""",
+            deck_id, card_id, quantity, image_url, display_url,
+        )
     return {"card_id": row["card_id"], "quantity": row["quantity"]}
 
 
 async def remove_card_from_deck(deck_id: str, card_id: str):
     pool = await get_pool()
     await pool.execute("DELETE FROM deck_cards WHERE deck_id = $1::uuid AND card_id = $2", deck_id, card_id)
+
+
+async def get_cards_by_names(names: list[str]) -> dict[str, str]:
+    """Look up card IDs by exact name (case-insensitive). Returns {name_lower: card_id}.
+
+    Also matches double-faced cards by front face name (before ' // ').
+    """
+    if not names:
+        return {}
+    pool = await get_pool()
+    lowered = [n.lower() for n in names]
+    rows = await pool.fetch(
+        """SELECT id, name FROM cards
+           WHERE LOWER(name) = ANY($1)
+              OR LOWER(split_part(name, ' // ', 1)) = ANY($1)""",
+        lowered,
+    )
+    result: dict[str, str] = {}
+    for row in rows:
+        full = row["name"].lower()
+        front = full.split(" // ")[0]
+        # Map both full name and front face name to the card id
+        if full not in result:
+            result[full] = row["id"]
+        if front not in result:
+            result[front] = row["id"]
+    return result
+
+
+async def get_deck_cards_for_export(deck_id: str) -> list[dict]:
+    """Get card names and quantities for text export.
+
+    Uses only the front face name for double-faced cards.
+    """
+    pool = await get_pool()
+    rows = await pool.fetch(
+        """SELECT split_part(c.name, ' // ', 1) AS name, dc.quantity
+           FROM deck_cards dc
+           JOIN cards c ON c.id = dc.card_id
+           WHERE dc.deck_id = $1::uuid
+           ORDER BY name""",
+        deck_id,
+    )
+    return [{"name": r["name"], "quantity": r["quantity"]} for r in rows]
+
+
+_MAIN_TYPES = [
+    "Creature", "Instant", "Sorcery", "Enchantment", "Artifact",
+    "Land", "Planeswalker", "Battle", "Kindred",
+]
+
+
+async def discover_cards(
+    q: str = "",
+    colors: list[str] | None = None,
+    types: list[str] | None = None,
+    rarities: list[str] | None = None,
+    keywords: list[str] | None = None,
+    cmc_min: float | None = None,
+    cmc_max: float | None = None,
+    power_min: float | None = None,
+    power_max: float | None = None,
+    subtypes: list[str] | None = None,
+    toughness_min: float | None = None,
+    toughness_max: float | None = None,
+    include_playtest: bool = False,
+    page: int = 1,
+    page_size: int = 60,
+) -> dict:
+    """Discover cards with full-text keyword search, faceted filters, and pagination.
+
+    Keyword search: space-separated terms are AND-ed.
+    Each term matches case-insensitively against name, type_line, or oracle_text.
+    """
+    pool = await get_pool()
+
+    clauses: list[str] = []
+    params: list = []
+    idx = 1
+
+    # Exclude playtest cards by default
+    if not include_playtest:
+        clauses.append("NOT is_playtest")
+
+    # Keyword search — each space-separated token must appear somewhere
+    if q.strip():
+        for token in q.strip().split():
+            clauses.append(
+                f"(name ILIKE ${idx} OR type_line ILIKE ${idx} OR oracle_text ILIKE ${idx})"
+            )
+            params.append(f"%{token}%")
+            idx += 1
+
+    # Color filter — card has at least one of the selected colors
+    if colors:
+        clauses.append(f"colors && ${idx}::text[]")
+        params.append(colors)
+        idx += 1
+
+    # Type filter — card type_line contains at least one of the selected types
+    if types:
+        type_conds = []
+        for t in types:
+            type_conds.append(f"type_line ILIKE ${idx}")
+            params.append(f"%{t}%")
+            idx += 1
+        clauses.append(f"({' OR '.join(type_conds)})")
+
+    # Subtype filter — matches subtypes after the em dash in type_line
+    if subtypes:
+        sub_conds = []
+        for st in subtypes:
+            sub_conds.append(f"split_part(type_line, '\u2014', 2) ILIKE ${idx}")
+            params.append(f"%{st}%")
+            idx += 1
+        clauses.append(f"({' OR '.join(sub_conds)})")
+
+    # Rarity filter
+    if rarities:
+        clauses.append(f"data->>'rarity' = ANY(${idx}::text[])")
+        params.append(rarities)
+        idx += 1
+
+    # Keyword abilities filter — card has at least one of the selected keywords
+    if keywords:
+        clauses.append(f"keywords && ${idx}::text[]")
+        params.append(keywords)
+        idx += 1
+
+    # CMC range
+    if cmc_min is not None:
+        clauses.append(f"cmc >= ${idx}::real")
+        params.append(float(cmc_min))
+        idx += 1
+    if cmc_max is not None:
+        clauses.append(f"cmc <= ${idx}::real")
+        params.append(float(cmc_max))
+        idx += 1
+
+    # Power range (only match numeric values via regex)
+    if power_min is not None:
+        clauses.append(f"power ~ '^[0-9]+\\.?[0-9]*$' AND CAST(power AS real) >= ${idx}::real")
+        params.append(float(power_min))
+        idx += 1
+    if power_max is not None:
+        clauses.append(f"power ~ '^[0-9]+\\.?[0-9]*$' AND CAST(power AS real) <= ${idx}::real")
+        params.append(float(power_max))
+        idx += 1
+
+    # Toughness range (only match numeric values via regex)
+    if toughness_min is not None:
+        clauses.append(f"toughness ~ '^[0-9]+\\.?[0-9]*$' AND CAST(toughness AS real) >= ${idx}::real")
+        params.append(float(toughness_min))
+        idx += 1
+    if toughness_max is not None:
+        clauses.append(f"toughness ~ '^[0-9]+\\.?[0-9]*$' AND CAST(toughness AS real) <= ${idx}::real")
+        params.append(float(toughness_max))
+        idx += 1
+
+    where = " AND ".join(clauses) if clauses else "TRUE"
+
+    # ── Total count ──
+    total = await pool.fetchval(f"SELECT COUNT(*) FROM cards WHERE {where}", *params)
+
+    # ── Paginated results ──
+    offset = (page - 1) * page_size
+    limit_idx = idx
+    offset_idx = idx + 1
+    rows = await pool.fetch(
+        f"SELECT data FROM cards WHERE {where} ORDER BY name LIMIT ${limit_idx} OFFSET ${offset_idx}",
+        *params, page_size, offset,
+    )
+    cards = [
+        json.loads(row["data"]) if isinstance(row["data"], str) else row["data"]
+        for row in rows
+    ]
+
+    # ── Facet counts (computed from the fully-filtered set) ──
+
+    # Colors
+    color_rows = await pool.fetch(
+        f"SELECT c AS val, COUNT(*) AS cnt FROM cards, unnest(colors) AS c WHERE {where} GROUP BY c ORDER BY cnt DESC",
+        *params,
+    )
+    color_facets = {r["val"]: int(r["cnt"]) for r in color_rows}
+
+    # Rarity
+    rarity_rows = await pool.fetch(
+        f"SELECT data->>'rarity' AS val, COUNT(*) AS cnt FROM cards WHERE {where} AND data->>'rarity' IS NOT NULL GROUP BY val ORDER BY cnt DESC",
+        *params,
+    )
+    rarity_facets = {r["val"]: int(r["cnt"]) for r in rarity_rows}
+
+    # Types — count each main type via FILTER
+    type_cases = ", ".join(
+        f"COUNT(*) FILTER (WHERE type_line ILIKE '%%{t}%%') AS \"{t}\""
+        for t in _MAIN_TYPES
+    )
+    type_row = await pool.fetchrow(
+        f"SELECT {type_cases} FROM cards WHERE {where}",
+        *params,
+    )
+    type_facets = {t: int(type_row[t]) for t in _MAIN_TYPES if type_row[t]}
+
+    # Keywords (top 30)
+    kw_rows = await pool.fetch(
+        f"SELECT k AS val, COUNT(*) AS cnt FROM cards, unnest(keywords) AS k WHERE {where} GROUP BY k ORDER BY cnt DESC LIMIT 30",
+        *params,
+    )
+    keyword_facets = [{"name": r["val"], "count": int(r["cnt"])} for r in kw_rows]
+
+    # Subtypes — extract words after the em dash (top 40)
+    subtype_rows = await pool.fetch(
+        f"""SELECT s AS val, COUNT(*) AS cnt
+            FROM (
+                SELECT unnest(string_to_array(
+                    trim(split_part(type_line, '\u2014', 2)), ' '
+                )) AS s
+                FROM cards
+                WHERE {where} AND type_line LIKE '%%\u2014%%'
+            ) sub
+            WHERE s != ''
+            GROUP BY s ORDER BY cnt DESC LIMIT 40""",
+        *params,
+    )
+    subtype_facets = [{"name": r["val"], "count": int(r["cnt"])} for r in subtype_rows]
+
+    # CMC / power / toughness ranges
+    # Use regex to only cast values that are pure numbers (int or decimal)
+    range_row = await pool.fetchrow(
+        f"""SELECT
+                MIN(cmc) AS cmc_min, MAX(cmc) AS cmc_max,
+                MIN(CAST(power AS real)) FILTER (WHERE power ~ '^[0-9]+\\.?[0-9]*$') AS power_min,
+                MAX(CAST(power AS real)) FILTER (WHERE power ~ '^[0-9]+\\.?[0-9]*$') AS power_max,
+                MIN(CAST(toughness AS real)) FILTER (WHERE toughness ~ '^[0-9]+\\.?[0-9]*$') AS toughness_min,
+                MAX(CAST(toughness AS real)) FILTER (WHERE toughness ~ '^[0-9]+\\.?[0-9]*$') AS toughness_max
+            FROM cards WHERE {where}""",
+        *params,
+    )
+
+    return {
+        "results": cards,
+        "total": int(total),
+        "page": page,
+        "page_size": page_size,
+        "facets": {
+            "colors": color_facets,
+            "types": type_facets,
+            "rarities": rarity_facets,
+            "keywords": keyword_facets,
+            "subtypes": subtype_facets,
+            "cmc_range": {
+                "min": float(range_row["cmc_min"]) if range_row["cmc_min"] is not None else 0,
+                "max": float(range_row["cmc_max"]) if range_row["cmc_max"] is not None else 0,
+            },
+            "power_range": {
+                "min": float(range_row["power_min"]) if range_row["power_min"] is not None else 0,
+                "max": float(range_row["power_max"]) if range_row["power_max"] is not None else 0,
+            },
+            "toughness_range": {
+                "min": float(range_row["toughness_min"]) if range_row["toughness_min"] is not None else 0,
+                "max": float(range_row["toughness_max"]) if range_row["toughness_max"] is not None else 0,
+            },
+        },
+    }
+
+
+async def get_deck_card_images(deck_id: str) -> list[dict]:
+    pool = await get_pool()
+    rows = await pool.fetch(
+        """SELECT dc.quantity, c.name,
+                  COALESCE(dc.image_url,
+                           c.image_png,
+                           c.data->'image_uris'->>'png',
+                           c.data->'card_faces'->0->'image_uris'->>'png') AS png_url,
+                  c.data->'card_faces'->1->'image_uris'->>'png' AS back_png_url,
+                  c.data->'card_faces'->1->>'name' AS back_name
+           FROM deck_cards dc
+           JOIN cards c ON c.id = dc.card_id
+           WHERE dc.deck_id = $1::uuid
+           ORDER BY dc.added_at""",
+        deck_id,
+    )
+    return [dict(r) for r in rows]
