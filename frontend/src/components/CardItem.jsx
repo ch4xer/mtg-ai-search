@@ -1,13 +1,25 @@
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
+import { useAuth } from "../contexts/AuthContext.jsx";
+import { apiFetch } from "../utils/apiFetch.js";
+import { useToast } from "../contexts/ToastContext.jsx";
 
 function getImageUri(imageUris, mode) {
   if (!imageUris) return "";
   return imageUris[mode] || imageUris.normal || imageUris.small || "";
 }
 
-function CardItem({ card, rank, imageMode }) {
+function CardItem({ card, imageMode, decks }) {
   const [imgError, setImgError] = useState(false);
   const [flipped, setFlipped] = useState(false);
+  const [showDeckMenu, setShowDeckMenu] = useState(false);
+  const [showArtPicker, setShowArtPicker] = useState(false);
+  const [prints, setPrints] = useState([]);
+  const [loadingPrints, setLoadingPrints] = useState(false);
+  const [selectedArt, setSelectedArt] = useState(null); // { png, imageUri, setName }
+  const menuRef = useRef(null);
+  const artRef = useRef(null);
+  const { user } = useAuth();
+  const { showToast } = useToast();
 
   const colorMap = {
     W: "mana-white",
@@ -28,7 +40,9 @@ function CardItem({ card, rank, imageMode }) {
   let frontImageUri = "";
   let backImageUri = "";
 
-  if (isDoubleFaced) {
+  if (selectedArt) {
+    frontImageUri = selectedArt.imageUri;
+  } else if (isDoubleFaced) {
     frontImageUri = getImageUri(card.card_faces[0].image_uris, imageMode);
     backImageUri = getImageUri(card.card_faces[1].image_uris, imageMode);
   } else if (card.image_uris) {
@@ -39,21 +53,116 @@ function CardItem({ card, rank, imageMode }) {
 
   const isArtCrop = imageMode === "art_crop";
 
-  const activeFace = isDoubleFaced && flipped ? card.card_faces[1] : null;
-  const displayName = activeFace?.name || card.name;
-  const displayManaCost = activeFace?.mana_cost || card.mana_cost;
-  const displayTypeLine = activeFace?.type_line || card.type_line;
-  const displayOracleText = activeFace?.oracle_text || card.oracle_text;
-  const displayFlavorText = activeFace?.flavor_text || card.flavor_text;
-  const displayPower = activeFace?.power || card.power;
-  const displayToughness = activeFace?.toughness || card.toughness;
-  const displayLoyalty = activeFace?.loyalty || card.loyalty;
+  const activeFace = isDoubleFaced && flipped && !selectedArt ? card.card_faces[1] : null;
+  const frontFace = card.card_faces?.[0];
+  const displayName = activeFace?.name || card.name || frontFace?.name;
+  const displayManaCost = activeFace?.mana_cost || card.mana_cost || frontFace?.mana_cost;
+  const displayTypeLine = activeFace?.type_line || card.type_line || frontFace?.type_line;
+  const displayOracleText = activeFace?.oracle_text || card.oracle_text || frontFace?.oracle_text;
+  const displayFlavorText = activeFace?.flavor_text || card.flavor_text || frontFace?.flavor_text;
+  const displayPower = activeFace?.power || card.power || frontFace?.power;
+  const displayToughness = activeFace?.toughness || card.toughness || frontFace?.toughness;
+  const displayLoyalty = activeFace?.loyalty || card.loyalty || frontFace?.loyalty;
+
+  // Close deck menu on outside click
+  useEffect(() => {
+    if (!showDeckMenu) return;
+    const handleClick = (e) => {
+      if (menuRef.current && !menuRef.current.contains(e.target)) {
+        setShowDeckMenu(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [showDeckMenu]);
+
+  // Close art picker on outside click
+  useEffect(() => {
+    if (!showArtPicker) return;
+    const handleClick = (e) => {
+      if (artRef.current && !artRef.current.contains(e.target)) {
+        setShowArtPicker(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [showArtPicker]);
+
+  const handleFetchPrints = async () => {
+    if (prints.length > 0) {
+      setShowArtPicker(!showArtPicker);
+      return;
+    }
+    setLoadingPrints(true);
+    setShowArtPicker(true);
+    try {
+      const searchUri = card.prints_search_uri;
+      if (!searchUri) return;
+      const res = await fetch(searchUri);
+      if (!res.ok) return;
+      const data = await res.json();
+      const allPrints = (data.data || [])
+        .filter((p) => p.image_uris?.png)
+        .map((p) => ({
+          id: p.id,
+          png: p.image_uris.png,
+          imageUri: getImageUri(p.image_uris, imageMode),
+          setName: p.set_name,
+          artist: p.artist,
+        }));
+      setPrints(allPrints);
+    } catch {
+      showToast("获取版本列表失败", "error");
+    } finally {
+      setLoadingPrints(false);
+    }
+  };
+
+  const handleSelectArt = (print) => {
+    setSelectedArt(print);
+    setShowArtPicker(false);
+    setImgError(false);
+  };
+
+  const handleResetArt = () => {
+    setSelectedArt(null);
+    setShowArtPicker(false);
+    setImgError(false);
+  };
+
+  // Get the PNG URL to store in deck (for export)
+  const getPngUrlForDeck = () => {
+    if (selectedArt) return selectedArt.png;
+    if (card.image_uris?.png) return card.image_uris.png;
+    if (card.card_faces?.[0]?.image_uris?.png) return card.card_faces[0].image_uris.png;
+    return null;
+  };
+
+  const handleAddToDeck = async (deckId, deckName) => {
+    setShowDeckMenu(false);
+    try {
+      const body = { card_id: card.id };
+      const pngUrl = getPngUrlForDeck();
+      if (pngUrl) body.image_url = pngUrl;
+      const res = await apiFetch(`/api/decks/${deckId}/cards`, {
+        method: "POST",
+        body,
+      });
+      if (res.ok) {
+        showToast(`已将「${card.name}」加入「${deckName}」`);
+      } else {
+        const err = await res.json().catch(() => ({}));
+        showToast(err.detail || "添加失败", "error");
+      }
+    } catch {
+      showToast("添加失败", "error");
+    }
+  };
 
   return (
     <div className="card-item">
-      <div className="card-rank">#{rank}</div>
-      <div className={`card-image-wrapper ${isDoubleFaced ? "flippable" : ""} ${isArtCrop ? "art-crop" : ""}`}>
-        {isDoubleFaced ? (
+      <div className={`card-image-wrapper ${isDoubleFaced && !selectedArt ? "flippable" : ""} ${isArtCrop ? "art-crop" : ""}`}>
+        {isDoubleFaced && !selectedArt ? (
           <div className={`card-flip-container ${flipped ? "flipped" : ""}`}>
             <div className="card-flip-front">
               {frontImageUri && !imgError ? (
@@ -98,7 +207,7 @@ function CardItem({ card, rank, imageMode }) {
             <span>{card.name}</span>
           </div>
         )}
-        {isDoubleFaced && (
+        {isDoubleFaced && !selectedArt && (
           <button
             className="card-flip-btn"
             onClick={() => setFlipped(!flipped)}
@@ -112,9 +221,56 @@ function CardItem({ card, rank, imageMode }) {
             </svg>
           </button>
         )}
+        {card.prints_search_uri && (
+          <button
+            className="card-art-btn"
+            onClick={handleFetchPrints}
+            title="切换卡图"
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="3" y="3" width="7" height="7" />
+              <rect x="14" y="3" width="7" height="7" />
+              <rect x="3" y="14" width="7" height="7" />
+              <rect x="14" y="14" width="7" height="7" />
+            </svg>
+          </button>
+        )}
       </div>
+
+      {/* Art picker panel */}
+      {showArtPicker && (
+        <div className="art-picker" ref={artRef}>
+          <div className="art-picker-header">
+            <span>选择卡图版本 ({prints.length})</span>
+            {selectedArt && (
+              <button className="art-picker-reset" onClick={handleResetArt}>恢复默认</button>
+            )}
+          </div>
+          {loadingPrints ? (
+            <div className="art-picker-loading">加载中...</div>
+          ) : (
+            <div className="art-picker-grid">
+              {prints.map((p) => (
+                <div
+                  key={p.id}
+                  className={`art-picker-item ${selectedArt?.id === p.id ? "selected" : ""}`}
+                  onClick={() => handleSelectArt(p)}
+                  title={`${p.setName} - ${p.artist}`}
+                >
+                  <img src={p.imageUri} alt={p.setName} loading="lazy" />
+                  <span className="art-picker-label">{p.setName}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       <div className="card-info">
-        <h3 className="card-name">{displayName}</h3>
+        <h3 className="card-name">
+          {displayName}
+          {selectedArt && <span className="card-alt-set"> ({selectedArt.setName})</span>}
+        </h3>
         <div className="card-meta">
           {displayManaCost && <span className="card-mana">{displayManaCost}</span>}
           {colors.length > 0 && (
@@ -133,13 +289,45 @@ function CardItem({ card, rank, imageMode }) {
         )}
         {displayFlavorText && <p className="card-flavor">{displayFlavorText}</p>}
         <div className="card-footer">
-          {displayPower && displayToughness && (
-            <span className="card-pt">
-              {displayPower}/{displayToughness}
-            </span>
-          )}
-          {displayLoyalty && <span className="card-pt">{displayLoyalty}</span>}
-          {card.set_name && <span className="card-set">{card.set_name}</span>}
+          <div className="card-footer-left">
+            {displayPower && displayToughness && (
+              <span className="card-pt">
+                {displayPower}/{displayToughness}
+              </span>
+            )}
+            {displayLoyalty && <span className="card-pt">{displayLoyalty}</span>}
+          </div>
+          <div className="card-footer-right">
+            {card.set_name && <span className="card-set">{card.set_name}</span>}
+            {user && decks && (
+              <div className="add-to-deck-wrapper" ref={menuRef}>
+                <button
+                  className="add-to-deck-btn"
+                  onClick={() => setShowDeckMenu(!showDeckMenu)}
+                  title="加入卡组"
+                >
+                  +
+                </button>
+                {showDeckMenu && (
+                  <div className="deck-dropdown">
+                    {decks.length === 0 ? (
+                      <p className="deck-dropdown-empty">还没有卡组</p>
+                    ) : (
+                      decks.map((d) => (
+                        <button
+                          key={d.id}
+                          className="deck-dropdown-item"
+                          onClick={() => handleAddToDeck(d.id, d.name)}
+                        >
+                          {d.name}
+                        </button>
+                      ))
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </div>
