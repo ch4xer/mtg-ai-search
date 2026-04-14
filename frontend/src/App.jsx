@@ -27,10 +27,12 @@ function AdminRoute({ children }) {
 
 function AppContent() {
   const [theme, setTheme] = useState(() => {
-    return localStorage.getItem("mtg-theme") || "dark";
+    const saved = localStorage.getItem("mtg-theme");
+    if (saved) return saved;
+    return window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
   });
   const [imageMode, setImageMode] = useState(() => {
-    return localStorage.getItem("mtg-image-mode") || "border_crop";
+    return localStorage.getItem("mtg-image-mode") || "art_crop";
   });
 
   useEffect(() => {

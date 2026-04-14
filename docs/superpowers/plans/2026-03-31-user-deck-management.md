@@ -13,10 +13,12 @@
 ## File Structure
 
 ### Backend — New Files
+
 - `backend/app/auth.py` — JWT token creation/validation, password hashing, FastAPI `get_current_user` dependency
 - `backend/app/decks.py` — FastAPI APIRouter with deck and deck-card CRUD endpoints
 
 ### Backend — Modified Files
+
 - `backend/app/db.py` — Add user and deck database query functions
 - `backend/app/main.py` — Register auth and decks routers, add schema creation to lifespan
 - `backend/pyproject.toml` — Add bcrypt, python-jose dependencies
@@ -25,6 +27,7 @@
 - `docker-compose.yml` — Pass JWT_SECRET env var to backend
 
 ### Frontend — New Files
+
 - `frontend/src/contexts/AuthContext.jsx` — Auth state provider with login/register/logout/apiFetch
 - `frontend/src/pages/SearchPage.jsx` — Existing search UI extracted from App.jsx
 - `frontend/src/pages/LoginPage.jsx` — Login/register forms
@@ -36,6 +39,7 @@
 - `frontend/src/components/Toast.jsx` — Auto-dismissing toast notifications
 
 ### Frontend — Modified Files
+
 - `frontend/src/main.jsx` — Wrap App with BrowserRouter
 - `frontend/src/App.jsx` — Becomes router shell with AuthProvider + DndProvider
 - `frontend/src/App.css` — Add styles for new components
@@ -48,6 +52,7 @@
 ## Task 1: Backend Dependencies & Database Schema
 
 **Files:**
+
 - Modify: `backend/pyproject.toml`
 - Modify: `backend/.env`
 - Modify: `docker-compose.yml`
@@ -75,7 +80,7 @@ JWT_SECRET=REDACTED-JWT-SECRET
 In `docker-compose.yml`, under `mtg-backend.environment`, add:
 
 ```yaml
-      JWT_SECRET: ${JWT_SECRET}
+JWT_SECRET: ${JWT_SECRET}
 ```
 
 - [ ] **Step 4: Add user/deck tables to seed_pg.py create_schema()**
@@ -149,6 +154,7 @@ git commit -m "feat: add user/deck database schema and auth dependencies"
 ## Task 2: Backend Auth Module
 
 **Files:**
+
 - Create: `backend/app/auth.py`
 
 - [ ] **Step 1: Create auth.py with JWT and password utilities**
@@ -229,6 +235,7 @@ git commit -m "feat: add JWT auth module with password hashing"
 ## Task 3: Backend User & Deck Database Functions
 
 **Files:**
+
 - Modify: `backend/app/db.py`
 
 - [ ] **Step 1: Add user database functions**
@@ -386,6 +393,7 @@ git commit -m "feat: add user and deck database query functions"
 ## Task 4: Backend Auth & Deck API Routers
 
 **Files:**
+
 - Create: `backend/app/decks.py`
 - Modify: `backend/app/main.py`
 
@@ -628,6 +636,7 @@ git commit -m "feat: add auth and deck CRUD API endpoints"
 ## Task 5: Frontend Dependencies & Routing Setup
 
 **Files:**
+
 - Modify: `frontend/package.json`
 - Modify: `frontend/src/main.jsx`
 - Modify: `frontend/src/App.jsx`
@@ -675,7 +684,12 @@ function SearchPage({ imageMode, onToggleImageMode }) {
 
   return (
     <>
-      <SearchBar onSearch={handleSearch} loading={loading} imageMode={imageMode} onToggleImageMode={onToggleImageMode} />
+      <SearchBar
+        onSearch={handleSearch}
+        loading={loading}
+        imageMode={imageMode}
+        onToggleImageMode={onToggleImageMode}
+      />
       {loading && (
         <div className="loading">
           <div className="loading-spinner" />
@@ -687,7 +701,9 @@ function SearchPage({ imageMode, onToggleImageMode }) {
           <p>未找到匹配的卡牌，请尝试其他描述</p>
         </div>
       )}
-      {!loading && results.length > 0 && <CardGrid cards={results} imageMode={imageMode} />}
+      {!loading && results.length > 0 && (
+        <CardGrid cards={results} imageMode={imageMode} />
+      )}
     </>
   );
 }
@@ -755,7 +771,15 @@ function App() {
       <Header theme={theme} onToggleTheme={toggleTheme} />
       <main className="main-content">
         <Routes>
-          <Route path="/" element={<SearchPage imageMode={imageMode} onToggleImageMode={toggleImageMode} />} />
+          <Route
+            path="/"
+            element={
+              <SearchPage
+                imageMode={imageMode}
+                onToggleImageMode={toggleImageMode}
+              />
+            }
+          />
         </Routes>
       </main>
     </div>
@@ -785,6 +809,7 @@ git commit -m "feat: add react-router, extract SearchPage from App"
 ## Task 6: Frontend Auth Context
 
 **Files:**
+
 - Create: `frontend/src/contexts/AuthContext.jsx`
 
 - [ ] **Step 1: Create AuthContext.jsx**
@@ -901,18 +926,26 @@ import { AuthProvider } from "./contexts/AuthContext.jsx";
 Wrap the return JSX — the outermost `<div className="app">` becomes:
 
 ```jsx
-  return (
-    <AuthProvider>
-      <div className="app">
-        <Header theme={theme} onToggleTheme={toggleTheme} />
-        <main className="main-content">
-          <Routes>
-            <Route path="/" element={<SearchPage imageMode={imageMode} onToggleImageMode={toggleImageMode} />} />
-          </Routes>
-        </main>
-      </div>
-    </AuthProvider>
-  );
+return (
+  <AuthProvider>
+    <div className="app">
+      <Header theme={theme} onToggleTheme={toggleTheme} />
+      <main className="main-content">
+        <Routes>
+          <Route
+            path="/"
+            element={
+              <SearchPage
+                imageMode={imageMode}
+                onToggleImageMode={toggleImageMode}
+              />
+            }
+          />
+        </Routes>
+      </main>
+    </div>
+  </AuthProvider>
+);
 ```
 
 - [ ] **Step 3: Verify build**
@@ -935,6 +968,7 @@ git commit -m "feat: add AuthContext with login/register/logout and token refres
 ## Task 7: Login Page
 
 **Files:**
+
 - Create: `frontend/src/pages/LoginPage.jsx`
 - Modify: `frontend/src/App.jsx`
 - Modify: `frontend/src/App.css`
@@ -987,10 +1021,22 @@ function LoginPage() {
       <div className="login-card">
         <h2 className="login-title">{isRegister ? "注册" : "登录"}</h2>
         <div className="login-tabs">
-          <button className={`login-tab ${!isRegister ? "active" : ""}`} onClick={() => { setIsRegister(false); setError(""); }}>
+          <button
+            className={`login-tab ${!isRegister ? "active" : ""}`}
+            onClick={() => {
+              setIsRegister(false);
+              setError("");
+            }}
+          >
             登录
           </button>
-          <button className={`login-tab ${isRegister ? "active" : ""}`} onClick={() => { setIsRegister(true); setError(""); }}>
+          <button
+            className={`login-tab ${isRegister ? "active" : ""}`}
+            onClick={() => {
+              setIsRegister(true);
+              setError("");
+            }}
+          >
             注册
           </button>
         </div>
@@ -1178,6 +1224,7 @@ git commit -m "feat: add login/register page with medieval fantasy styling"
 ## Task 8: Header Navigation Update
 
 **Files:**
+
 - Modify: `frontend/src/components/Header.jsx`
 - Modify: `frontend/src/App.css`
 
@@ -1206,11 +1253,17 @@ function Header({ theme, onToggleTheme }) {
           {user ? (
             <>
               <span className="header-username">{user.username}</span>
-              <Link to="/decks" className="header-link">我的卡组</Link>
-              <button className="header-btn" onClick={logout}>登出</button>
+              <Link to="/decks" className="header-link">
+                打印卡组
+              </Link>
+              <button className="header-btn" onClick={logout}>
+                登出
+              </button>
             </>
           ) : (
-            <Link to="/login" className="header-link">登录</Link>
+            <Link to="/login" className="header-link">
+              登录
+            </Link>
           )}
           <ThemeToggle theme={theme} onToggle={onToggleTheme} />
         </nav>
@@ -1297,6 +1350,7 @@ git commit -m "feat: add auth-aware header navigation"
 ## Task 9: Toast Component
 
 **Files:**
+
 - Create: `frontend/src/components/Toast.jsx`
 - Modify: `frontend/src/App.css`
 
@@ -1377,8 +1431,14 @@ Append to `frontend/src/App.css`:
 }
 
 @keyframes toast-in {
-  from { opacity: 0; transform: translateX(50px); }
-  to { opacity: 1; transform: translateX(0); }
+  from {
+    opacity: 0;
+    transform: translateX(50px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
 }
 ```
 
@@ -1393,15 +1453,13 @@ import { ToastProvider } from "./components/Toast.jsx";
 Wrap inside AuthProvider:
 
 ```jsx
-  return (
-    <AuthProvider>
-      <ToastProvider>
-        <div className="app">
-          ...
-        </div>
-      </ToastProvider>
-    </AuthProvider>
-  );
+return (
+  <AuthProvider>
+    <ToastProvider>
+      <div className="app">...</div>
+    </ToastProvider>
+  </AuthProvider>
+);
 ```
 
 - [ ] **Step 4: Verify build**
@@ -1422,6 +1480,7 @@ git commit -m "feat: add toast notification component"
 ## Task 10: Drag & Drop — DraggableCard and DeckSidebar
 
 **Files:**
+
 - Create: `frontend/src/components/DraggableCard.jsx`
 - Create: `frontend/src/components/DeckDropTarget.jsx`
 - Create: `frontend/src/components/DeckSidebar.jsx`
@@ -1448,7 +1507,10 @@ function DraggableCard({ card, imageMode }) {
   });
 
   return (
-    <div ref={dragRef} style={{ opacity: isDragging ? 0.5 : 1, cursor: "grab" }}>
+    <div
+      ref={dragRef}
+      style={{ opacity: isDragging ? 0.5 : 1, cursor: "grab" }}
+    >
       <CardItem card={card} imageMode={imageMode} />
     </div>
   );
@@ -1474,7 +1536,10 @@ function DeckDropTarget({ deck, onDrop }) {
   });
 
   return (
-    <div ref={dropRef} className={`deck-drop-target ${isOver ? "drag-over" : ""}`}>
+    <div
+      ref={dropRef}
+      className={`deck-drop-target ${isOver ? "drag-over" : ""}`}
+    >
       <span className="deck-drop-name">{deck.name}</span>
       <span className="deck-drop-count">{deck.card_count} 张</span>
       {isOver && <span className="deck-drop-hint">松开添加</span>}
@@ -1543,12 +1608,16 @@ function DeckSidebar({ collapsed, onToggle }) {
 
   return (
     <aside className={`deck-sidebar ${collapsed ? "collapsed" : ""}`}>
-      <button className="sidebar-toggle" onClick={onToggle} title={collapsed ? "展开卡组栏" : "收起卡组栏"}>
+      <button
+        className="sidebar-toggle"
+        onClick={onToggle}
+        title={collapsed ? "展开卡组栏" : "收起卡组栏"}
+      >
         {collapsed ? "◀" : "▶"}
       </button>
       {!collapsed && (
         <div className="sidebar-content">
-          <h3 className="sidebar-title">我的卡组</h3>
+          <h3 className="sidebar-title">打印卡组</h3>
           <form className="sidebar-create" onSubmit={handleCreateDeck}>
             <input
               type="text"
@@ -1557,13 +1626,21 @@ function DeckSidebar({ collapsed, onToggle }) {
               onChange={(e) => setNewDeckName(e.target.value)}
               className="sidebar-input"
             />
-            <button type="submit" className="sidebar-create-btn" disabled={creating || !newDeckName.trim()}>+</button>
+            <button
+              type="submit"
+              className="sidebar-create-btn"
+              disabled={creating || !newDeckName.trim()}
+            >
+              +
+            </button>
           </form>
           <div className="sidebar-decks">
             {decks.map((deck) => (
               <DeckDropTarget key={deck.id} deck={deck} onDrop={handleDrop} />
             ))}
-            {decks.length === 0 && <p className="sidebar-empty">还没有卡组，创建一个吧</p>}
+            {decks.length === 0 && (
+              <p className="sidebar-empty">还没有卡组，创建一个吧</p>
+            )}
           </div>
         </div>
       )}
@@ -1587,10 +1664,18 @@ function CardGrid({ cards, imageMode, draggable }) {
     <div className="card-grid">
       {cards.map((card, index) =>
         draggable ? (
-          <DraggableCard key={`${card.name}-${index}`} card={card} imageMode={imageMode} />
+          <DraggableCard
+            key={`${card.name}-${index}`}
+            card={card}
+            imageMode={imageMode}
+          />
         ) : (
-          <CardItem key={`${card.name}-${index}`} card={card} imageMode={imageMode} />
-        )
+          <CardItem
+            key={`${card.name}-${index}`}
+            card={card}
+            imageMode={imageMode}
+          />
+        ),
       )}
     </div>
   );
@@ -1640,7 +1725,12 @@ function SearchPage({ imageMode, onToggleImageMode }) {
   return (
     <div className="search-page-layout">
       <div className="search-main">
-        <SearchBar onSearch={handleSearch} loading={loading} imageMode={imageMode} onToggleImageMode={onToggleImageMode} />
+        <SearchBar
+          onSearch={handleSearch}
+          loading={loading}
+          imageMode={imageMode}
+          onToggleImageMode={onToggleImageMode}
+        />
         {loading && (
           <div className="loading">
             <div className="loading-spinner" />
@@ -1652,9 +1742,16 @@ function SearchPage({ imageMode, onToggleImageMode }) {
             <p>未找到匹配的卡牌，请尝试其他描述</p>
           </div>
         )}
-        {!loading && results.length > 0 && <CardGrid cards={results} imageMode={imageMode} draggable={!!user} />}
+        {!loading && results.length > 0 && (
+          <CardGrid cards={results} imageMode={imageMode} draggable={!!user} />
+        )}
       </div>
-      {user && <DeckSidebar collapsed={sidebarCollapsed} onToggle={() => setSidebarCollapsed(!sidebarCollapsed)} />}
+      {user && (
+        <DeckSidebar
+          collapsed={sidebarCollapsed}
+          onToggle={() => setSidebarCollapsed(!sidebarCollapsed)}
+        />
+      )}
     </div>
   );
 }
@@ -1674,17 +1771,15 @@ import { HTML5Backend } from "react-dnd-html5-backend";
 Wrap inside ToastProvider:
 
 ```jsx
-  return (
-    <AuthProvider>
-      <ToastProvider>
-        <DndProvider backend={HTML5Backend}>
-          <div className="app">
-            ...
-          </div>
-        </DndProvider>
-      </ToastProvider>
-    </AuthProvider>
-  );
+return (
+  <AuthProvider>
+    <ToastProvider>
+      <DndProvider backend={HTML5Backend}>
+        <div className="app">...</div>
+      </DndProvider>
+    </ToastProvider>
+  </AuthProvider>
+);
 ```
 
 - [ ] **Step 7: Add sidebar and drag-drop styles**
@@ -1889,6 +1984,7 @@ git commit -m "feat: add drag-and-drop card-to-deck with sidebar"
 ## Task 11: Decks List Page
 
 **Files:**
+
 - Create: `frontend/src/pages/DecksPage.jsx`
 - Modify: `frontend/src/App.jsx`
 - Modify: `frontend/src/App.css`
@@ -1950,7 +2046,7 @@ function DecksPage() {
   return (
     <div className="decks-page">
       <div className="decks-header">
-        <h2 className="decks-title">我的卡组</h2>
+        <h2 className="decks-title">打印卡组</h2>
         <form className="decks-create-form" onSubmit={handleCreate}>
           <input
             type="text"
@@ -1959,17 +2055,27 @@ function DecksPage() {
             onChange={(e) => setNewDeckName(e.target.value)}
             className="login-input"
           />
-          <button type="submit" className="search-btn" disabled={creating || !newDeckName.trim()}>
+          <button
+            type="submit"
+            className="search-btn"
+            disabled={creating || !newDeckName.trim()}
+          >
             创建
           </button>
         </form>
       </div>
       <div className="decks-grid">
         {decks.map((deck) => (
-          <div key={deck.id} className="deck-card" onClick={() => navigate(`/decks/${deck.id}`)}>
+          <div
+            key={deck.id}
+            className="deck-card"
+            onClick={() => navigate(`/decks/${deck.id}`)}
+          >
             <h3 className="deck-card-name">{deck.name}</h3>
             <p className="deck-card-count">{deck.card_count} 张卡牌</p>
-            <p className="deck-card-date">{new Date(deck.created_at).toLocaleDateString()}</p>
+            <p className="deck-card-date">
+              {new Date(deck.created_at).toLocaleDateString()}
+            </p>
             <button
               className="deck-card-delete"
               onClick={(e) => handleDelete(e, deck.id, deck.name)}
@@ -2136,6 +2242,7 @@ git commit -m "feat: add deck list page with create/delete"
 ## Task 12: Deck Detail Page
 
 **Files:**
+
 - Create: `frontend/src/pages/DeckDetailPage.jsx`
 - Modify: `frontend/src/App.jsx`
 - Modify: `frontend/src/App.css`
@@ -2208,7 +2315,9 @@ function DeckDetailPage({ imageMode }) {
   };
 
   const handleRemoveCard = async (cardId, cardName) => {
-    const res = await apiFetch(`/api/decks/${id}/cards/${cardId}`, { method: "DELETE" });
+    const res = await apiFetch(`/api/decks/${id}/cards/${cardId}`, {
+      method: "DELETE",
+    });
     if (res.ok) {
       addToast(`已移除 ${cardName}`);
       setCards(cards.filter((c) => c.card.id !== cardId));
@@ -2230,18 +2339,29 @@ function DeckDetailPage({ imageMode }) {
       body: JSON.stringify({ card_id: cardId, quantity: newQty }),
     });
     if (res.ok) {
-      setCards(cards.map((c) => c.card.id === cardId ? { ...c, quantity: newQty } : c));
+      setCards(
+        cards.map((c) =>
+          c.card.id === cardId ? { ...c, quantity: newQty } : c,
+        ),
+      );
     }
   };
 
-  if (!deck) return <div className="loading"><p>加载中...</p></div>;
+  if (!deck)
+    return (
+      <div className="loading">
+        <p>加载中...</p>
+      </div>
+    );
 
   const totalCards = cards.reduce((sum, c) => sum + c.quantity, 0);
 
   return (
     <div className="deck-detail">
       <div className="deck-detail-header">
-        <button className="deck-back-btn" onClick={() => navigate("/decks")}>&larr; 返回</button>
+        <button className="deck-back-btn" onClick={() => navigate("/decks")}>
+          &larr; 返回
+        </button>
         <div className="deck-detail-title-row">
           {editing ? (
             <input
@@ -2253,11 +2373,15 @@ function DeckDetailPage({ imageMode }) {
               autoFocus
             />
           ) : (
-            <h2 className="deck-detail-name" onClick={() => setEditing(true)}>{deck.name}</h2>
+            <h2 className="deck-detail-name" onClick={() => setEditing(true)}>
+              {deck.name}
+            </h2>
           )}
           <span className="deck-detail-count">{totalCards} 张卡牌</span>
         </div>
-        <button className="deck-delete-btn" onClick={handleDelete}>删除卡组</button>
+        <button className="deck-delete-btn" onClick={handleDelete}>
+          删除卡组
+        </button>
       </div>
       <div className="deck-cards-list">
         {cards.map((entry) => (
@@ -2267,11 +2391,24 @@ function DeckDetailPage({ imageMode }) {
             </div>
             <div className="deck-card-controls">
               <div className="quantity-controls">
-                <button className="qty-btn" onClick={() => handleQuantityChange(entry.card.id, -1)}>-</button>
+                <button
+                  className="qty-btn"
+                  onClick={() => handleQuantityChange(entry.card.id, -1)}
+                >
+                  -
+                </button>
                 <span className="qty-value">{entry.quantity}</span>
-                <button className="qty-btn" onClick={() => handleQuantityChange(entry.card.id, 1)}>+</button>
+                <button
+                  className="qty-btn"
+                  onClick={() => handleQuantityChange(entry.card.id, 1)}
+                >
+                  +
+                </button>
               </div>
-              <button className="deck-remove-btn" onClick={() => handleRemoveCard(entry.card.id, entry.card.name)}>
+              <button
+                className="deck-remove-btn"
+                onClick={() => handleRemoveCard(entry.card.id, entry.card.name)}
+              >
                 移除
               </button>
             </div>
@@ -2482,6 +2619,7 @@ git commit -m "feat: add deck detail page with card quantity management"
 ## Task 13: Protected Routes
 
 **Files:**
+
 - Modify: `frontend/src/App.jsx`
 
 - [ ] **Step 1: Add route protection for deck pages**
@@ -2510,10 +2648,33 @@ function App() {
             <Header theme={theme} onToggleTheme={toggleTheme} />
             <main className="main-content">
               <Routes>
-                <Route path="/" element={<SearchPage imageMode={imageMode} onToggleImageMode={toggleImageMode} />} />
-                <Route path="/login" element={user ? <Navigate to="/" /> : <LoginPage />} />
-                <Route path="/decks" element={user ? <DecksPage /> : <Navigate to="/login" />} />
-                <Route path="/decks/:id" element={user ? <DeckDetailPage imageMode={imageMode} /> : <Navigate to="/login" />} />
+                <Route
+                  path="/"
+                  element={
+                    <SearchPage
+                      imageMode={imageMode}
+                      onToggleImageMode={toggleImageMode}
+                    />
+                  }
+                />
+                <Route
+                  path="/login"
+                  element={user ? <Navigate to="/" /> : <LoginPage />}
+                />
+                <Route
+                  path="/decks"
+                  element={user ? <DecksPage /> : <Navigate to="/login" />}
+                />
+                <Route
+                  path="/decks/:id"
+                  element={
+                    user ? (
+                      <DeckDetailPage imageMode={imageMode} />
+                    ) : (
+                      <Navigate to="/login" />
+                    )
+                  }
+                />
               </Routes>
             </main>
           </div>
@@ -2547,10 +2708,33 @@ function AppRoutes({ imageMode, onToggleImageMode, theme, onToggleTheme }) {
       <Header theme={theme} onToggleTheme={onToggleTheme} />
       <main className="main-content">
         <Routes>
-          <Route path="/" element={<SearchPage imageMode={imageMode} onToggleImageMode={onToggleImageMode} />} />
-          <Route path="/login" element={user ? <Navigate to="/" /> : <LoginPage />} />
-          <Route path="/decks" element={user ? <DecksPage /> : <Navigate to="/login" />} />
-          <Route path="/decks/:id" element={user ? <DeckDetailPage imageMode={imageMode} /> : <Navigate to="/login" />} />
+          <Route
+            path="/"
+            element={
+              <SearchPage
+                imageMode={imageMode}
+                onToggleImageMode={onToggleImageMode}
+              />
+            }
+          />
+          <Route
+            path="/login"
+            element={user ? <Navigate to="/" /> : <LoginPage />}
+          />
+          <Route
+            path="/decks"
+            element={user ? <DecksPage /> : <Navigate to="/login" />}
+          />
+          <Route
+            path="/decks/:id"
+            element={
+              user ? (
+                <DeckDetailPage imageMode={imageMode} />
+              ) : (
+                <Navigate to="/login" />
+              )
+            }
+          />
         </Routes>
       </main>
     </div>

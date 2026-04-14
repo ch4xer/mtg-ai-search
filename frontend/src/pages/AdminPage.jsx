@@ -1,11 +1,19 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { apiFetch } from "../utils/apiFetch.js";
 import { useToast } from "../contexts/ToastContext.jsx";
+
+function formatNumber(n) {
+  if (n >= 1000000) return (n / 1000000).toFixed(1) + "M";
+  if (n >= 1000) return (n / 1000).toFixed(1) + "K";
+  return String(n);
+}
 
 function AdminPage() {
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [taskStatus, setTaskStatus] = useState({ reseed: { status: "idle" }, reembed: { status: "idle" } });
   const { showToast } = useToast();
+  const pollRef = useRef(null);
 
   const fetchUsers = async () => {
     try {
@@ -18,9 +26,96 @@ function AdminPage() {
     }
   };
 
+  const fetchTaskStatus = async () => {
+    try {
+      const res = await apiFetch("/api/admin/task-status");
+      if (res.ok) {
+        const data = await res.json();
+        setTaskStatus(data);
+        return data;
+      }
+    } catch { /* ignore */ }
+    return null;
+  };
+
+  // Start polling when a task is running
+  const startPolling = () => {
+    if (pollRef.current) return;
+    pollRef.current = setInterval(async () => {
+      const data = await fetchTaskStatus();
+      if (!data) return;
+      const anyRunning = Object.values(data).some((t) => t.status === "running");
+      if (!anyRunning) {
+        clearInterval(pollRef.current);
+        pollRef.current = null;
+        // Refresh user list in case card counts changed
+        fetchUsers();
+      }
+    }, 3000);
+  };
+
   useEffect(() => {
     fetchUsers();
+    fetchTaskStatus().then((data) => {
+      if (data && Object.values(data).some((t) => t.status === "running")) {
+        startPolling();
+      }
+    });
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+    };
   }, []);
+
+  const handleReseed = async () => {
+    if (!confirm("确定要重新拉取卡牌数据吗？这将清除所有现有卡牌数据并重新下载，过程可能需要较长时间。")) return;
+    try {
+      const res = await apiFetch("/api/admin/reseed", { method: "POST" });
+      if (res.ok) {
+        showToast("已开始重新拉取卡牌数据");
+        await fetchTaskStatus();
+        startPolling();
+      } else {
+        const err = await res.json().catch(() => ({}));
+        showToast(err.detail || "操作失败", "error");
+      }
+    } catch {
+      showToast("操作失败", "error");
+    }
+  };
+
+  const handleReseedOnly = async () => {
+    if (!confirm("确定要仅重新拉取卡牌数据（不更新 embedding）吗？此操作会清除现有卡牌数据。")) return;
+    try {
+      const res = await apiFetch("/api/admin/reseed-only", { method: "POST" });
+      if (res.ok) {
+        showToast("已开始仅拉取卡牌数据");
+        await fetchTaskStatus();
+        startPolling();
+      } else {
+        const err = await res.json().catch(() => ({}));
+        showToast(err.detail || "操作失败", "error");
+      }
+    } catch {
+      showToast("操作失败", "error");
+    }
+  };
+
+  const handleReembed = async () => {
+    if (!confirm("确定要重新生成所有 embedding 吗？过程可能需要较长时间。")) return;
+    try {
+      const res = await apiFetch("/api/admin/reembed", { method: "POST" });
+      if (res.ok) {
+        showToast("已开始重新生成 embedding");
+        await fetchTaskStatus();
+        startPolling();
+      } else {
+        const err = await res.json().catch(() => ({}));
+        showToast(err.detail || "操作失败", "error");
+      }
+    } catch {
+      showToast("操作失败", "error");
+    }
+  };
 
   const handleToggleRole = async (userId, currentRole) => {
     const newRole = currentRole === "admin" ? "user" : "admin";
@@ -59,6 +154,8 @@ function AdminPage() {
     }
   };
 
+  const anyRunning = Object.values(taskStatus).some((t) => t.status === "running");
+
   if (loading) {
     return (
       <div className="loading">
@@ -78,7 +175,19 @@ function AdminPage() {
               <th>用户名</th>
               <th>角色</th>
               <th>注册时间</th>
+              <th className="admin-stat-group" colSpan="3">搜索次数</th>
+              <th className="admin-stat-group" colSpan="3">Token 消耗</th>
               <th>操作</th>
+            </tr>
+            <tr className="admin-subheader">
+              <th colSpan="3"></th>
+              <th className="admin-stat-col">总计</th>
+              <th className="admin-stat-col">7天</th>
+              <th className="admin-stat-col">3小时</th>
+              <th className="admin-stat-col">总计</th>
+              <th className="admin-stat-col">7天</th>
+              <th className="admin-stat-col">3小时</th>
+              <th></th>
             </tr>
           </thead>
           <tbody>
@@ -89,6 +198,12 @@ function AdminPage() {
                   <span className={`role-badge role-${u.role}`}>{u.role}</span>
                 </td>
                 <td>{new Date(u.created_at).toLocaleDateString("zh-CN")}</td>
+                <td className="admin-stat-cell">{formatNumber(u.total_searches)}</td>
+                <td className="admin-stat-cell">{formatNumber(u.searches_7d)}</td>
+                <td className="admin-stat-cell">{formatNumber(u.searches_3h)}</td>
+                <td className="admin-stat-cell">{formatNumber(u.total_tokens)}</td>
+                <td className="admin-stat-cell">{formatNumber(u.tokens_7d)}</td>
+                <td className="admin-stat-cell">{formatNumber(u.tokens_3h)}</td>
                 <td className="admin-actions-cell">
                   <button
                     className="btn-secondary"
@@ -108,8 +223,108 @@ function AdminPage() {
           </tbody>
         </table>
       </div>
+
+      {/* DB Maintenance */}
+      <h2 className="admin-title" style={{ marginTop: "2.5rem" }}>数据库维护</h2>
+      <div className="admin-db-actions">
+        <div className="admin-db-card">
+          <div className="admin-db-card-header">
+            <h3>重新拉取卡牌数据</h3>
+            <StatusBadge status={taskStatus.reseed?.status} />
+          </div>
+          <p className="admin-db-card-desc">
+            从 Scryfall 重新下载所有卡牌数据并重新导入数据库，同时重新生成 embedding。
+            此操作会清除现有卡牌数据。
+          </p>
+          {taskStatus.reseed?.status === "running" && (
+            <div className="admin-task-progress">
+              <div className="loading-spinner-small" />
+              <span>{taskStatus.reseed.message}</span>
+            </div>
+          )}
+          {taskStatus.reseed?.status === "done" && (
+            <p className="admin-task-done">{taskStatus.reseed.message}</p>
+          )}
+          {taskStatus.reseed?.status === "error" && (
+            <p className="admin-task-error">{taskStatus.reseed.message}</p>
+          )}
+          <button
+            className="btn-primary"
+            onClick={handleReseed}
+            disabled={anyRunning}
+          >
+            拉取数据 + Embedding
+          </button>
+        </div>
+
+        <div className="admin-db-card">
+          <div className="admin-db-card-header">
+            <h3>仅拉取卡牌数据</h3>
+            <StatusBadge status={taskStatus.reseed?.status} />
+          </div>
+          <p className="admin-db-card-desc">
+            从 Scryfall 重新下载并导入卡牌数据，但不重新生成 embedding。
+            适用于仅需更新卡牌文本或图片数据的场景。
+          </p>
+          {taskStatus.reseed?.status === "running" && (
+            <div className="admin-task-progress">
+              <div className="loading-spinner-small" />
+              <span>{taskStatus.reseed.message}</span>
+            </div>
+          )}
+          {taskStatus.reseed?.status === "done" && (
+            <p className="admin-task-done">{taskStatus.reseed.message}</p>
+          )}
+          {taskStatus.reseed?.status === "error" && (
+            <p className="admin-task-error">{taskStatus.reseed.message}</p>
+          )}
+          <button
+            className="btn-primary"
+            onClick={handleReseedOnly}
+            disabled={anyRunning}
+          >
+            仅拉取数据
+          </button>
+        </div>
+
+        <div className="admin-db-card">
+          <div className="admin-db-card-header">
+            <h3>重新生成 Embedding</h3>
+            <StatusBadge status={taskStatus.reembed?.status} />
+          </div>
+          <p className="admin-db-card-desc">
+            清除所有现有 embedding 并重新生成。卡牌数据本身不会改变。
+            适用于更换了 embedding 模型后使用。
+          </p>
+          {taskStatus.reembed?.status === "running" && (
+            <div className="admin-task-progress">
+              <div className="loading-spinner-small" />
+              <span>{taskStatus.reembed.message}</span>
+            </div>
+          )}
+          {taskStatus.reembed?.status === "done" && (
+            <p className="admin-task-done">{taskStatus.reembed.message}</p>
+          )}
+          {taskStatus.reembed?.status === "error" && (
+            <p className="admin-task-error">{taskStatus.reembed.message}</p>
+          )}
+          <button
+            className="btn-primary"
+            onClick={handleReembed}
+            disabled={anyRunning}
+          >
+            重新生成 Embedding
+          </button>
+        </div>
+      </div>
     </div>
   );
+}
+
+function StatusBadge({ status }) {
+  if (!status || status === "idle") return null;
+  const labels = { running: "运行中", done: "已完成", error: "失败" };
+  return <span className={`admin-task-badge admin-task-badge-${status}`}>{labels[status]}</span>;
 }
 
 export default AdminPage;

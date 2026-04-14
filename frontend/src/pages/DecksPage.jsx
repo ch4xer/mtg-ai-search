@@ -2,11 +2,13 @@ import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { apiFetch } from "../utils/apiFetch.js";
 import { useToast } from "../contexts/ToastContext.jsx";
+import { FORMATS, getFormatLabel } from "../utils/formats.js";
 
 function DecksPage() {
   const [decks, setDecks] = useState([]);
   const [loading, setLoading] = useState(true);
   const [newDeckName, setNewDeckName] = useState("");
+  const [newDeckFormat, setNewDeckFormat] = useState("undefined");
   const [creating, setCreating] = useState(false);
   const [showInput, setShowInput] = useState(false);
   const navigate = useNavigate();
@@ -36,12 +38,13 @@ function DecksPage() {
     try {
       const res = await apiFetch("/api/decks", {
         method: "POST",
-        body: { name: newDeckName.trim() },
+        body: { name: newDeckName.trim(), format: newDeckFormat },
       });
       if (res.ok) {
         const deck = await res.json();
         setDecks((prev) => [{ ...deck, card_count: 0 }, ...prev]);
         setNewDeckName("");
+        setNewDeckFormat("undefined");
         setShowInput(false);
         showToast(`卡组「${deck.name}」已创建`);
       }
@@ -64,7 +67,7 @@ function DecksPage() {
   return (
     <div className="decks-page">
       <div className="decks-header">
-        <h2>我的卡组</h2>
+        <h2>打印卡组</h2>
         {!showInput ? (
           <button className="btn-accent" onClick={() => setShowInput(true)}>
             + 新建卡组
@@ -79,10 +82,34 @@ function DecksPage() {
               autoFocus
               disabled={creating}
             />
-            <button type="submit" className="btn-accent" disabled={creating || !newDeckName.trim()}>
+            <select
+              className="deck-format-select"
+              value={newDeckFormat}
+              onChange={(e) => setNewDeckFormat(e.target.value)}
+              disabled={creating}
+            >
+              {FORMATS.map((f) => (
+                <option key={f.key} value={f.key}>
+                  {f.label}
+                </option>
+              ))}
+            </select>
+            <button
+              type="submit"
+              className="btn-accent"
+              disabled={creating || !newDeckName.trim()}
+            >
               创建
             </button>
-            <button type="button" className="btn-secondary" onClick={() => { setShowInput(false); setNewDeckName(""); }}>
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => {
+                setShowInput(false);
+                setNewDeckName("");
+                setNewDeckFormat("undefined");
+              }}
+            >
               取消
             </button>
           </form>
@@ -101,6 +128,11 @@ function DecksPage() {
               onClick={() => navigate(`/decks/${deck.id}`)}
             >
               <h3 className="deck-card-name">{deck.name}</h3>
+              <span
+                className={`format-badge format-${deck.format || "undefined"}`}
+              >
+                {getFormatLabel(deck.format)}
+              </span>
               <p className="deck-card-count">{deck.card_count || 0} 张卡牌</p>
               <p className="deck-card-date">
                 {new Date(deck.created_at).toLocaleDateString("zh-CN")}

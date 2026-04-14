@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from "react";
 import { useAuth } from "../contexts/AuthContext.jsx";
 import { apiFetch } from "../utils/apiFetch.js";
 import { useToast } from "../contexts/ToastContext.jsx";
+import { getFormatLabel, getCardLegality, legalityLabel } from "../utils/formats.js";
 
 function getImageUri(imageUris, mode) {
   if (!imageUris) return "";
@@ -313,15 +314,30 @@ function CardItem({ card, imageMode, decks }) {
                     {decks.length === 0 ? (
                       <p className="deck-dropdown-empty">还没有卡组</p>
                     ) : (
-                      decks.map((d) => (
-                        <button
-                          key={d.id}
-                          className="deck-dropdown-item"
-                          onClick={() => handleAddToDeck(d.id, d.name)}
-                        >
-                          {d.name}
-                        </button>
-                      ))
+                      decks.map((d) => {
+                        const legality = getCardLegality(card, d.format);
+                        const showLegality = d.format && d.format !== "undefined";
+                        return (
+                          <button
+                            key={d.id}
+                            className="deck-dropdown-item"
+                            onClick={() => handleAddToDeck(d.id, d.name)}
+                            title={showLegality ? `${getFormatLabel(d.format)} · ${legalityLabel(legality)}` : getFormatLabel(d.format)}
+                          >
+                            <span className="deck-dropdown-name">{d.name}</span>
+                            <span className="deck-dropdown-meta">
+                              <span className={`format-badge format-${d.format || "undefined"}`}>
+                                {getFormatLabel(d.format)}
+                              </span>
+                              {showLegality && (
+                                <span className={`legality-chip legality-${legality}`}>
+                                  {legalityLabel(legality)}
+                                </span>
+                              )}
+                            </span>
+                          </button>
+                        );
+                      })
                     )}
                   </div>
                 )}

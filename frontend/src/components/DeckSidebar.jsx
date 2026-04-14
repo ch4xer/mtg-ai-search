@@ -1,10 +1,12 @@
 import { useState, useEffect } from "react";
 import { apiFetch } from "../utils/apiFetch.js";
 import { useToast } from "../contexts/ToastContext.jsx";
+import { FORMATS, getFormatLabel } from "../utils/formats.js";
 
 function DeckSidebar({ collapsed, onToggle }) {
   const [decks, setDecks] = useState([]);
   const [newName, setNewName] = useState("");
+  const [newFormat, setNewFormat] = useState("undefined");
   const [creating, setCreating] = useState(false);
   const { showToast } = useToast();
 
@@ -26,12 +28,13 @@ function DeckSidebar({ collapsed, onToggle }) {
     try {
       const res = await apiFetch("/api/decks", {
         method: "POST",
-        body: { name: newName.trim() },
+        body: { name: newName.trim(), format: newFormat },
       });
       if (res.ok) {
         const deck = await res.json();
         setDecks((prev) => [{ ...deck, card_count: 0 }, ...prev]);
         setNewName("");
+        setNewFormat("undefined");
         showToast(`卡组「${deck.name}」已创建`);
       }
     } catch {
@@ -52,8 +55,8 @@ function DeckSidebar({ collapsed, onToggle }) {
         showToast(`已将「${cardName}」加入「${deckName}」`);
         setDecks((prev) =>
           prev.map((d) =>
-            d.id === deckId ? { ...d, card_count: (d.card_count || 0) + 1 } : d
-          )
+            d.id === deckId ? { ...d, card_count: (d.card_count || 0) + 1 } : d,
+          ),
         );
       } else {
         const err = await res.json().catch(() => ({}));
@@ -66,12 +69,16 @@ function DeckSidebar({ collapsed, onToggle }) {
 
   return (
     <div className={`deck-sidebar ${collapsed ? "collapsed" : ""}`}>
-      <button className="sidebar-toggle" onClick={onToggle} title={collapsed ? "展开卡组栏" : "收起卡组栏"}>
+      <button
+        className="sidebar-toggle"
+        onClick={onToggle}
+        title={collapsed ? "展开卡组栏" : "收起卡组栏"}
+      >
         {collapsed ? "◀" : "▶"}
       </button>
       {!collapsed && (
         <div className="sidebar-content">
-          <h3 className="sidebar-title">我的卡组</h3>
+          <h3 className="sidebar-title">打印卡组</h3>
           <form onSubmit={handleCreate} className="sidebar-new-deck">
             <input
               type="text"
@@ -80,18 +87,43 @@ function DeckSidebar({ collapsed, onToggle }) {
               placeholder="新建卡组..."
               disabled={creating}
             />
-            <button type="submit" disabled={creating || !newName.trim()}>+</button>
+            <select
+              className="sidebar-format-select"
+              value={newFormat}
+              onChange={(e) => setNewFormat(e.target.value)}
+              disabled={creating}
+            >
+              {FORMATS.map((f) => (
+                <option key={f.key} value={f.key}>
+                  {f.label}
+                </option>
+              ))}
+            </select>
+            <button type="submit" disabled={creating || !newName.trim()}>
+              +
+            </button>
           </form>
           <div className="sidebar-deck-list">
             {decks.map((deck) => (
-              <div key={deck.id} className="sidebar-deck-item" data-deck-id={deck.id}>
-                <span className="sidebar-deck-name">{deck.name}</span>
-                <span className="sidebar-deck-count">{deck.card_count || 0}</span>
+              <div
+                key={deck.id}
+                className="sidebar-deck-item"
+                data-deck-id={deck.id}
+              >
+                <div className="sidebar-deck-info">
+                  <span className="sidebar-deck-name">{deck.name}</span>
+                  <span
+                    className={`format-badge format-${deck.format || "undefined"}`}
+                  >
+                    {getFormatLabel(deck.format)}
+                  </span>
+                </div>
+                <span className="sidebar-deck-count">
+                  {deck.card_count || 0}
+                </span>
               </div>
             ))}
-            {decks.length === 0 && (
-              <p className="sidebar-empty">还没有卡组</p>
-            )}
+            {decks.length === 0 && <p className="sidebar-empty">还没有卡组</p>}
           </div>
         </div>
       )}
