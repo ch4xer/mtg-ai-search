@@ -380,8 +380,9 @@ body {
 /* ===== Card Grid ===== */
 .card-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  grid-template-columns: repeat(auto-fill, 250px);
   gap: 1.5rem;
+  justify-content: center;
 }
 
 /* ===== Card Item ===== */
@@ -389,10 +390,14 @@ body {
   background: var(--bg-card);
   border: 1px solid var(--border-subtle);
   border-radius: 12px;
-  overflow: hidden;
   transition: all 0.25s ease;
   position: relative;
   box-shadow: 0 2px 8px var(--shadow);
+  width: 250px;
+}
+
+.card-item:not(.art-crop) .card-info {
+  display: none;
 }
 
 .card-item:hover {
@@ -418,14 +423,65 @@ body {
 }
 
 .card-image-wrapper {
+  position: relative;
   width: 100%;
   aspect-ratio: 488 / 680;
   overflow: hidden;
   background: var(--bg-secondary);
+  border-radius: 12px 12px 0 0;
 }
 
 .card-image-wrapper.art-crop {
   aspect-ratio: 626 / 457;
+}
+
+.card-overlay {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  padding: 8px 10px;
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.85), rgba(0, 0, 0, 0.5), transparent);
+  z-index: 2;
+}
+
+.card-overlay-flavor {
+  font-size: 0.75rem;
+  color: #fff;
+  font-style: italic;
+  margin-bottom: 6px;
+  opacity: 0.9;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+  line-height: 1.4;
+}
+
+.card-overlay-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.card-overlay-pt {
+  font-family: "Cinzel", serif;
+  font-weight: 700;
+  font-size: 0.85rem;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.7);
+  padding: 3px 10px;
+  border-radius: 4px;
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.5);
+}
+
+.card-overlay-set {
+  font-size: 0.7rem;
+  color: #fff;
+  opacity: 0.85;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+  max-width: 60%;
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .card-image {
@@ -490,7 +546,7 @@ body {
 
 .card-art-btn {
   position: absolute;
-  top: 10px;
+  top: calc(10px + 15pt);
   right: 10px;
   z-index: 3;
   width: 36px;
@@ -617,6 +673,21 @@ body {
   padding: 1rem 1.2rem 1.2rem;
 }
 
+.card-info > *:not(.card-footer) {
+  flex-shrink: 0;
+}
+
+.card-flavor {
+  flex-grow: 1;
+}
+
+.card-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: auto;
+}
+
 .card-name {
   font-family: "Cinzel", serif;
   font-size: 1.05rem;
@@ -710,13 +781,6 @@ body {
   padding-top: 0.4rem;
 }
 
-.card-footer {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-top: 0.5rem;
-}
-
 .card-footer-left,
 .card-footer-right {
   display: flex;
@@ -738,37 +802,42 @@ body {
 }
 
 /* ===== Add to Deck ===== */
-.add-to-deck-wrapper {
-  position: relative;
-}
-
 .add-to-deck-btn {
-  width: 28px;
-  height: 28px;
+  position: absolute;
+  top: calc(10px + 15pt + 40px);
+  right: 10px;
+  z-index: 3;
+  width: 36px;
+  height: 36px;
   border-radius: 50%;
-  border: 2px solid var(--accent);
-  background: transparent;
-  color: var(--accent);
-  font-size: 1.1rem;
+  border: none;
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  font-size: 1.2rem;
   font-weight: 700;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
   transition: all 0.2s ease;
+  backdrop-filter: blur(4px);
   line-height: 1;
 }
 
 .add-to-deck-btn:hover {
   background: var(--accent);
-  color: var(--bg-primary);
+  color: #1a1a1a;
+  transform: scale(1.1);
+}
+
+.deck-dropdown-overlay {
+  position: absolute;
+  top: calc(10px + 15pt + 80px);
+  right: 10px;
+  z-index: 50;
 }
 
 .deck-dropdown {
-  position: absolute;
-  bottom: 100%;
-  right: 0;
-  margin-bottom: 6px;
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -2405,8 +2474,9 @@ body {
   }
 
   .card-grid {
-    grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+    grid-template-columns: repeat(auto-fill, 250px);
     gap: 1rem;
+    justify-content: center;
   }
 
   .header-actions {
@@ -2453,7 +2523,8 @@ body {
   }
 
   .card-grid {
-    grid-template-columns: 1fr;
+    grid-template-columns: 250px;
+    justify-content: center;
   }
 
   .card-info {

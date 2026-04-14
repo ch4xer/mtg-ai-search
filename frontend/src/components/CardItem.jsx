@@ -9,7 +9,7 @@ function getImageUri(imageUris, mode) {
   return imageUris[mode] || imageUris.normal || imageUris.small || "";
 }
 
-function CardItem({ card, imageMode, decks }) {
+function CardItem({ card, imageMode, decks: propDecks }) {
   const [imgError, setImgError] = useState(false);
   const [flipped, setFlipped] = useState(false);
   const [showDeckMenu, setShowDeckMenu] = useState(false);
@@ -17,10 +17,15 @@ function CardItem({ card, imageMode, decks }) {
   const [prints, setPrints] = useState([]);
   const [loadingPrints, setLoadingPrints] = useState(false);
   const [selectedArt, setSelectedArt] = useState(null); // { png, imageUri, setName }
+  const [localDecks, setLocalDecks] = useState([]);
+  const [loadingDecks, setLoadingDecks] = useState(false);
   const menuRef = useRef(null);
   const artRef = useRef(null);
   const { user } = useAuth();
   const { showToast } = useToast();
+
+  // Use prop decks as initial value, fallback to local decks
+  const decks = localDecks.length > 0 ? localDecks : (propDecks || []);
 
   const colorMap = {
     W: "mana-white",
@@ -119,6 +124,29 @@ function CardItem({ card, imageMode, decks }) {
     }
   };
 
+  const handleOpenDeckMenu = async () => {
+    if (showDeckMenu) {
+      setShowDeckMenu(false);
+      return;
+    }
+    // Always fetch decks when opening menu
+    setLoadingDecks(true);
+    setShowDeckMenu(true);
+    try {
+      const res = await apiFetch("/api/decks");
+      if (res.ok) {
+        const data = await res.json();
+        setLocalDecks(data);
+      } else {
+        setLocalDecks([]);
+      }
+    } catch {
+      setLocalDecks([]);
+    } finally {
+      setLoadingDecks(false);
+    }
+  };
+
   const handleSelectArt = (print) => {
     setSelectedArt(print);
     setShowArtPicker(false);
@@ -161,7 +189,7 @@ function CardItem({ card, imageMode, decks }) {
   };
 
   return (
-    <div className="card-item">
+    <div className={`card-item ${isArtCrop ? "art-crop" : ""}`}>
       <div className={`card-image-wrapper ${isDoubleFaced && !selectedArt ? "flippable" : ""} ${isArtCrop ? "art-crop" : ""}`}>
         {isDoubleFaced && !selectedArt ? (
           <div className={`card-flip-container ${flipped ? "flipped" : ""}`}>
@@ -236,7 +264,67 @@ function CardItem({ card, imageMode, decks }) {
             </svg>
           </button>
         )}
+        {user && (
+          <button
+            className="add-to-deck-btn"
+            onClick={handleOpenDeckMenu}
+            title="加入卡组"
+          >
+            +
+          </button>
+        )}
+        {/* Card overlay info at bottom - only in art-crop mode */}
+        {isArtCrop && (
+          <div className="card-overlay">
+            {displayFlavorText && <p className="card-overlay-flavor">{displayFlavorText}</p>}
+            <div className="card-overlay-footer">
+              <span className="card-overlay-pt">
+                {displayPower && displayToughness && `${displayPower}/${displayToughness}`}
+                {displayLoyalty && displayLoyalty}
+              </span>
+              {card.set_name && <span className="card-overlay-set">{card.set_name}</span>}
+            </div>
+          </div>
+        )}
       </div>
+
+      {/* Deck dropdown - outside image wrapper to avoid overflow:hidden */}
+      {showDeckMenu && user && (
+        <div className="deck-dropdown-overlay" ref={menuRef}>
+          <div className="deck-dropdown">
+            {loadingDecks ? (
+              <p className="deck-dropdown-empty">加载中...</p>
+            ) : decks.length === 0 ? (
+              <p className="deck-dropdown-empty">还没有卡组</p>
+            ) : (
+              decks.map((d) => {
+                const legality = getCardLegality(card, d.format);
+                const showLegality = d.format && d.format !== "undefined";
+                return (
+                  <button
+                    key={d.id}
+                    className="deck-dropdown-item"
+                    onClick={() => handleAddToDeck(d.id, d.name)}
+                    title={showLegality ? `${getFormatLabel(d.format)} · ${legalityLabel(legality)}` : getFormatLabel(d.format)}
+                  >
+                    <span className="deck-dropdown-name">{d.name}</span>
+                    <span className="deck-dropdown-meta">
+                      <span className={`format-badge format-${d.format || "undefined"}`}>
+                        {getFormatLabel(d.format)}
+                      </span>
+                      {showLegality && (
+                        <span className={`legality-chip legality-${legality}`}>
+                          {legalityLabel(legality)}
+                        </span>
+                      )}
+                    </span>
+                  </button>
+                );
+              })
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Art picker panel */}
       {showArtPicker && (
@@ -285,66 +373,6 @@ function CardItem({ card, imageMode, decks }) {
         </div>
         <p className="card-type">{displayTypeLine}</p>
         {displayOracleText && <p className="card-text">{displayOracleText}</p>}
-        {card.keywords && card.keywords.length > 0 && (
-          <p className="card-keywords">{card.keywords.join(", ")}</p>
-        )}
-        {displayFlavorText && <p className="card-flavor">{displayFlavorText}</p>}
-        <div className="card-footer">
-          <div className="card-footer-left">
-            {displayPower && displayToughness && (
-              <span className="card-pt">
-                {displayPower}/{displayToughness}
-              </span>
-            )}
-            {displayLoyalty && <span className="card-pt">{displayLoyalty}</span>}
-          </div>
-          <div className="card-footer-right">
-            {card.set_name && <span className="card-set">{card.set_name}</span>}
-            {user && decks && (
-              <div className="add-to-deck-wrapper" ref={menuRef}>
-                <button
-                  className="add-to-deck-btn"
-                  onClick={() => setShowDeckMenu(!showDeckMenu)}
-                  title="加入卡组"
-                >
-                  +
-                </button>
-                {showDeckMenu && (
-                  <div className="deck-dropdown">
-                    {decks.length === 0 ? (
-                      <p className="deck-dropdown-empty">还没有卡组</p>
-                    ) : (
-                      decks.map((d) => {
-                        const legality = getCardLegality(card, d.format);
-                        const showLegality = d.format && d.format !== "undefined";
-                        return (
-                          <button
-                            key={d.id}
-                            className="deck-dropdown-item"
-                            onClick={() => handleAddToDeck(d.id, d.name)}
-                            title={showLegality ? `${getFormatLabel(d.format)} · ${legalityLabel(legality)}` : getFormatLabel(d.format)}
-                          >
-                            <span className="deck-dropdown-name">{d.name}</span>
-                            <span className="deck-dropdown-meta">
-                              <span className={`format-badge format-${d.format || "undefined"}`}>
-                                {getFormatLabel(d.format)}
-                              </span>
-                              {showLegality && (
-                                <span className={`legality-chip legality-${legality}`}>
-                                  {legalityLabel(legality)}
-                                </span>
-                              )}
-                            </span>
-                          </button>
-                        );
-                      })
-                    )}
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        </div>
       </div>
     </div>
   );
