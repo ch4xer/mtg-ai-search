@@ -67,7 +67,7 @@ function DecksPage() {
   return (
     <div className="decks-page">
       <div className="decks-header">
-        <h2>打印卡组</h2>
+        <h2>卡组</h2>
         {!showInput ? (
           <button className="btn-accent" onClick={() => setShowInput(true)}>
             + 新建卡组

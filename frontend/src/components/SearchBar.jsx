@@ -25,7 +25,8 @@ function SearchBar({ onSearch, loading }) {
       navigate("/login");
       return;
     }
-    onSearch(query);
+    const searchQuery = query.trim() || inputRef.current?.placeholder || "";
+    onSearch(searchQuery);
   };
 
   return (
@@ -35,13 +36,13 @@ function SearchBar({ onSearch, loading }) {
           ref={inputRef}
           type="text"
           className="search-input"
-          placeholder="描述你想找的卡牌... (例如: 能让对手弃牌的黑色生物)"
+          placeholder="能让对手弃牌的黑色生物"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onFocus={handleFocus}
           disabled={loading}
         />
-        <button type="submit" className="search-btn" disabled={loading || !query.trim()}>
+        <button type="submit" className="search-btn" disabled={loading}>
           {loading ? "Searching..." : "Search"}
         </button>
       </div>

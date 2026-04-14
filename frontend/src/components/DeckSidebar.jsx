@@ -78,7 +78,7 @@ function DeckSidebar({ collapsed, onToggle }) {
       </button>
       {!collapsed && (
         <div className="sidebar-content">
-          <h3 className="sidebar-title">打印卡组</h3>
+          <h3 className="sidebar-title">卡组</h3>
           <form onSubmit={handleCreate} className="sidebar-new-deck">
             <input
               type="text"
