@@ -12,28 +12,24 @@ function Header({ theme, onToggleTheme }) {
           <h1>MTG Card Search</h1>
         </Link>
         <div className="header-actions">
-          {user ? (
-            <>
-              {user.role === "admin" && (
-                <Link to="/admin" className="header-link header-link-admin">
-                  管理
-                </Link>
-              )}
-              <Link to="/decks" className="header-link">
-                打印卡组
+        {user ? (
+          <>
+            {user.role === "admin" && (
+              <Link to="/admin" className="header-link header-link-admin">
+                管理
               </Link>
-              <span className="header-user">{user.username}</span>
-              <button className="header-link-btn" onClick={logout}>
-                退出
-              </button>
-            </>
-          ) : (
-            <Link to="/login" className="header-link">
-              登录
+            )}
+            <Link to="/decks" className="header-link">
+              卡组
             </Link>
-          )}
-          <ThemeToggle theme={theme} onToggle={onToggleTheme} />
-        </div>
+            <span className="header-user">{user.username}</span>
+            <button className="header-link-btn" onClick={logout}>
+              退出
+            </button>
+          </>
+        ) : null}
+        <ThemeToggle theme={theme} onToggle={onToggleTheme} />
+      </div>
       </div>
     </header>
   );

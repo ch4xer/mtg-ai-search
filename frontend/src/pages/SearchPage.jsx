@@ -1,8 +1,11 @@
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import SearchBar from "../components/SearchBar.jsx";
 import CardGrid from "../components/CardGrid.jsx";
 import DiscoverBrowser from "../components/DiscoverBrowser.jsx";
 import { useUserDecks } from "../hooks/useUserDecks.js";
+import { useAuth } from "../contexts/AuthContext.jsx";
+import { useToast } from "../contexts/ToastContext.jsx";
 import { apiFetch } from "../utils/apiFetch.js";
 
 const FEATURES = [
@@ -46,6 +49,18 @@ function SearchPage({ imageMode, onToggleImageMode }) {
   const [aiLoading, setAiLoading] = useState(false);
   const [aiSearched, setAiSearched] = useState(false);
   const decks = useUserDecks();
+  const { user } = useAuth();
+  const { showToast } = useToast();
+  const navigate = useNavigate();
+
+  const requireAuth = () => {
+    if (!user) {
+      showToast("请先登录后再使用搜索功能", "warning");
+      navigate("/login");
+      return false;
+    }
+    return true;
+  };
 
   const handleAiSearch = async (query) => {
     if (!query.trim()) return;
@@ -75,7 +90,7 @@ function SearchPage({ imageMode, onToggleImageMode }) {
             role="tab"
             aria-selected={mode === "ai"}
             className={`mode-toggle-btn ${mode === "ai" ? "active" : ""}`}
-            onClick={() => setMode("ai")}
+            onClick={() => requireAuth() && setMode("ai")}
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M12 2a4 4 0 0 1 4 4c0 1.5-.8 2.8-2 3.4V11h3a3 3 0 0 1 3 3v1a2 2 0 0 1-2 2h-1v3a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2v-3H6a2 2 0 0 1-2-2v-1a3 3 0 0 1 3-3h3V9.4C8.8 8.8 8 7.5 8 6a4 4 0 0 1 4-4z" />
@@ -87,7 +102,7 @@ function SearchPage({ imageMode, onToggleImageMode }) {
             role="tab"
             aria-selected={mode === "discover"}
             className={`mode-toggle-btn ${mode === "discover" ? "active" : ""}`}
-            onClick={() => setMode("discover")}
+            onClick={() => requireAuth() && setMode("discover")}
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <line x1="4" y1="6" x2="20" y2="6" />
