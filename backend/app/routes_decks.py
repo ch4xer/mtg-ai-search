@@ -1,14 +1,17 @@
+"""Deck endpoints: CRUD, cards, text import/export, PDF export."""
+
 import asyncio
 import io
 import json
 import logging
+import re
 import time as _time
 from urllib.parse import quote
 from uuid import uuid4
 
 import httpx
 from PIL import Image
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import PlainTextResponse, StreamingResponse
 from pydantic import BaseModel
 from reportlab.lib.pagesizes import A4
@@ -16,109 +19,57 @@ from reportlab.lib.units import inch
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
 
-from .auth import (
-    create_access_token,
-    create_refresh_token,
-    decode_token,
-    get_current_user,
-    hash_password,
-    require_admin,
-    verify_password,
-)
+from .auth import get_current_user
 from .db import (
     add_card_to_deck,
     create_deck,
-    create_user,
     delete_deck,
-    delete_user,
     get_cards_by_names,
     get_deck,
     get_deck_card_images,
     get_deck_cards,
     get_deck_cards_for_export,
-    get_user_by_username,
     get_user_decks,
-    list_all_users,
     remove_card_from_deck,
     update_deck,
-    update_user_role,
+    update_deck_card_image,
 )
 
 logger = logging.getLogger(__name__)
 
-# ── Auth Router ─────────────────────────────────────────────────────────
-
-auth_router = APIRouter(prefix="/api/auth", tags=["auth"])
-
-
-class RegisterRequest(BaseModel):
-    username: str
-    password: str
-
-
-class LoginRequest(BaseModel):
-    username: str
-    password: str
-
-
-class RefreshRequest(BaseModel):
-    refresh_token: str
-
-
-class AuthResponse(BaseModel):
-    access_token: str
-    refresh_token: str
-    user: dict
-
-
-@auth_router.post("/register", response_model=AuthResponse)
-async def register(req: RegisterRequest):
-    if len(req.username) < 2:
-        raise HTTPException(status_code=400, detail="Username must be at least 2 characters")
-    if len(req.password) < 6:
-        raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
-    existing = await get_user_by_username(req.username)
-    if existing:
-        raise HTTPException(status_code=409, detail="Username already taken")
-    pw_hash = hash_password(req.password)
-    user = await create_user(req.username, pw_hash)
-    return AuthResponse(
-        access_token=create_access_token(user["id"]),
-        refresh_token=create_refresh_token(user["id"]),
-        user=user,
-    )
-
-
-@auth_router.post("/login", response_model=AuthResponse)
-async def login(req: LoginRequest):
-    user = await get_user_by_username(req.username)
-    if not user or not verify_password(req.password, user["password_hash"]):
-        raise HTTPException(status_code=401, detail="Invalid username or password")
-    user_info = {"id": user["id"], "username": user["username"], "role": user["role"]}
-    return AuthResponse(
-        access_token=create_access_token(user["id"]),
-        refresh_token=create_refresh_token(user["id"]),
-        user=user_info,
-    )
-
-
-@auth_router.post("/refresh")
-async def refresh(req: RefreshRequest):
-    user_id = decode_token(req.refresh_token, expected_type="refresh")
-    return {"access_token": create_access_token(user_id)}
-
-
-# ── Deck Router ─────────────────────────────────────────────────────────
-
 deck_router = APIRouter(prefix="/api/decks", tags=["decks"])
+DECKLIST_ENTRY_RE = re.compile(r"^(\d+)\s+(.+)$")
+
+
+# Accepted deck format keys (match Scryfall's `legalities` keys, plus `undefined`).
+ALLOWED_FORMATS = {
+    "undefined",
+    "standard",
+    "pioneer",
+    "modern",
+    "legacy",
+    "vintage",
+    "pauper",
+    "commander",
+    "brawl",
+    "historic",
+    "alchemy",
+    "explorer",
+    "oathbreaker",
+    "premodern",
+    "pauper commander",
+    "paupercommander",
+}
 
 
 class CreateDeckRequest(BaseModel):
     name: str
+    format: str = "undefined"
 
 
 class UpdateDeckRequest(BaseModel):
     name: str
+    format: str | None = None
 
 
 class AddCardRequest(BaseModel):
@@ -126,6 +77,27 @@ class AddCardRequest(BaseModel):
     quantity: int = 1
     image_url: str | None = None
     display_url: str | None = None
+
+
+class UpdateCardImageRequest(BaseModel):
+    image_url: str | None = None
+    display_url: str | None = None
+
+
+def _require_deck_name(name: str) -> str:
+    clean_name = name.strip()
+    if not clean_name:
+        raise HTTPException(status_code=400, detail="Deck name cannot be empty")
+    return clean_name
+
+
+def _require_positive_quantity(quantity: int) -> None:
+    if quantity < 1:
+        raise HTTPException(status_code=400, detail="Quantity must be at least 1")
+
+
+def _build_attachment_headers(filename: str) -> dict[str, str]:
+    return {"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"}
 
 
 async def _verify_deck_ownership(deck_id: str, user_id: str) -> dict:
@@ -136,6 +108,16 @@ async def _verify_deck_ownership(deck_id: str, user_id: str) -> dict:
     return deck
 
 
+def _validate_format(raw: str | None) -> str | None:
+    """Normalise and validate a format key. Returns None if raw is None."""
+    if raw is None:
+        return None
+    fmt = raw.strip().lower()
+    if fmt not in ALLOWED_FORMATS:
+        raise HTTPException(status_code=400, detail=f"Invalid format: {raw}")
+    return fmt
+
+
 @deck_router.get("")
 async def list_decks(user_id: str = Depends(get_current_user)):
     return await get_user_decks(user_id)
@@ -143,17 +125,27 @@ async def list_decks(user_id: str = Depends(get_current_user)):
 
 @deck_router.post("", status_code=201)
 async def create_deck_endpoint(req: CreateDeckRequest, user_id: str = Depends(get_current_user)):
-    if not req.name.strip():
-        raise HTTPException(status_code=400, detail="Deck name cannot be empty")
-    return await create_deck(user_id, req.name.strip())
+    fmt = _validate_format(req.format) or "undefined"
+    return await create_deck(user_id, _require_deck_name(req.name), fmt)
+
+
+@deck_router.get("/{deck_id}")
+async def get_deck_endpoint(deck_id: str, user_id: str = Depends(get_current_user)):
+    """Fetch a single deck (id, name, format, timestamps, card_count)."""
+    await _verify_deck_ownership(deck_id, user_id)
+    # Re-fetch via the list path so we get card_count too
+    decks = await get_user_decks(user_id)
+    deck = next((d for d in decks if d["id"] == deck_id), None)
+    if not deck:
+        raise HTTPException(status_code=404, detail="Deck not found")
+    return deck
 
 
 @deck_router.put("/{deck_id}")
 async def update_deck_endpoint(deck_id: str, req: UpdateDeckRequest, user_id: str = Depends(get_current_user)):
     await _verify_deck_ownership(deck_id, user_id)
-    if not req.name.strip():
-        raise HTTPException(status_code=400, detail="Deck name cannot be empty")
-    return await update_deck(deck_id, req.name.strip())
+    fmt = _validate_format(req.format)
+    return await update_deck(deck_id, _require_deck_name(req.name), fmt)
 
 
 @deck_router.delete("/{deck_id}", status_code=204)
@@ -171,8 +163,29 @@ async def list_deck_cards(deck_id: str, user_id: str = Depends(get_current_user)
 @deck_router.post("/{deck_id}/cards", status_code=201)
 async def add_card(deck_id: str, req: AddCardRequest, user_id: str = Depends(get_current_user)):
     await _verify_deck_ownership(deck_id, user_id)
+    _require_positive_quantity(req.quantity)
     update_image = "image_url" in req.model_fields_set or "display_url" in req.model_fields_set
-    return await add_card_to_deck(deck_id, req.card_id, req.quantity, req.image_url, req.display_url, update_image)
+    return await add_card_to_deck(
+        deck_id, req.card_id, req.quantity, req.image_url, req.display_url, update_image
+    )
+
+
+@deck_router.patch("/{deck_id}/cards/{card_id}")
+async def update_card_image(
+    deck_id: str,
+    card_id: str,
+    req: UpdateCardImageRequest,
+    user_id: str = Depends(get_current_user),
+):
+    """Update a deck card's image override without changing quantity.
+
+    Passing null values resets the override to the default card image.
+    """
+    await _verify_deck_ownership(deck_id, user_id)
+    updated = await update_deck_card_image(deck_id, card_id, req.image_url, req.display_url)
+    if not updated:
+        raise HTTPException(status_code=404, detail="Card not in deck")
+    return updated
 
 
 @deck_router.delete("/{deck_id}/cards/{card_id}", status_code=204)
@@ -189,13 +202,12 @@ def _parse_decklist(text: str) -> list[tuple[int, str]]:
     Accepts formats like '1 Sol Ring' or 'Sol Ring' (defaults to qty 1).
     Blank lines and lines starting with '#' or '//' are skipped.
     """
-    import re
     entries: list[tuple[int, str]] = []
     for raw_line in text.splitlines():
         line = raw_line.strip()
         if not line or line.startswith("#") or line.startswith("//"):
             continue
-        m = re.match(r"^(\d+)\s+(.+)$", line)
+        m = DECKLIST_ENTRY_RE.match(line)
         if m:
             entries.append((int(m.group(1)), m.group(2).strip()))
         else:
@@ -205,8 +217,7 @@ def _parse_decklist(text: str) -> list[tuple[int, str]]:
 
 @deck_router.get("/{deck_id}/export/text")
 async def export_deck_text(deck_id: str, user_id: str = Depends(get_current_user)):
-    await _verify_deck_ownership(deck_id, user_id)
-    deck = await get_deck(deck_id)
+    deck = await _verify_deck_ownership(deck_id, user_id)
     cards = await get_deck_cards_for_export(deck_id)
     if not cards:
         raise HTTPException(status_code=400, detail="Deck is empty")
@@ -215,7 +226,7 @@ async def export_deck_text(deck_id: str, user_id: str = Depends(get_current_user
     filename = f"{deck['name']}.txt"
     return PlainTextResponse(
         content,
-        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"},
+        headers=_build_attachment_headers(filename),
     )
 
 
@@ -231,7 +242,6 @@ async def import_deck(deck_id: str, req: ImportDeckRequest, user_id: str = Depen
     if not entries:
         raise HTTPException(status_code=400, detail="No cards found in text")
 
-    # Look up all card names
     unique_names = list({name for _, name in entries})
     name_to_id = await get_cards_by_names(unique_names)
 
@@ -285,8 +295,12 @@ def _expand_slots(cards: list[dict]) -> list[tuple[str, str]]:
     return slots
 
 
-def _build_pdf(image_data_list: list[bytes | None]) -> io.BytesIO:
-    """Generate a 3x3 card-grid PDF from downloaded image data."""
+def _build_pdf(unique_data: list[bytes | None], slot_url_index: list[int]) -> io.BytesIO:
+    """Generate a 3x3 card-grid PDF from deduplicated image data.
+
+    unique_data: one entry per unique URL (bytes or None if download failed).
+    slot_url_index: maps each card slot to its index in unique_data.
+    """
     page_w, page_h = A4
     x_gap, y_gap = FIX_W, FIX_H
     grid_w = COLS * CARD_W + (COLS - 1) * x_gap
@@ -296,27 +310,38 @@ def _build_pdf(image_data_list: list[bytes | None]) -> io.BytesIO:
 
     def _draw_cut_guides(c):
         c.saveState()
-        c.setStrokeColorRGB(0.65, 0.65, 0.65)
+        c.setStrokeColorRGB(0.3, 0.3, 0.3)
         c.setLineWidth(0.5)
         c.setDash(4, 4)
-        guide_left = x_offset
-        guide_right = x_offset + COLS * CARD_W
-        guide_top = page_h - y_offset
-        guide_bottom = page_h - y_offset - ROWS * CARD_H
         for col in range(1, COLS):
             gx = x_offset + col * CARD_W
-            c.line(gx, guide_bottom, gx, guide_top)
+            c.line(gx, 0, gx, page_h)
         for row in range(1, ROWS):
             gy = page_h - y_offset - row * CARD_H
-            c.line(guide_left, gy, guide_right, gy)
+            c.line(0, gy, page_w, gy)
         c.restoreState()
 
+    # Process each unique image once
+    readers: dict[int, ImageReader] = {}
+    for i, data in enumerate(unique_data):
+        if data is None:
+            continue
+        pil_img = Image.open(io.BytesIO(data))
+        if pil_img.mode == "RGBA":
+            bg = Image.new("RGBA", pil_img.size, (0, 0, 0, 255))
+            bg.paste(pil_img, (0, 0), pil_img)
+            pil_img = bg.convert("RGB")
+        elif pil_img.mode != "RGB":
+            pil_img = pil_img.convert("RGB")
+        readers[i] = ImageReader(pil_img)
+
+    # Build PDF pages using cached ImageReaders
     buf = io.BytesIO()
     c = canvas.Canvas(buf, pagesize=A4)
     slot_index = 0
 
-    for img_bytes in image_data_list:
-        if img_bytes is None:
+    for uid in slot_url_index:
+        if uid not in readers:
             slot_index += 1
             continue
         pos = slot_index % CARDS_PER_PAGE
@@ -327,14 +352,7 @@ def _build_pdf(image_data_list: list[bytes | None]) -> io.BytesIO:
         row = pos // COLS
         x = x_offset + col * (CARD_W + x_gap)
         y = page_h - y_offset - (row + 1) * CARD_H - row * y_gap
-        pil_img = Image.open(io.BytesIO(img_bytes)).convert("RGBA")
-        bg = Image.new("RGBA", pil_img.size, (0, 0, 0, 255))
-        bg.paste(pil_img, (0, 0), pil_img)
-        flat = bg.convert("RGB")
-        flat_buf = io.BytesIO()
-        flat.save(flat_buf, format="PNG")
-        flat_buf.seek(0)
-        c.drawImage(ImageReader(flat_buf), x, y, width=CARD_W, height=CARD_H, preserveAspectRatio=True)
+        c.drawImage(readers[uid], x, y, width=CARD_W, height=CARD_H, preserveAspectRatio=True)
         slot_index += 1
 
     _draw_cut_guides(c)
@@ -346,8 +364,7 @@ def _build_pdf(image_data_list: list[bytes | None]) -> io.BytesIO:
 @deck_router.get("/{deck_id}/export/stream")
 async def export_deck_pdf_stream(deck_id: str, user_id: str = Depends(get_current_user)):
     """SSE endpoint that streams download progress, then caches the PDF."""
-    await _verify_deck_ownership(deck_id, user_id)
-    deck = await get_deck(deck_id)
+    deck = await _verify_deck_ownership(deck_id, user_id)
     cards = await get_deck_card_images(deck_id)
     slots = _expand_slots(cards)
 
@@ -360,23 +377,33 @@ async def export_deck_pdf_stream(deck_id: str, user_id: str = Depends(get_curren
     async def event_stream():
         _cleanup_export_cache()
 
+        # Deduplicate downloads: same URL only fetched once
+        unique_urls: dict[str, int] = {}  # url -> index in unique list
+        slot_url_index: list[int] = []
+        for _, url in slots:
+            if url not in unique_urls:
+                unique_urls[url] = len(unique_urls)
+            slot_url_index.append(unique_urls[url])
+        unique_url_list = list(unique_urls.keys())
+        unique_count = len(unique_url_list)
+        unique_data: list[bytes | None] = [None] * unique_count
+
         sem = asyncio.Semaphore(10)
-        image_data_list: list[bytes | None] = [None] * total
         progress_queue: asyncio.Queue[int | None] = asyncio.Queue()
 
-        async def fetch_one(client: httpx.AsyncClient, url: str, idx: int):
+        async def fetch_one(client: httpx.AsyncClient, url: str, uid: int):
             async with sem:
                 try:
                     resp = await client.get(url)
                     if resp.status_code == 200:
-                        image_data_list[idx] = resp.content
+                        unique_data[uid] = resp.content
                 except Exception as e:
                     logger.warning("Failed to download %s: %s", url, e)
-            await progress_queue.put(idx)
+            await progress_queue.put(uid)
 
         async def download_all():
             async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
-                tasks = [fetch_one(client, url, i) for i, (_, url) in enumerate(slots)]
+                tasks = [fetch_one(client, url, i) for i, url in enumerate(unique_url_list)]
                 await asyncio.gather(*tasks)
             await progress_queue.put(None)
 
@@ -388,13 +415,14 @@ async def export_deck_pdf_stream(deck_id: str, user_id: str = Depends(get_curren
             if idx is None:
                 break
             completed += 1
-            yield f"data: {json.dumps({'type': 'progress', 'phase': 'download', 'current': completed, 'total': total})}\n\n"
+            yield f"data: {json.dumps({'type': 'progress', 'phase': 'download', 'current': completed, 'total': unique_count})}\n\n"
 
         await dl_task
 
         yield f"data: {json.dumps({'type': 'progress', 'phase': 'pdf', 'current': total, 'total': total})}\n\n"
 
-        pdf_buf = await asyncio.to_thread(_build_pdf, image_data_list)
+        # Pass deduplicated data and slot mapping directly to avoid redundant processing
+        pdf_buf = await asyncio.to_thread(_build_pdf, unique_data, slot_url_index)
 
         export_id = str(uuid4())
         _export_cache[export_id] = (pdf_buf.getvalue(), filename, _time.time())
@@ -415,38 +443,5 @@ async def export_download(deck_id: str, export_id: str, user_id: str = Depends(g
     return StreamingResponse(
         io.BytesIO(pdf_bytes),
         media_type="application/pdf",
-        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"},
+        headers=_build_attachment_headers(filename),
     )
-
-
-# ── Admin Router ───────────────────────────────────────────────────────
-
-admin_router = APIRouter(prefix="/api/admin", tags=["admin"])
-
-
-class UpdateRoleRequest(BaseModel):
-    role: str
-
-
-@admin_router.get("/users")
-async def admin_list_users(_: str = Depends(require_admin)):
-    return await list_all_users()
-
-
-@admin_router.put("/users/{user_id}/role")
-async def admin_update_role(user_id: str, req: UpdateRoleRequest, admin_id: str = Depends(require_admin)):
-    if user_id == admin_id:
-        raise HTTPException(status_code=400, detail="Cannot change your own role")
-    if req.role not in ("user", "admin"):
-        raise HTTPException(status_code=400, detail="Role must be 'user' or 'admin'")
-    result = await update_user_role(user_id, req.role)
-    if not result:
-        raise HTTPException(status_code=404, detail="User not found")
-    return result
-
-
-@admin_router.delete("/users/{user_id}", status_code=204)
-async def admin_delete_user(user_id: str, admin_id: str = Depends(require_admin)):
-    if user_id == admin_id:
-        raise HTTPException(status_code=400, detail="Cannot delete yourself")
-    await delete_user(user_id)

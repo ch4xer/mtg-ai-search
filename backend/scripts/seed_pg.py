@@ -92,10 +92,15 @@ def create_schema(conn):
                 id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
                 user_id    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
                 name       TEXT NOT NULL,
+                format     TEXT NOT NULL DEFAULT 'undefined',
                 created_at TIMESTAMPTZ DEFAULT now(),
                 updated_at TIMESTAMPTZ DEFAULT now()
             )
         """)
+        # Migration for existing deployments
+        cur.execute(
+            "ALTER TABLE decks ADD COLUMN IF NOT EXISTS format TEXT NOT NULL DEFAULT 'undefined'"
+        )
         cur.execute("""
             CREATE TABLE IF NOT EXISTS deck_cards (
                 id       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -129,7 +134,8 @@ def insert_cards(conn, cards: list[dict]):
             values = []
             for card in batch:
                 image_uris = card.get("image_uris") or {}
-                colors = card.get("colors") or card.get("color_identity") or ["C"]
+                raw_colors = card.get("colors")
+                colors = raw_colors if raw_colors is not None else (card.get("color_identity") or [])
                 keywords = card.get("keywords") or []
                 values.append((
                     card["id"],
@@ -183,8 +189,11 @@ def insert_abilities(conn, abilities: dict[str, str]):
     log("Abilities inserted.")
 
 
-def generate_card_embeddings(conn, batch_size: int = 200, max_rounds: int = 10):
-    """Generate and store embeddings for cards. Skips failed batches and retries in later rounds."""
+def generate_card_embeddings(conn, batch_size: int = 200, max_rounds: int = 10, on_progress=None):
+    """Generate and store embeddings for cards. Skips failed batches and retries in later rounds.
+
+    on_progress: optional callback(done, total) called after each batch.
+    """
     from app.embedding import encode_batch_safe
 
     for round_num in range(1, max_rounds + 1):
@@ -229,8 +238,11 @@ def generate_card_embeddings(conn, batch_size: int = 200, max_rounds: int = 10):
                     )
             conn.commit()
 
+            done = min(i + batch_size, total)
             elapsed = time.time() - t0
-            log(f"  [{min(i + batch_size, total)}/{total}] Embedded {len(batch)} cards ({elapsed:.1f}s)")
+            log(f"  [{done}/{total}] Embedded {len(batch)} cards ({elapsed:.1f}s)")
+            if on_progress:
+                on_progress(done, total)
 
         if failed == 0:
             return
@@ -247,8 +259,11 @@ def generate_card_embeddings(conn, batch_size: int = 200, max_rounds: int = 10):
         log("All card embeddings complete.")
 
 
-def generate_ability_embeddings(conn, max_rounds: int = 10):
-    """Generate and store embeddings for keyword abilities with retry."""
+def generate_ability_embeddings(conn, max_rounds: int = 10, on_progress=None):
+    """Generate and store embeddings for keyword abilities with retry.
+
+    on_progress: optional callback(done, total) called on completion.
+    """
     from app.embedding import encode_batch_safe
 
     for round_num in range(1, max_rounds + 1):
@@ -260,7 +275,8 @@ def generate_ability_embeddings(conn, max_rounds: int = 10):
             log("All ability embeddings complete.")
             return
 
-        log(f"Generating ability embeddings (round {round_num}/{max_rounds}): {len(rows)} remaining...")
+        total = len(rows)
+        log(f"Generating ability embeddings (round {round_num}/{max_rounds}): {total} remaining...")
         texts = [f"{r[1]}: {r[2]}" for r in rows]
         vecs = encode_batch_safe(texts)
 
@@ -276,7 +292,9 @@ def generate_ability_embeddings(conn, max_rounds: int = 10):
                     (str(vecs[i]), row[0]),
                 )
         conn.commit()
-        log(f"  Embedded {len(rows)} abilities.")
+        log(f"  Embedded {total} abilities.")
+        if on_progress:
+            on_progress(total, total)
         return
 
     with conn.cursor() as cur:

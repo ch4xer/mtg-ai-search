@@ -1,20 +1,33 @@
 import json
+import logging
 import os
 import re
-import logging
 
 import asyncpg
 
 logger = logging.getLogger(__name__)
 
 _pool: asyncpg.Pool | None = None
+DEFAULT_DATABASE_URL = "postgresql://mtg:mtg_password@localhost:5432/mtg"
+_ALLOWED_EMBEDDING_COLUMNS = {"name_embedding", "type_line_embedding", "oracle_text_embedding"}
+_MAIN_TYPES = [
+    "Creature",
+    "Instant",
+    "Sorcery",
+    "Enchantment",
+    "Artifact",
+    "Land",
+    "Planeswalker",
+    "Battle",
+    "Kindred",
+]
 
 
 async def get_pool() -> asyncpg.Pool:
     """Get or create the connection pool."""
     global _pool
     if _pool is None:
-        dsn = os.getenv("DATABASE_URL", "postgresql://mtg:mtg_password@localhost:5432/mtg")
+        dsn = os.getenv("DATABASE_URL", DEFAULT_DATABASE_URL)
         _pool = await asyncpg.create_pool(dsn, min_size=2, max_size=10)
         logger.info("Created asyncpg connection pool")
     return _pool
@@ -39,6 +52,39 @@ def _parse_condition(expr: str) -> tuple[str, str]:
     if not m:
         return ("=", expr.strip())
     return (m.group(1), m.group(2).strip())
+
+
+def _decode_card_data(value):
+    return json.loads(value) if isinstance(value, str) else value
+
+
+def _serialize_user_row(row) -> dict:
+    return {
+        "id": str(row["id"]),
+        "username": row["username"],
+        "role": row["role"],
+        "created_at": row["created_at"].isoformat(),
+    }
+
+
+def _serialize_deck_row(row) -> dict:
+    return {
+        "id": str(row["id"]),
+        "name": row["name"],
+        "format": row["format"],
+        "created_at": row["created_at"].isoformat(),
+    }
+
+
+def _serialize_deck_summary_row(row) -> dict:
+    return {
+        "id": str(row["id"]),
+        "name": row["name"],
+        "format": row["format"],
+        "card_count": int(row["card_count"]),
+        "created_at": row["created_at"].isoformat(),
+        "updated_at": row["updated_at"].isoformat(),
+    }
 
 
 async def filter_cards(filters: dict) -> list[str]:
@@ -112,10 +158,6 @@ async def filter_cards(filters: dict) -> list[str]:
     rows = await pool.fetch(query, *params)
     return [row["id"] for row in rows]
 
-
-_ALLOWED_EMBEDDING_COLUMNS = {"name_embedding", "type_line_embedding", "oracle_text_embedding"}
-
-
 async def vector_search_cards(
     column: str,
     query_embedding: list[float],
@@ -187,9 +229,7 @@ async def get_cards_by_ids(card_ids: list[str]) -> list[dict]:
     pool = await get_pool()
     rows = await pool.fetch("SELECT id, data FROM cards WHERE id = ANY($1)", card_ids)
 
-    card_map = {}
-    for row in rows:
-        card_map[row["id"]] = json.loads(row["data"]) if isinstance(row["data"], str) else row["data"]
+    card_map = {row["id"]: _decode_card_data(row["data"]) for row in rows}
 
     return [card_map[cid] for cid in card_ids if cid in card_map]
 
@@ -225,16 +265,13 @@ async def get_user_by_id(user_id: str) -> dict | None:
     )
     if not row:
         return None
-    return {"id": str(row["id"]), "username": row["username"], "role": row["role"], "created_at": row["created_at"].isoformat()}
+    return _serialize_user_row(row)
 
 
 async def list_all_users() -> list[dict]:
     pool = await get_pool()
     rows = await pool.fetch("SELECT id, username, role, created_at FROM users ORDER BY created_at")
-    return [
-        {"id": str(r["id"]), "username": r["username"], "role": r["role"], "created_at": r["created_at"].isoformat()}
-        for r in rows
-    ]
+    return [_serialize_user_row(row) for row in rows]
 
 
 async def delete_user(user_id: str):
@@ -257,19 +294,19 @@ async def update_user_role(user_id: str, role: str) -> dict | None:
 # ── Deck functions ──────────────────────────────────────────────────────
 
 
-async def create_deck(user_id: str, name: str) -> dict:
+async def create_deck(user_id: str, name: str, format: str = "undefined") -> dict:
     pool = await get_pool()
     row = await pool.fetchrow(
-        "INSERT INTO decks (user_id, name) VALUES ($1::uuid, $2) RETURNING id, name, created_at",
-        user_id, name,
+        "INSERT INTO decks (user_id, name, format) VALUES ($1::uuid, $2, $3) RETURNING id, name, format, created_at",
+        user_id, name, format,
     )
-    return {"id": str(row["id"]), "name": row["name"], "created_at": row["created_at"].isoformat()}
+    return _serialize_deck_row(row)
 
 
 async def get_user_decks(user_id: str) -> list[dict]:
     pool = await get_pool()
     rows = await pool.fetch(
-        """SELECT d.id, d.name, d.created_at, d.updated_at,
+        """SELECT d.id, d.name, d.format, d.created_at, d.updated_at,
                   COALESCE(SUM(dc.quantity), 0) AS card_count
            FROM decks d
            LEFT JOIN deck_cards dc ON dc.deck_id = d.id
@@ -278,39 +315,45 @@ async def get_user_decks(user_id: str) -> list[dict]:
            ORDER BY d.updated_at DESC""",
         user_id,
     )
-    return [
-        {
-            "id": str(r["id"]),
-            "name": r["name"],
-            "card_count": int(r["card_count"]),
-            "created_at": r["created_at"].isoformat(),
-            "updated_at": r["updated_at"].isoformat(),
-        }
-        for r in rows
-    ]
+    return [_serialize_deck_summary_row(row) for row in rows]
 
 
 async def get_deck(deck_id: str) -> dict | None:
     pool = await get_pool()
-    row = await pool.fetchrow("SELECT id, user_id, name, created_at, updated_at FROM decks WHERE id = $1::uuid", deck_id)
+    row = await pool.fetchrow(
+        "SELECT id, user_id, name, format, created_at, updated_at FROM decks WHERE id = $1::uuid",
+        deck_id,
+    )
     if not row:
         return None
     return {
         "id": str(row["id"]),
         "user_id": str(row["user_id"]),
         "name": row["name"],
+        "format": row["format"],
         "created_at": row["created_at"].isoformat(),
         "updated_at": row["updated_at"].isoformat(),
     }
 
 
-async def update_deck(deck_id: str, name: str) -> dict:
+async def update_deck(deck_id: str, name: str, format: str | None = None) -> dict:
     pool = await get_pool()
-    row = await pool.fetchrow(
-        "UPDATE decks SET name = $1, updated_at = now() WHERE id = $2::uuid RETURNING id, name, updated_at",
-        name, deck_id,
-    )
-    return {"id": str(row["id"]), "name": row["name"], "updated_at": row["updated_at"].isoformat()}
+    if format is None:
+        row = await pool.fetchrow(
+            "UPDATE decks SET name = $1, updated_at = now() WHERE id = $2::uuid RETURNING id, name, format, updated_at",
+            name, deck_id,
+        )
+    else:
+        row = await pool.fetchrow(
+            "UPDATE decks SET name = $1, format = $2, updated_at = now() WHERE id = $3::uuid RETURNING id, name, format, updated_at",
+            name, format, deck_id,
+        )
+    return {
+        "id": str(row["id"]),
+        "name": row["name"],
+        "format": row["format"],
+        "updated_at": row["updated_at"].isoformat(),
+    }
 
 
 async def delete_deck(deck_id: str):
@@ -331,7 +374,7 @@ async def get_deck_cards(deck_id: str) -> list[dict]:
     return [
         {
             "card_id": r["card_id"],
-            "card": json.loads(r["data"]) if isinstance(r["data"], str) else r["data"],
+            "card": _decode_card_data(r["data"]),
             "quantity": r["quantity"],
             "image_url": r["image_url"],
             "display_url": r["display_url"],
@@ -377,6 +420,35 @@ async def remove_card_from_deck(deck_id: str, card_id: str):
     await pool.execute("DELETE FROM deck_cards WHERE deck_id = $1::uuid AND card_id = $2", deck_id, card_id)
 
 
+async def update_deck_card_image(
+    deck_id: str,
+    card_id: str,
+    image_url: str | None,
+    display_url: str | None,
+) -> dict | None:
+    """Update the image override for a deck card without touching quantity.
+
+    Passing None for either url resets that override (card falls back to the default image).
+    Returns the updated row or None if the card is not in the deck.
+    """
+    pool = await get_pool()
+    row = await pool.fetchrow(
+        """UPDATE deck_cards
+           SET image_url = $3, display_url = $4
+           WHERE deck_id = $1::uuid AND card_id = $2
+           RETURNING card_id, quantity, image_url, display_url""",
+        deck_id, card_id, image_url, display_url,
+    )
+    if not row:
+        return None
+    return {
+        "card_id": row["card_id"],
+        "quantity": row["quantity"],
+        "image_url": row["image_url"],
+        "display_url": row["display_url"],
+    }
+
+
 async def get_cards_by_names(names: list[str]) -> dict[str, str]:
     """Look up card IDs by exact name (case-insensitive). Returns {name_lower: card_id}.
 
@@ -419,13 +491,6 @@ async def get_deck_cards_for_export(deck_id: str) -> list[dict]:
         deck_id,
     )
     return [{"name": r["name"], "quantity": r["quantity"]} for r in rows]
-
-
-_MAIN_TYPES = [
-    "Creature", "Instant", "Sorcery", "Enchantment", "Artifact",
-    "Land", "Planeswalker", "Battle", "Kindred",
-]
-
 
 async def discover_cards(
     q: str = "",
@@ -547,10 +612,7 @@ async def discover_cards(
         f"SELECT data FROM cards WHERE {where} ORDER BY name LIMIT ${limit_idx} OFFSET ${offset_idx}",
         *params, page_size, offset,
     )
-    cards = [
-        json.loads(row["data"]) if isinstance(row["data"], str) else row["data"]
-        for row in rows
-    ]
+    cards = [_decode_card_data(row["data"]) for row in rows]
 
     # ── Facet counts (computed from the fully-filtered set) ──
 
@@ -640,6 +702,61 @@ async def discover_cards(
             },
         },
     }
+
+
+# ── Search log functions ───────────────────────────────────────────────
+
+
+async def log_search(user_id: str | None, query: str, tokens_prompt: int, tokens_completion: int):
+    """Log a search request with optional user and token usage."""
+    pool = await get_pool()
+    await pool.execute(
+        "INSERT INTO search_logs (user_id, query, tokens_prompt, tokens_completion) VALUES ($1::uuid, $2, $3, $4)",
+        user_id, query, tokens_prompt, tokens_completion,
+    )
+
+
+async def get_user_search_stats() -> list[dict]:
+    """Get per-user search counts and token usage for total, 7 days, and 3 hours."""
+    pool = await get_pool()
+    rows = await pool.fetch("""
+        SELECT
+            u.id,
+            u.username,
+            u.role,
+            u.created_at,
+            COALESCE(s.total_searches, 0)       AS total_searches,
+            COALESCE(s.searches_7d, 0)           AS searches_7d,
+            COALESCE(s.searches_3h, 0)           AS searches_3h,
+            COALESCE(s.total_tokens, 0)          AS total_tokens,
+            COALESCE(s.tokens_7d, 0)             AS tokens_7d,
+            COALESCE(s.tokens_3h, 0)             AS tokens_3h
+        FROM users u
+        LEFT JOIN LATERAL (
+            SELECT
+                COUNT(*)                                                                  AS total_searches,
+                COUNT(*) FILTER (WHERE sl.created_at >= now() - interval '7 days')        AS searches_7d,
+                COUNT(*) FILTER (WHERE sl.created_at >= now() - interval '3 hours')       AS searches_3h,
+                SUM(sl.tokens_prompt + sl.tokens_completion)                              AS total_tokens,
+                SUM(sl.tokens_prompt + sl.tokens_completion) FILTER (WHERE sl.created_at >= now() - interval '7 days')  AS tokens_7d,
+                SUM(sl.tokens_prompt + sl.tokens_completion) FILTER (WHERE sl.created_at >= now() - interval '3 hours') AS tokens_3h
+            FROM search_logs sl
+            WHERE sl.user_id = u.id
+        ) s ON TRUE
+        ORDER BY u.created_at
+    """)
+    return [
+        {
+            **_serialize_user_row(r),
+            "total_searches": int(r["total_searches"]),
+            "searches_7d": int(r["searches_7d"]),
+            "searches_3h": int(r["searches_3h"]),
+            "total_tokens": int(r["total_tokens"]),
+            "tokens_7d": int(r["tokens_7d"]),
+            "tokens_3h": int(r["tokens_3h"]),
+        }
+        for r in rows
+    ]
 
 
 async def get_deck_card_images(deck_id: str) -> list[dict]:

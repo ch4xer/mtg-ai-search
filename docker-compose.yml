@@ -3,8 +3,6 @@ services:
     image: pgvector/pgvector:pg17
     volumes:
       - pgdata:/var/lib/postgresql/data
-    ports:
-      - "5433:5432"
     environment:
       POSTGRES_DB: mtg
       POSTGRES_USER: mtg
@@ -16,8 +14,6 @@ services:
 
   mtg-backend:
     build: ./backend
-    ports:
-      - "8000:8000"
     depends_on:
       mtg-db:
         condition: service_healthy
@@ -32,7 +28,7 @@ services:
   mtg-frontend:
     build: ./frontend
     ports:
-      - "5173:80"
+      - "60010:80"
     depends_on:
       - mtg-backend
 
