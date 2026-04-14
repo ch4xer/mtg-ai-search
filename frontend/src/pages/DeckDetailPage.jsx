@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { apiFetch, getAccessToken } from "../utils/apiFetch.js";
 import { useToast } from "../contexts/ToastContext.jsx";
@@ -24,6 +24,33 @@ const TYPE_LABELS = {
   Creature: "生物", Planeswalker: "旅法师", Instant: "瞬间", Sorcery: "法术",
   Enchantment: "结界", Artifact: "神器", Land: "地", Other: "其他",
 };
+
+/* ── Masonry layout helper ── */
+
+const COLUMN_WIDTH = 280;
+const COLUMN_GAP = 20; // ~1.2rem in px
+const CARD_HEIGHT = 58;
+const CARD_GAP = 8; // ~0.45rem
+const HEADER_HEIGHT = 40;
+
+function estimateGroupHeight(group) {
+  // Header + cards + gaps
+  return HEADER_HEIGHT + group.items.length * CARD_HEIGHT + (group.items.length - 1) * CARD_GAP;
+}
+
+function distributeGroupsToColumns(groups, maxColumns) {
+  const columns = Array.from({ length: maxColumns }, () => []);
+  const columnHeights = Array.from({ length: maxColumns }, () => 0);
+
+  for (const group of groups) {
+    // Find shortest column
+    const shortestIdx = columnHeights.indexOf(Math.min(...columnHeights));
+    columns[shortestIdx].push(group);
+    columnHeights[shortestIdx] += estimateGroupHeight(group);
+  }
+
+  return columns;
+}
 
 
 /* ── Main Component ── */
@@ -92,6 +119,30 @@ function DeckDetailPage({ imageMode }) {
     }
     return ordered;
   }, [cards]);
+
+  // ── Masonry layout: calculate column count based on container width ──
+
+  const groupsContainerRef = useRef(null);
+  const [columnCount, setColumnCount] = useState(3);
+
+  useEffect(() => {
+    const updateColumnCount = () => {
+      if (groupsContainerRef.current) {
+        const containerWidth = groupsContainerRef.current.offsetWidth;
+        // Calculate max columns that fit with fixed width and gap
+        const maxCols = Math.floor((containerWidth + COLUMN_GAP) / (COLUMN_WIDTH + COLUMN_GAP));
+        setColumnCount(Math.max(1, Math.min(3, maxCols)));
+      }
+    };
+
+    updateColumnCount();
+    window.addEventListener("resize", updateColumnCount);
+    return () => window.removeEventListener("resize", updateColumnCount);
+  }, []);
+
+  const masonryColumns = useMemo(() => {
+    return distributeGroupsToColumns(groupedCards, columnCount);
+  }, [groupedCards, columnCount]);
 
   // Auto-select first card
   useEffect(() => {
@@ -373,38 +424,44 @@ function DeckDetailPage({ imageMode }) {
             )}
           </aside>
 
-          {/* Right: Grouped stacked grid */}
-          <div className="deck-groups">
-            {groupedCards.map((group) => (
-              <div key={group.type} className="deck-type-group">
-                <div className="deck-type-header">
-                  <span className="deck-type-label">{group.label}</span>
-                  <span className="deck-type-count">{group.count}</span>
-                </div>
-                <div className="deck-stack-grid">
-                  {group.items.map((item) => {
-                    const img = getCardDisplayImage(item);
-                    const isSelected = selectedCard?.card_id === item.card_id;
-                    return (
-                      <div
-                        key={item.card_id}
-                        className={`deck-stack-card ${isSelected ? "selected" : ""}`}
-                        onMouseEnter={() => setSelectedCard(item)}
-                      >
-                        {img ? (
-                          <img src={img} alt={item.card.name} className="deck-stack-img" loading="lazy" />
-                        ) : (
-                          <div className="deck-stack-placeholder">{item.card.name}</div>
-                        )}
-                        <div className="deck-stack-controls">
-                          <button onClick={(e) => { e.stopPropagation(); handleQuantityChange(item.card_id, -1); }}>-</button>
-                          <span>{item.quantity}</span>
-                          <button onClick={(e) => { e.stopPropagation(); handleQuantityChange(item.card_id, 1); }}>+</button>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
+          {/* Right: Masonry layout with fixed-width columns */}
+          <div className="deck-groups" ref={groupsContainerRef}>
+            {masonryColumns.map((column, colIdx) => (
+              <div key={colIdx} className="deck-masonry-column">
+                {column.map((group) => (
+                  <div key={group.type} className="deck-type-group">
+                    <div className="deck-type-header">
+                      <span className="deck-type-label">{group.label}</span>
+                      <span className="deck-type-count">{group.count}</span>
+                    </div>
+                    <div className="deck-stack-grid">
+                      {group.items.map((item) => {
+                        const img = getCardDisplayImage(item);
+                        const isSelected = selectedCard?.card_id === item.card_id;
+                        return (
+                          <div
+                            key={item.card_id}
+                            className={`deck-stack-card ${isSelected ? "selected" : ""}`}
+                            onMouseEnter={() => setSelectedCard(item)}
+                          >
+                            {img ? (
+                              <img src={img} alt={item.card.name} className="deck-stack-img" loading="lazy" />
+                            ) : (
+                              <div className="deck-stack-placeholder">{item.card.name}</div>
+                            )}
+                            <div className="deck-stack-overlay" />
+                            <div className="deck-stack-name">{item.card.name}</div>
+                            <div className="deck-stack-controls">
+                              <button onClick={(e) => { e.stopPropagation(); handleQuantityChange(item.card_id, -1); }}>-</button>
+                              <span>{item.quantity}</span>
+                              <button onClick={(e) => { e.stopPropagation(); handleQuantityChange(item.card_id, 1); }}>+</button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
               </div>
             ))}
           </div>

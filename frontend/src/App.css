@@ -1513,17 +1513,24 @@ body {
   font-size: 0.9rem;
 }
 
-/* Right: grouped card area */
+/* Masonry layout: multiple fixed-width columns */
 .deck-groups {
   flex: 1;
   min-width: 0;
+  display: flex;
+  gap: 1.2rem;
+}
+
+.deck-masonry-column {
+  width: 280px;
+  min-width: 280px;
   display: flex;
   flex-direction: column;
   gap: 1.2rem;
 }
 
 .deck-type-group {
-  /* each type group */
+  margin-bottom: 0;
 }
 
 .deck-type-header {
@@ -1550,36 +1557,37 @@ body {
 /* Stacked grid within each type group */
 .deck-stack-grid {
   display: flex;
-  flex-wrap: wrap;
-  gap: 0.4rem 0.4rem;
+  flex-direction: column;
+  gap: 0.45rem;
 }
 
 .deck-stack-card {
   position: relative;
-  width: 120px;
-  aspect-ratio: 626 / 457;
-  border-radius: 6px;
+  width: 100%;
+  min-height: 58px;
+  border-radius: 8px;
   overflow: hidden;
   cursor: pointer;
-  border: 2px solid transparent;
+  border: 1px solid var(--border-subtle);
   transition: border-color 0.15s, transform 0.15s, box-shadow 0.15s;
   box-shadow: 0 1px 4px var(--shadow);
-  flex-shrink: 0;
+  isolation: isolate;
 }
 
 .deck-stack-card:hover {
-  transform: translateY(-3px);
-  box-shadow: 0 4px 14px var(--shadow-strong);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px var(--shadow-strong);
   border-color: var(--accent);
-  z-index: 2;
 }
 
 .deck-stack-card.selected {
   border-color: var(--accent);
-  box-shadow: 0 0 0 1px var(--accent), 0 4px 14px var(--shadow-strong);
+  box-shadow: 0 0 0 1px var(--accent), 0 4px 12px var(--shadow-strong);
 }
 
 .deck-stack-img {
+  position: absolute;
+  inset: 0;
   width: 100%;
   height: 100%;
   object-fit: cover;
@@ -1587,58 +1595,67 @@ body {
 }
 
 .deck-stack-placeholder {
-  width: 100%;
-  height: 100%;
+  position: absolute;
+  inset: 0;
   display: flex;
   align-items: center;
   justify-content: center;
   background: var(--bg-secondary);
   color: var(--text-muted);
-  font-size: 0.65rem;
+  font-size: 0.8rem;
   text-align: center;
-  padding: 0.25rem;
+  padding: 0.5rem;
 }
 
-.deck-stack-qty {
+.deck-stack-overlay {
   position: absolute;
-  bottom: 3px;
-  right: 3px;
-  background: rgba(0, 0, 0, 0.75);
+  inset: 0;
+  background: linear-gradient(90deg, rgba(0, 0, 0, 0.75) 0%, rgba(0, 0, 0, 0.46) 55%, rgba(0, 0, 0, 0.2) 100%);
+}
+
+.deck-stack-name {
+  position: absolute;
+  left: 0.7rem;
+  right: 5.8rem;
+  top: 50%;
+  transform: translateY(-50%);
   color: #fff;
-  font-size: 0.7rem;
+  font-family: "Cinzel", serif;
+  font-size: 0.92rem;
   font-weight: 700;
-  padding: 0.1rem 0.35rem;
-  border-radius: 3px;
-  line-height: 1;
+  line-height: 1.2;
+  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.9);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  z-index: 1;
 }
 
 .deck-stack-controls {
   position: absolute;
-  bottom: 0;
-  left: 0;
-  right: 0;
+  right: 0.35rem;
+  top: 50%;
+  transform: translateY(-50%);
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 0.15rem;
-  background: rgba(0, 0, 0, 0.8);
-  padding: 0.2rem 0;
-  opacity: 0;
-  transition: opacity 0.15s;
-}
-
-.deck-stack-card:hover .deck-stack-controls {
-  opacity: 1;
+  gap: 0.2rem;
+  background: rgba(0, 0, 0, 0.5);
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  border-radius: 999px;
+  padding: 0.2rem 0.28rem;
+  z-index: 1;
+  backdrop-filter: blur(2px);
 }
 
 .deck-stack-controls button {
-  width: 22px;
+  width: 20px;
   height: 20px;
   border: none;
-  border-radius: 3px;
-  background: rgba(255, 255, 255, 0.15);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.2);
   color: #fff;
-  font-size: 0.8rem;
+  font-size: 0.82rem;
   font-weight: 700;
   cursor: pointer;
   display: flex;
@@ -1654,9 +1671,9 @@ body {
 
 .deck-stack-controls span {
   color: #fff;
-  font-size: 0.75rem;
+  font-size: 0.73rem;
   font-weight: 700;
-  min-width: 1rem;
+  min-width: 1.4rem;
   text-align: center;
 }
 
@@ -1680,8 +1697,30 @@ body {
   .deck-preview-info {
     flex: 1;
   }
+  .deck-groups {
+    flex-direction: column;
+    gap: 1.2rem;
+  }
+  .deck-masonry-column {
+    width: 100%;
+    min-width: 0;
+  }
+  .deck-type-group {
+    width: 100%;
+    display: block;
+  }
   .deck-stack-card {
-    width: 100px;
+    width: 100%;
+    max-width: none;
+    min-height: 54px;
+  }
+  .deck-stack-name {
+    font-size: 0.85rem;
+    right: 5.2rem;
+  }
+  .deck-stack-controls {
+    right: 0.3rem;
+    padding: 0.15rem 0.24rem;
   }
 }
 
