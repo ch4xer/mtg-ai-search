@@ -1513,20 +1513,10 @@ body {
   font-size: 0.9rem;
 }
 
-/* Masonry layout: multiple fixed-width columns */
+/* Masonry layout using masonic */
 .deck-groups {
   flex: 1;
   min-width: 0;
-  display: flex;
-  gap: 1.2rem;
-}
-
-.deck-masonry-column {
-  width: 280px;
-  min-width: 280px;
-  display: flex;
-  flex-direction: column;
-  gap: 1.2rem;
 }
 
 .deck-type-group {
@@ -1699,11 +1689,6 @@ body {
   }
   .deck-groups {
     flex-direction: column;
-    gap: 1.2rem;
-  }
-  .deck-masonry-column {
-    width: 100%;
-    min-width: 0;
   }
   .deck-type-group {
     width: 100%;
