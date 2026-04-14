@@ -9,8 +9,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from .auth import require_admin
-from .db import delete_user, get_user_search_stats, update_user_role
-from .maintenance import full_reseed, regenerate_embeddings
+from .db import delete_user, get_pool, get_user_search_stats, update_user_role
+from .maintenance import full_reseed, incremental_sync, regenerate_embeddings
 
 logger = logging.getLogger(__name__)
 
@@ -147,3 +147,44 @@ async def _run_reembed():
     except Exception as e:
         logger.exception("[reembed] Failed")
         _set_state("reembed", TaskStatus.ERROR, f"失败: {e}")
+
+
+# ── Sync logs & manual sync ─────────────────────────────────────────
+
+
+@admin_router.get("/sync-logs")
+async def admin_sync_logs(_: str = Depends(require_admin)):
+    pool = await get_pool()
+    rows = await pool.fetch(
+        """SELECT id, started_at, completed_at, status, new_cards, updated_cards, message
+           FROM sync_logs ORDER BY started_at DESC LIMIT 30"""
+    )
+    return [dict(row) for row in rows]
+
+
+@admin_router.post("/sync")
+async def admin_trigger_sync(_: str = Depends(require_admin)):
+    if _task_state["reseed"]["status"] == TaskStatus.RUNNING:
+        raise HTTPException(status_code=409, detail="重新拉取任务正在运行中")
+
+    _set_state("reseed", TaskStatus.RUNNING, "正在检查 Scryfall 更新...")
+    asyncio.create_task(_run_sync())
+    return {"status": "started", "message": "开始增量同步"}
+
+
+async def _run_sync():
+    """Background: run incremental sync."""
+    try:
+        result = await incremental_sync(
+            status_callback=lambda message: _set_state("reseed", TaskStatus.RUNNING, message),
+        )
+        if result["skipped"]:
+            _set_state("reseed", TaskStatus.DONE, "Scryfall 数据无变更")
+        else:
+            _set_state(
+                "reseed", TaskStatus.DONE,
+                f"同步完成！新增 {result['new_cards']} 张卡牌",
+            )
+    except Exception as e:
+        logger.exception("[sync] Failed")
+        _set_state("reseed", TaskStatus.ERROR, f"同步失败: {e}")

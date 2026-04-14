@@ -1,13 +1,10 @@
 import { useState, useRef, useEffect } from "react";
+import { createPortal } from "react-dom";
 import { useAuth } from "../contexts/AuthContext.jsx";
 import { apiFetch } from "../utils/apiFetch.js";
 import { useToast } from "../contexts/ToastContext.jsx";
 import { getFormatLabel, getCardLegality, legalityLabel } from "../utils/formats.js";
-
-function getImageUri(imageUris, mode) {
-  if (!imageUris) return "";
-  return imageUris[mode] || imageUris.normal || imageUris.small || "";
-}
+import { getImageUri } from "../utils/cardImage.js";
 
 function CardItem({ card, imageMode, decks: propDecks }) {
   const [imgError, setImgError] = useState(false);
@@ -16,16 +13,14 @@ function CardItem({ card, imageMode, decks: propDecks }) {
   const [showArtPicker, setShowArtPicker] = useState(false);
   const [prints, setPrints] = useState([]);
   const [loadingPrints, setLoadingPrints] = useState(false);
-  const [selectedArt, setSelectedArt] = useState(null); // { png, imageUri, setName }
-  const [localDecks, setLocalDecks] = useState([]);
+  const [selectedArt, setSelectedArt] = useState(null);
+  const [localDecks, setLocalDecks] = useState(null);
   const [loadingDecks, setLoadingDecks] = useState(false);
   const menuRef = useRef(null);
-  const artRef = useRef(null);
   const { user } = useAuth();
   const { showToast } = useToast();
 
-  // Use prop decks as initial value, fallback to local decks
-  const decks = localDecks.length > 0 ? localDecks : (propDecks || []);
+  const decks = localDecks ?? propDecks ?? [];
 
   const colorMap = {
     W: "mana-white",
@@ -47,7 +42,7 @@ function CardItem({ card, imageMode, decks: propDecks }) {
   let backImageUri = "";
 
   if (selectedArt) {
-    frontImageUri = selectedArt.imageUri;
+    frontImageUri = getImageUri(selectedArt.image_uris, imageMode);
   } else if (isDoubleFaced) {
     frontImageUri = getImageUri(card.card_faces[0].image_uris, imageMode);
     backImageUri = getImageUri(card.card_faces[1].image_uris, imageMode);
@@ -70,7 +65,6 @@ function CardItem({ card, imageMode, decks: propDecks }) {
   const displayToughness = activeFace?.toughness || card.toughness || frontFace?.toughness;
   const displayLoyalty = activeFace?.loyalty || card.loyalty || frontFace?.loyalty;
 
-  // Close deck menu on outside click
   useEffect(() => {
     if (!showDeckMenu) return;
     const handleClick = (e) => {
@@ -82,28 +76,16 @@ function CardItem({ card, imageMode, decks: propDecks }) {
     return () => document.removeEventListener("mousedown", handleClick);
   }, [showDeckMenu]);
 
-  // Close art picker on outside click
-  useEffect(() => {
-    if (!showArtPicker) return;
-    const handleClick = (e) => {
-      if (artRef.current && !artRef.current.contains(e.target)) {
-        setShowArtPicker(false);
-      }
-    };
-    document.addEventListener("mousedown", handleClick);
-    return () => document.removeEventListener("mousedown", handleClick);
-  }, [showArtPicker]);
-
   const handleFetchPrints = async () => {
     if (prints.length > 0) {
       setShowArtPicker(!showArtPicker);
       return;
     }
+    const searchUri = card.prints_search_uri;
+    if (!searchUri) return;
     setLoadingPrints(true);
     setShowArtPicker(true);
     try {
-      const searchUri = card.prints_search_uri;
-      if (!searchUri) return;
       const res = await fetch(searchUri);
       if (!res.ok) return;
       const data = await res.json();
@@ -112,7 +94,7 @@ function CardItem({ card, imageMode, decks: propDecks }) {
         .map((p) => ({
           id: p.id,
           png: p.image_uris.png,
-          imageUri: getImageUri(p.image_uris, imageMode),
+          image_uris: p.image_uris,
           setName: p.set_name,
           artist: p.artist,
         }));
@@ -129,14 +111,12 @@ function CardItem({ card, imageMode, decks: propDecks }) {
       setShowDeckMenu(false);
       return;
     }
-    // Always fetch decks when opening menu
     setLoadingDecks(true);
     setShowDeckMenu(true);
     try {
       const res = await apiFetch("/api/decks");
       if (res.ok) {
-        const data = await res.json();
-        setLocalDecks(data);
+        setLocalDecks(await res.json());
       } else {
         setLocalDecks([]);
       }
@@ -159,7 +139,6 @@ function CardItem({ card, imageMode, decks: propDecks }) {
     setImgError(false);
   };
 
-  // Get the PNG URL to store in deck (for export)
   const getPngUrlForDeck = () => {
     if (selectedArt) return selectedArt.png;
     if (card.image_uris?.png) return card.image_uris.png;
@@ -273,22 +252,13 @@ function CardItem({ card, imageMode, decks: propDecks }) {
             +
           </button>
         )}
-        {/* Card overlay info at bottom - only in art-crop mode */}
-        {isArtCrop && (
+        {isArtCrop && displayFlavorText && (
           <div className="card-overlay">
-            {displayFlavorText && <p className="card-overlay-flavor">{displayFlavorText}</p>}
-            <div className="card-overlay-footer">
-              <span className="card-overlay-pt">
-                {displayPower && displayToughness && `${displayPower}/${displayToughness}`}
-                {displayLoyalty && displayLoyalty}
-              </span>
-              {card.set_name && <span className="card-overlay-set">{card.set_name}</span>}
-            </div>
+            <p className="card-overlay-flavor">{displayFlavorText}</p>
           </div>
         )}
       </div>
 
-      {/* Deck dropdown - outside image wrapper to avoid overflow:hidden */}
       {showDeckMenu && user && (
         <div className="deck-dropdown-overlay" ref={menuRef}>
           <div className="deck-dropdown">
@@ -326,33 +296,39 @@ function CardItem({ card, imageMode, decks: propDecks }) {
         </div>
       )}
 
-      {/* Art picker panel */}
-      {showArtPicker && (
-        <div className="art-picker" ref={artRef}>
-          <div className="art-picker-header">
-            <span>选择卡图版本 ({prints.length})</span>
-            {selectedArt && (
-              <button className="art-picker-reset" onClick={handleResetArt}>恢复默认</button>
+      {showArtPicker && createPortal(
+        <>
+          <div className="art-picker-backdrop" onClick={() => setShowArtPicker(false)} />
+          <div className="art-picker">
+            <div className="art-picker-header">
+              <span>选择卡图版本 ({prints.length})</span>
+              <div className="art-picker-header-actions">
+                {selectedArt && (
+                  <button className="art-picker-reset" onClick={handleResetArt}>恢复默认</button>
+                )}
+                <button className="art-picker-close" onClick={() => setShowArtPicker(false)}>&times;</button>
+              </div>
+            </div>
+            {loadingPrints ? (
+              <div className="art-picker-loading">加载中...</div>
+            ) : (
+              <div className="art-picker-grid">
+                {prints.map((p) => (
+                  <div
+                    key={p.id}
+                    className={`art-picker-item ${selectedArt?.id === p.id ? "selected" : ""}`}
+                    onClick={() => handleSelectArt(p)}
+                    title={`${p.setName} - ${p.artist}`}
+                  >
+                    <img src={getImageUri(p.image_uris, imageMode)} alt={p.setName} loading="lazy" />
+                    <span className="art-picker-label">{p.setName}</span>
+                  </div>
+                ))}
+              </div>
             )}
           </div>
-          {loadingPrints ? (
-            <div className="art-picker-loading">加载中...</div>
-          ) : (
-            <div className="art-picker-grid">
-              {prints.map((p) => (
-                <div
-                  key={p.id}
-                  className={`art-picker-item ${selectedArt?.id === p.id ? "selected" : ""}`}
-                  onClick={() => handleSelectArt(p)}
-                  title={`${p.setName} - ${p.artist}`}
-                >
-                  <img src={p.imageUri} alt={p.setName} loading="lazy" />
-                  <span className="art-picker-label">{p.setName}</span>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
+        </>,
+        document.body
       )}
 
       <div className="card-info">
@@ -373,6 +349,15 @@ function CardItem({ card, imageMode, decks: propDecks }) {
         </div>
         <p className="card-type">{displayTypeLine}</p>
         {displayOracleText && <p className="card-text">{displayOracleText}</p>}
+        {isArtCrop && (displayPower || displayLoyalty || card.set_name) && (
+          <div className="card-info-footer">
+            <span className="card-info-pt">
+              {displayPower && displayToughness && `${displayPower}/${displayToughness}`}
+              {displayLoyalty && displayLoyalty}
+            </span>
+            {card.set_name && <span className="card-info-set">{card.set_name}</span>}
+          </div>
+        )}
       </div>
     </div>
   );

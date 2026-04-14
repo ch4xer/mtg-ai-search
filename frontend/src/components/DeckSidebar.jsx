@@ -44,29 +44,6 @@ function DeckSidebar({ collapsed, onToggle }) {
     }
   };
 
-  const addCardToDeck = async (deckId, cardId, cardName) => {
-    try {
-      const res = await apiFetch(`/api/decks/${deckId}/cards`, {
-        method: "POST",
-        body: { card_id: cardId },
-      });
-      if (res.ok) {
-        const deckName = decks.find((d) => d.id === deckId)?.name || "卡组";
-        showToast(`已将「${cardName}」加入「${deckName}」`);
-        setDecks((prev) =>
-          prev.map((d) =>
-            d.id === deckId ? { ...d, card_count: (d.card_count || 0) + 1 } : d,
-          ),
-        );
-      } else {
-        const err = await res.json().catch(() => ({}));
-        showToast(err.detail || "添加失败", "error");
-      }
-    } catch {
-      showToast("添加失败", "error");
-    }
-  };
-
   return (
     <div className={`deck-sidebar ${collapsed ? "collapsed" : ""}`}>
       <button
@@ -132,4 +109,3 @@ function DeckSidebar({ collapsed, onToggle }) {
 }
 
 export default DeckSidebar;
-export { DeckSidebar };

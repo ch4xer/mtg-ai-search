@@ -12,6 +12,7 @@ function AdminPage() {
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [taskStatus, setTaskStatus] = useState({ reseed: { status: "idle" }, reembed: { status: "idle" } });
+  const [syncLogs, setSyncLogs] = useState([]);
   const { showToast } = useToast();
   const pollRef = useRef(null);
 
@@ -24,6 +25,13 @@ function AdminPage() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const fetchSyncLogs = async () => {
+    try {
+      const res = await apiFetch("/api/admin/sync-logs");
+      if (res.ok) setSyncLogs(await res.json());
+    } catch { /* ignore */ }
   };
 
   const fetchTaskStatus = async () => {
@@ -48,14 +56,15 @@ function AdminPage() {
       if (!anyRunning) {
         clearInterval(pollRef.current);
         pollRef.current = null;
-        // Refresh user list in case card counts changed
         fetchUsers();
+        fetchSyncLogs();
       }
     }, 3000);
   };
 
   useEffect(() => {
     fetchUsers();
+    fetchSyncLogs();
     fetchTaskStatus().then((data) => {
       if (data && Object.values(data).some((t) => t.status === "running")) {
         startPolling();
@@ -106,6 +115,22 @@ function AdminPage() {
       const res = await apiFetch("/api/admin/reembed", { method: "POST" });
       if (res.ok) {
         showToast("已开始重新生成 embedding");
+        await fetchTaskStatus();
+        startPolling();
+      } else {
+        const err = await res.json().catch(() => ({}));
+        showToast(err.detail || "操作失败", "error");
+      }
+    } catch {
+      showToast("操作失败", "error");
+    }
+  };
+
+  const handleSync = async () => {
+    try {
+      const res = await apiFetch("/api/admin/sync", { method: "POST" });
+      if (res.ok) {
+        showToast("已开始增量同步");
         await fetchTaskStatus();
         startPolling();
       } else {
@@ -317,6 +342,47 @@ function AdminPage() {
           </button>
         </div>
       </div>
+
+      {/* Sync logs */}
+      <div className="admin-sync-section">
+        <div className="admin-sync-header">
+          <h2 className="admin-title">每日同步记录</h2>
+          <button className="btn-accent" onClick={handleSync} disabled={anyRunning}>
+            手动同步
+          </button>
+        </div>
+        <p className="admin-db-card-desc" style={{ marginBottom: "1rem" }}>
+          系统每天午夜自动检查 Scryfall 更新，同步新卡牌并更新已有卡牌的图片链接。
+        </p>
+        {syncLogs.length === 0 ? (
+          <p className="admin-sync-empty">暂无同步记录</p>
+        ) : (
+          <div className="admin-table-wrapper">
+            <table className="admin-table">
+              <thead>
+                <tr>
+                  <th>时间</th>
+                  <th>状态</th>
+                  <th>新增卡牌</th>
+                  <th>更新卡牌</th>
+                  <th>详情</th>
+                </tr>
+              </thead>
+              <tbody>
+                {syncLogs.map((log) => (
+                  <tr key={log.id}>
+                    <td>{new Date(log.started_at).toLocaleString("zh-CN")}</td>
+                    <td><SyncStatusBadge status={log.status} /></td>
+                    <td>{log.new_cards}</td>
+                    <td>{log.updated_cards}</td>
+                    <td className="admin-sync-message">{log.message}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -325,6 +391,12 @@ function StatusBadge({ status }) {
   if (!status || status === "idle") return null;
   const labels = { running: "运行中", done: "已完成", error: "失败" };
   return <span className={`admin-task-badge admin-task-badge-${status}`}>{labels[status]}</span>;
+}
+
+function SyncStatusBadge({ status }) {
+  const labels = { running: "运行中", done: "完成", error: "失败", skipped: "跳过" };
+  const className = status === "skipped" ? "idle" : status;
+  return <span className={`admin-task-badge admin-task-badge-${className}`}>{labels[status] || status}</span>;
 }
 
 export default AdminPage;

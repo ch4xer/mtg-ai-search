@@ -1,13 +1,9 @@
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { apiFetch, getAccessToken } from "../utils/apiFetch.js";
 import { useToast } from "../contexts/ToastContext.jsx";
 import { FORMATS, getFormatLabel, getCardLegality, legalityLabel } from "../utils/formats.js";
-
-function getImageUri(imageUris, mode) {
-  if (!imageUris) return "";
-  return imageUris[mode] || imageUris.normal || imageUris.small || "";
-}
+import { getImageUri } from "../utils/cardImage.js";
 
 /* ── Type classification ── */
 
@@ -47,12 +43,7 @@ function DeckDetailPage({ imageMode }) {
   const [showImportModal, setShowImportModal] = useState(false);
   const [importText, setImportText] = useState("");
   const [importNotFound, setImportNotFound] = useState([]);
-  const [artPickerCardId, setArtPickerCardId] = useState(null);
-  const [printsCache, setPrintsCache] = useState({});
-  const [loadingPrints, setLoadingPrints] = useState(false);
-  const [artCropOverrides, setArtCropOverrides] = useState({});
   const [selectedCard, setSelectedCard] = useState(null);
-  const artRef = useRef(null);
 
   // ── Data fetching ──
 
@@ -262,69 +253,6 @@ function DeckDetailPage({ imageMode }) {
     finally { setImporting(false); }
   };
 
-  // Art picker
-  useEffect(() => {
-    if (!artPickerCardId) return;
-    const handleClick = (e) => {
-      if (artRef.current && !artRef.current.contains(e.target)) setArtPickerCardId(null);
-    };
-    document.addEventListener("mousedown", handleClick);
-    return () => document.removeEventListener("mousedown", handleClick);
-  }, [artPickerCardId]);
-
-  const handleToggleArtPicker = async (item) => {
-    const cardId = item.card_id;
-    if (artPickerCardId === cardId) { setArtPickerCardId(null); return; }
-    setArtPickerCardId(cardId);
-    if (printsCache[cardId]) return;
-    const searchUri = item.card.prints_search_uri;
-    if (!searchUri) return;
-    setLoadingPrints(true);
-    try {
-      const res = await fetch(searchUri);
-      if (!res.ok) return;
-      const data = await res.json();
-      const allPrints = (data.data || []).filter((p) => p.image_uris?.png).map((p) => ({
-        id: p.id, png: p.image_uris.png, artCrop: p.image_uris.art_crop || "",
-        imageUri: getImageUri(p.image_uris, imageMode), setName: p.set_name, artist: p.artist,
-      }));
-      setPrintsCache((prev) => ({ ...prev, [cardId]: allPrints }));
-    } catch { showToast("获取版本列表失败", "error"); }
-    finally { setLoadingPrints(false); }
-  };
-
-  const handleSelectArt = async (item, print) => {
-    setArtPickerCardId(null);
-    try {
-      const res = await apiFetch(`/api/decks/${id}/cards/${item.card_id}`, {
-        method: "PATCH", body: { image_url: print.png, display_url: print.artCrop },
-      });
-      if (res.ok) {
-        setCards((prev) => prev.map((c) =>
-          c.card_id === item.card_id ? { ...c, image_url: print.png, display_url: print.artCrop } : c
-        ));
-        setArtCropOverrides((prev) => ({ ...prev, [item.card_id]: print.artCrop }));
-        showToast(`已切换「${item.card.name}」卡图`);
-      }
-    } catch { showToast("切换卡图失败", "error"); }
-  };
-
-  const handleResetArt = async (item) => {
-    setArtPickerCardId(null);
-    try {
-      const res = await apiFetch(`/api/decks/${id}/cards/${item.card_id}`, {
-        method: "PATCH", body: { image_url: null, display_url: null },
-      });
-      if (res.ok) {
-        setCards((prev) => prev.map((c) =>
-          c.card_id === item.card_id ? { ...c, image_url: null, display_url: null } : c
-        ));
-        setArtCropOverrides((prev) => { const next = { ...prev }; delete next[item.card_id]; return next; });
-        showToast("已恢复默认卡图");
-      }
-    } catch { showToast("恢复卡图失败", "error"); }
-  };
-
   // ── Helpers ──
 
   const getCardDisplayImage = (item) => {
@@ -335,11 +263,6 @@ function DeckDetailPage({ imageMode }) {
   const getCardFullImage = (item) => {
     return getImageUri(item.card.image_uris, "png")
       || getImageUri(item.card.card_faces?.[0]?.image_uris, "png");
-  };
-
-  const formatManaCost = (manaCost) => {
-    if (!manaCost) return "";
-    return manaCost;
   };
 
   // ── Render ──
@@ -424,7 +347,7 @@ function DeckDetailPage({ imageMode }) {
                 <div className="deck-preview-info">
                   <h3 className="deck-preview-name">{selectedCard.card.name}</h3>
                   {selectedCard.card.mana_cost && (
-                    <span className="deck-preview-mana">{formatManaCost(selectedCard.card.mana_cost)}</span>
+                    <span className="deck-preview-mana">{selectedCard.card.mana_cost}</span>
                   )}
                   <p className="deck-preview-type">{selectedCard.card.type_line}</p>
                   {selectedCard.card.oracle_text && (

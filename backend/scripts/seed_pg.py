@@ -166,7 +166,25 @@ def insert_cards(conn, cards: list[dict]):
                     oracle_text, power, toughness, colors, keywords, is_playtest, data
                 ) VALUES (
                     %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
-                ) ON CONFLICT (id) DO NOTHING""",
+                ) ON CONFLICT (id) DO UPDATE SET
+                    image_png = EXCLUDED.image_png,
+                    image_art_crop = EXCLUDED.image_art_crop,
+                    image_border_crop = EXCLUDED.image_border_crop,
+                    mana_cost = EXCLUDED.mana_cost,
+                    cmc = EXCLUDED.cmc,
+                    power = EXCLUDED.power,
+                    toughness = EXCLUDED.toughness,
+                    colors = EXCLUDED.colors,
+                    keywords = EXCLUDED.keywords,
+                    is_playtest = EXCLUDED.is_playtest,
+                    data = EXCLUDED.data,
+                    name = EXCLUDED.name,
+                    type_line = EXCLUDED.type_line,
+                    oracle_text = EXCLUDED.oracle_text,
+                    name_embedding = CASE WHEN cards.name IS NOT DISTINCT FROM EXCLUDED.name THEN cards.name_embedding ELSE NULL END,
+                    type_line_embedding = CASE WHEN cards.type_line IS NOT DISTINCT FROM EXCLUDED.type_line THEN cards.type_line_embedding ELSE NULL END,
+                    oracle_text_embedding = CASE WHEN cards.oracle_text IS NOT DISTINCT FROM EXCLUDED.oracle_text THEN cards.oracle_text_embedding ELSE NULL END
+                """,
                 values,
             )
             conn.commit()

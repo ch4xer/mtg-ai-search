@@ -151,6 +151,7 @@ async def filter_cards(filters: dict) -> list[str]:
     if not clauses:
         return []
 
+    clauses.append("NOT is_playtest")
     where = " AND ".join(clauses)
     query = f"SELECT id FROM cards WHERE {where}"
     logger.info("filter_cards SQL: %s params: %s", query, params)
@@ -175,7 +176,7 @@ async def vector_search_cards(
         query = f"""
             SELECT id, {column} <=> $1::halfvec AS distance
             FROM cards
-            WHERE id = ANY($2) AND {column} IS NOT NULL
+            WHERE id = ANY($2) AND {column} IS NOT NULL AND NOT is_playtest
             ORDER BY distance
             LIMIT $3
         """
@@ -184,7 +185,7 @@ async def vector_search_cards(
         query = f"""
             SELECT id, {column} <=> $1::halfvec AS distance
             FROM cards
-            WHERE {column} IS NOT NULL
+            WHERE {column} IS NOT NULL AND NOT is_playtest
             ORDER BY distance
             LIMIT $2
         """

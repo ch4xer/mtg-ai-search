@@ -46,6 +46,22 @@ CREATE TABLE IF NOT EXISTS search_logs (
     created_at    TIMESTAMPTZ DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS app_meta (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS sync_logs (
+    id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    started_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    completed_at TIMESTAMPTZ,
+    status       TEXT NOT NULL DEFAULT 'running',
+    new_cards    INT NOT NULL DEFAULT 0,
+    updated_cards INT NOT NULL DEFAULT 0,
+    message      TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_sync_logs_started_at ON sync_logs(started_at DESC);
+
 CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
 CREATE INDEX IF NOT EXISTS idx_decks_user_id ON decks(user_id);
 CREATE INDEX IF NOT EXISTS idx_search_logs_user_id ON search_logs(user_id);
