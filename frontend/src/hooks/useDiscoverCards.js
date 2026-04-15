@@ -74,13 +74,10 @@ export function useDiscoverCards({ enabled = true } = {}) {
     }
   }, [buildBody]);
 
-  useEffect(() => {
-    if (!enabled) return undefined;
+  const handleSearch = useCallback(() => {
     setPage(1);
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => fetchResults(1), 300);
-    return () => clearTimeout(debounceRef.current);
-  }, [enabled, q, colors, types, rarities, selectedKeywords, selectedSubtypes, includePlaytest, cmcMin, cmcMax, powerMin, powerMax, toughnessMin, toughnessMax, fetchResults]);
+    fetchResults(1);
+  }, [fetchResults]);
 
   useEffect(() => {
     if (!enabled && abortRef.current) {
@@ -157,6 +154,7 @@ export function useDiscoverCards({ enabled = true } = {}) {
     filtersOpen, setFiltersOpen,
     toggleSet,
     clearAll,
+    handleSearch,
     handlePageChange,
     showSubtypes,
     subtypeFacets,

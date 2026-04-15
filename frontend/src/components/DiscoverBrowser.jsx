@@ -48,6 +48,7 @@ function DiscoverBrowser({ imageMode, onToggleImageMode, enabled = true }) {
     filtersOpen, setFiltersOpen,
     toggleSet,
     clearAll,
+    handleSearch,
     handlePageChange,
     showSubtypes,
     subtypeFacets,
@@ -83,6 +84,7 @@ function DiscoverBrowser({ imageMode, onToggleImageMode, enabled = true }) {
             placeholder="Search name, type, text..."
             value={q}
             onChange={(e) => setQ(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") handleSearch(); }}
           />
         </div>
 
@@ -208,6 +210,10 @@ function DiscoverBrowser({ imageMode, onToggleImageMode, enabled = true }) {
             <span className="filter-checkbox-label">Include Playtest Cards</span>
           </label>
         </div>
+
+        <button className="btn-accent discover-search-btn" onClick={handleSearch} disabled={loading}>
+          {loading ? "Searching..." : "Search"}
+        </button>
       </aside>
 
       <div className="discover-results">

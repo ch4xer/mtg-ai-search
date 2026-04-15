@@ -64,6 +64,7 @@ function SearchPage({ imageMode, onToggleImageMode }) {
 
   const handleAiSearch = async (query) => {
     if (!query.trim()) return;
+    if (!requireAuth()) return;
     setAiLoading(true);
     setAiSearched(true);
     try {
@@ -71,6 +72,12 @@ function SearchPage({ imageMode, onToggleImageMode }) {
         method: "POST",
         body: { query },
       });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        showToast(err.detail || "搜索失败", "error");
+        setAiResults([]);
+        return;
+      }
       const data = await res.json();
       setAiResults(data.results || []);
     } catch (err) {

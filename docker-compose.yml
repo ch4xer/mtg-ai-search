@@ -11,6 +11,7 @@ services:
       test: ["CMD-SHELL", "pg_isready -U mtg"]
       interval: 5s
       retries: 5
+    restart: unless-stopped
 
   mtg-backend:
     build: ./backend
@@ -24,6 +25,7 @@ services:
       JWT_SECRET: ${JWT_SECRET}
       ADMIN_USERNAME: ${ADMIN_USERNAME}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+    restart: unless-stopped
 
   mtg-frontend:
     build: ./frontend
@@ -31,6 +33,7 @@ services:
       - "60010:80"
     depends_on:
       - mtg-backend
+    restart: unless-stopped
 
 volumes:
   pgdata:

@@ -8,3 +8,5 @@ chroma_data/
 .env
 backend/.env
 pgdata/
+.claude/
+.playwright-mcp/

@@ -760,6 +760,16 @@ async def get_user_search_stats() -> list[dict]:
     ]
 
 
+async def get_user_daily_search_count(user_id: str) -> int:
+    """Count today's AI searches for a given user (UTC day)."""
+    pool = await get_pool()
+    row = await pool.fetchrow(
+        "SELECT COUNT(*) AS cnt FROM search_logs WHERE user_id = $1::uuid AND created_at >= date_trunc('day', now())",
+        user_id,
+    )
+    return int(row["cnt"]) if row else 0
+
+
 async def get_deck_card_images(deck_id: str) -> list[dict]:
     pool = await get_pool()
     rows = await pool.fetch(

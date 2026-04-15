@@ -1,16 +1,15 @@
 import { useState, useEffect, useMemo } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { Masonry } from "masonic";
 import { apiFetch, getAccessToken } from "../utils/apiFetch.js";
 import { useToast } from "../contexts/ToastContext.jsx";
-import { FORMATS, getFormatLabel, getCardLegality, legalityLabel } from "../utils/formats.js";
+import { FORMATS, getFormatLabel, getCardLegality, isCardLegal, legalityLabel } from "../utils/formats.js";
 import { getImageUri } from "../utils/cardImage.js";
 
 /* ── Type classification ── */
 
 const TYPE_ORDER = [
-  "Creature", "Planeswalker", "Instant", "Sorcery",
-  "Enchantment", "Artifact", "Land", "Other",
+  "Planeswalker", "Creature", "Sorcery", "Instant",
+  "Artifact", "Enchantment", "Land", "Other",
 ];
 
 function classifyCard(card) {
@@ -92,6 +91,46 @@ function DeckDetailPage({ imageMode }) {
       }
     }
     return ordered;
+  }, [cards]);
+
+  // ── Deck analysis ──
+
+  const deckAnalysis = useMemo(() => {
+    if (cards.length === 0) return null;
+
+    // Color distribution
+    const colorCounts = { W: 0, U: 0, B: 0, R: 0, G: 0 };
+    const colorLabels = { W: "白", U: "蓝", B: "黑", R: "红", G: "绿" };
+    for (const item of cards) {
+      const ci = item.card.color_identity || item.card.colors || [];
+      for (const c of ci) {
+        if (colorCounts[c] !== undefined) colorCounts[c] += item.quantity;
+      }
+    }
+
+    // Mana curve (CMC 0–7+)
+    const cmcBuckets = [0, 0, 0, 0, 0, 0, 0, 0]; // indices 0-7, index 7 = "7+"
+    for (const item of cards) {
+      const cmc = Math.floor(item.card.cmc ?? 0);
+      const tl = item.card.type_line || "";
+      if (tl.includes("Land")) continue;
+      const idx = Math.min(cmc, 7);
+      cmcBuckets[idx] += item.quantity;
+    }
+    const cmcMax = Math.max(...cmcBuckets, 1);
+
+    // Rarity distribution
+    const rarityOrder = ["common", "uncommon", "rare", "mythic"];
+    const rarityLabels = { common: "普通", uncommon: "非普通", rare: "稀有", mythic: "秘稀" };
+    const rarityCounts = {};
+    for (const item of cards) {
+      const r = item.card.rarity || "common";
+      rarityCounts[r] = (rarityCounts[r] || 0) + item.quantity;
+    }
+
+    const totalColorCards = Object.values(colorCounts).reduce((s, v) => s + v, 0) || 1;
+
+    return { colorCounts, colorLabels, totalColorCards, cmcBuckets, cmcMax, rarityCounts, rarityLabels, rarityOrder };
   }, [cards]);
 
   // Auto-select first card
@@ -224,16 +263,11 @@ function DeckDetailPage({ imageMode }) {
   const handleExportText = async () => {
     try {
       const res = await apiFetch(`/api/decks/${id}/export/text`);
-      if (!res.ok) { showToast(((await res.json().catch(() => ({}))).detail) || "导出失败", "error"); return; }
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `${deck?.name || "deck"}.txt`;
-      a.click();
-      URL.revokeObjectURL(url);
-      showToast("牌表导出成功");
-    } catch { showToast("导出失败", "error"); }
+      if (!res.ok) { showToast(((await res.json().catch(() => ({}))).detail) || "复制失败", "error"); return; }
+      const text = await res.text();
+      await navigator.clipboard.writeText(text);
+      showToast("牌表已复制到剪切板");
+    } catch { showToast("复制失败", "error"); }
   };
 
   const handleImportSubmit = async () => {
@@ -305,7 +339,7 @@ function DeckDetailPage({ imageMode }) {
         </div>
         <div className="deck-detail-actions">
           <button className="btn-secondary" onClick={() => setShowImportModal(true)}>导入牌表</button>
-          <button className="btn-secondary" onClick={handleExportText} disabled={cards.length === 0}>导出牌表</button>
+          <button className="btn-secondary" onClick={handleExportText} disabled={cards.length === 0}>复制牌表</button>
           <button className="btn-accent" onClick={handleExport} disabled={exporting || cards.length === 0}>
             {exporting ? "导出中..." : "导出 PDF"}
           </button>
@@ -374,49 +408,151 @@ function DeckDetailPage({ imageMode }) {
             )}
           </aside>
 
-          {/* Right: Masonry layout using masonic */}
+          {/* Center: CSS columns layout */}
           <div className="deck-groups">
-            <Masonry
-              items={groupedCards}
-              columnWidth={280}
-              columnGutter={20}
-              maxColumnCount={3}
-              render={({ data: group }) => (
-                <div className="deck-type-group">
-                  <div className="deck-type-header">
-                    <span className="deck-type-label">{group.label}</span>
-                    <span className="deck-type-count">{group.count}</span>
-                  </div>
-                  <div className="deck-stack-grid">
-                    {group.items.map((item) => {
-                      const img = getCardDisplayImage(item);
-                      const isSelected = selectedCard?.card_id === item.card_id;
-                      return (
-                        <div
-                          key={item.card_id}
-                          className={`deck-stack-card ${isSelected ? "selected" : ""}`}
-                          onMouseEnter={() => setSelectedCard(item)}
-                        >
-                          {img ? (
-                            <img src={img} alt={item.card.name} className="deck-stack-img" loading="lazy" />
-                          ) : (
-                            <div className="deck-stack-placeholder">{item.card.name}</div>
-                          )}
-                          <div className="deck-stack-overlay" />
-                          <div className="deck-stack-name">{item.card.name}</div>
-                          <div className="deck-stack-controls">
-                            <button onClick={(e) => { e.stopPropagation(); handleQuantityChange(item.card_id, -1); }}>-</button>
-                            <span>{item.quantity}</span>
-                            <button onClick={(e) => { e.stopPropagation(); handleQuantityChange(item.card_id, 1); }}>+</button>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
+            {groupedCards.map((group) => (
+              <div key={group.type} className="deck-type-group">
+                <div className="deck-type-header">
+                  <span className="deck-type-label">{group.label}</span>
+                  <span className="deck-type-count">{group.count}</span>
                 </div>
-              )}
-            />
+                <div className="deck-stack-grid">
+                  {group.items.map((item) => {
+                    const img = getCardDisplayImage(item);
+                    const isSelected = selectedCard?.card_id === item.card_id;
+                    const illegal = deck.format && deck.format !== "undefined" && !isCardLegal(item.card, deck.format);
+                    return (
+                      <div
+                        key={item.card_id}
+                        className={`deck-stack-card ${isSelected ? "selected" : ""}`}
+                        onMouseEnter={() => setSelectedCard(item)}
+                      >
+                        {img ? (
+                          <img src={img} alt={item.card.name} className="deck-stack-img" loading="lazy" />
+                        ) : (
+                          <div className="deck-stack-placeholder">{item.card.name}</div>
+                        )}
+                        <div className="deck-stack-overlay" />
+                        <div className="deck-stack-name">
+                          {illegal && <span className="deck-illegal-icon" title={`该卡牌在「${getFormatLabel(deck.format)}」中不合法`}>!</span>}
+                          {item.card.name}
+                        </div>
+                        <div className="deck-stack-controls">
+                          <button onClick={(e) => { e.stopPropagation(); handleQuantityChange(item.card_id, -1); }}>-</button>
+                          <span>{item.quantity}</span>
+                          <button onClick={(e) => { e.stopPropagation(); handleQuantityChange(item.card_id, 1); }}>+</button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
           </div>
+
+          {/* Right: Deck Analysis */}
+          {deckAnalysis && (
+            <aside className="deck-analysis">
+              <div className="analysis-card">
+                <h3 className="analysis-title">卡牌类型</h3>
+                <div className="analysis-bars">
+                  {groupedCards.map((group) => (
+                    <div key={group.type} className="analysis-bar-row">
+                      <span className="analysis-bar-label">{group.label}</span>
+                      <div className="analysis-bar-track">
+                        <div
+                          className="analysis-bar-fill type-bar"
+                          style={{ width: `${(group.count / totalCards) * 100}%` }}
+                        />
+                      </div>
+                      <span className="analysis-bar-value">{group.count}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="analysis-card">
+                <h3 className="analysis-title">颜色分布</h3>
+                {(() => {
+                  const COLOR_HEX = { W: "#d5c67a", U: "#0e68ab", B: "#3d3a3a", R: "#d3202a", G: "#00733e" };
+                  const colors = ["W", "U", "B", "R", "G"];
+                  const total = deckAnalysis.totalColorCards;
+                  let cumulative = 0;
+                  const slices = colors.map((c) => {
+                    const pct = (deckAnalysis.colorCounts[c] / total) * 100;
+                    const start = cumulative;
+                    cumulative += pct;
+                    return { color: c, pct, start, hex: COLOR_HEX[c] };
+                  });
+                  const conicGradient = slices
+                    .filter((s) => s.pct > 0)
+                    .map((s) => `${s.hex} ${s.start}% ${s.start + s.pct}%`)
+                    .join(", ");
+                  return (
+                    <div className="analysis-pie-container">
+                      <div
+                        className="analysis-pie"
+                        style={{ background: conicGradient ? `conic-gradient(${conicGradient})` : "var(--bg-secondary)" }}
+                      />
+                      <div className="analysis-pie-legend">
+                        {colors.map((c) => {
+                          const count = deckAnalysis.colorCounts[c];
+                          if (count === 0) return null;
+                          return (
+                            <div key={c} className="pie-legend-item">
+                              <span className={`analysis-color-dot mana-${c}`} />
+                              <span className="pie-legend-label">{deckAnalysis.colorLabels[c]}</span>
+                              <span className="pie-legend-value">{count}</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })()}
+              </div>
+
+              <div className="analysis-card">
+                <h3 className="analysis-title">法术力曲线</h3>
+                <div className="analysis-mana-curve">
+                  {deckAnalysis.cmcBuckets.map((count, i) => (
+                    <div key={i} className="mana-curve-col">
+                      <span className="mana-curve-value">{count || ""}</span>
+                      <div className="mana-curve-bar-wrapper">
+                        <div
+                          className="mana-curve-bar"
+                          style={{ height: `${(count / deckAnalysis.cmcMax) * 100}%` }}
+                        />
+                      </div>
+                      <span className="mana-curve-label">{i < 7 ? i : "7+"}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="analysis-card">
+                <h3 className="analysis-title">稀有度分布</h3>
+                <div className="analysis-bars">
+                  {deckAnalysis.rarityOrder.map((r) => {
+                    const count = deckAnalysis.rarityCounts[r] || 0;
+                    const totalRarity = cards.reduce((s, c) => s + c.quantity, 0) || 1;
+                    return (
+                      <div key={r} className="analysis-bar-row">
+                        <span className="analysis-bar-label">{deckAnalysis.rarityLabels[r]}</span>
+                        <div className="analysis-bar-track">
+                          <div
+                            className={`analysis-bar-fill rarity-bar-${r}`}
+                            style={{ width: `${(count / totalRarity) * 100}%` }}
+                          />
+                        </div>
+                        <span className="analysis-bar-value">{count}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </aside>
+          )}
         </div>
       )}
 

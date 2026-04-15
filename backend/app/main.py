@@ -1,17 +1,20 @@
 import asyncio
+import os
 
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from .agent import run_search
+from .auth import get_current_user
 from .config import get_allowed_origins
-from .db import discover_cards, log_search
-from .dependencies import get_optional_user
+from .db import discover_cards, get_user_by_id, get_user_daily_search_count, log_search
 from .routes_admin import admin_router
 from .routes_auth import auth_router
 from .routes_decks import deck_router
 from .startup import lifespan
+
+DAILY_SEARCH_LIMIT = int(os.getenv("DAILY_SEARCH_LIMIT", "30"))
 
 
 app = FastAPI(title="MTG AI Card Search", lifespan=lifespan, redirect_slashes=False)
@@ -38,7 +41,17 @@ class SearchResponse(BaseModel):
 
 
 @app.post("/api/search", response_model=SearchResponse)
-async def search_cards(request: SearchRequest, user_id: str | None = Depends(get_optional_user)):
+async def search_cards(request: SearchRequest, user_id: str = Depends(get_current_user)):
+    # Rate limit: check daily search count (admin exempt)
+    user = await get_user_by_id(user_id)
+    if not user or user.get("role") != "admin":
+        count = await get_user_daily_search_count(user_id)
+        if count >= DAILY_SEARCH_LIMIT:
+            raise HTTPException(
+                status_code=429,
+                detail=f"今日搜索次数已达上限 ({DAILY_SEARCH_LIMIT}次/天)",
+            )
+
     search_result = await run_search(request.query)
     # Log search asynchronously — don't block the response
     asyncio.create_task(log_search(
