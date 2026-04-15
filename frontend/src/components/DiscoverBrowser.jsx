@@ -58,7 +58,29 @@ function DiscoverBrowser({ imageMode, onToggleImageMode, enabled = true }) {
   } = useDiscoverCards({ enabled });
 
   return (
-    <div className="discover-page">
+    <>
+      <div className="discover-search-bar">
+        <div className="discover-search-row">
+          <input
+            type="text"
+            className="discover-search-input"
+            placeholder="Search name, type, text..."
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") handleSearch(); }}
+          />
+          <button className="discover-search-go" onClick={handleSearch} disabled={loading}>
+            {loading ? "..." : (
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="11" cy="11" r="8" />
+                <line x1="21" y1="21" x2="16.65" y2="16.65" />
+              </svg>
+            )}
+          </button>
+        </div>
+      </div>
+
+      <div className="discover-page">
       <button className="discover-filter-toggle" onClick={() => setFiltersOpen(!filtersOpen)}>
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <line x1="4" y1="6" x2="20" y2="6" />
@@ -74,18 +96,6 @@ function DiscoverBrowser({ imageMode, onToggleImageMode, enabled = true }) {
           {hasFilters && (
             <button className="discover-clear-all" onClick={clearAll}>Clear All</button>
           )}
-        </div>
-
-        <div className="filter-section">
-          <div className="filter-section-title">Keyword Search</div>
-          <input
-            type="text"
-            className="discover-search-input"
-            placeholder="Search name, type, text..."
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter") handleSearch(); }}
-          />
         </div>
 
         <FilterSection title="Colors" onClear={colors.size ? () => setColors(new Set()) : null}>
@@ -221,13 +231,6 @@ function DiscoverBrowser({ imageMode, onToggleImageMode, enabled = true }) {
           <span className="discover-results-count">
             {loading ? "Searching..." : `${total.toLocaleString()} cards found`}
           </span>
-          <button type="button" className="image-mode-btn" onClick={onToggleImageMode} title={imageMode === "border_crop" ? "Art Mode" : "Card Mode"}>
-            {imageMode === "border_crop" ? (
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2" /><circle cx="8.5" cy="8.5" r="1.5" /><polyline points="21 15 16 10 5 21" /></svg>
-            ) : (
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="3" width="20" height="18" rx="2" ry="2" /><line x1="2" y1="7" x2="22" y2="7" /><line x1="2" y1="17" x2="22" y2="17" /></svg>
-            )}
-          </button>
         </div>
 
         {loading && <div className="loading"><div className="loading-spinner" /></div>}
@@ -240,6 +243,7 @@ function DiscoverBrowser({ imageMode, onToggleImageMode, enabled = true }) {
         )}
       </div>
     </div>
+    </>
   );
 }
 
