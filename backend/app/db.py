@@ -59,12 +59,16 @@ def _decode_card_data(value):
 
 
 def _serialize_user_row(row) -> dict:
-    return {
+    result = {
         "id": str(row["id"]),
         "username": row["username"],
         "role": row["role"],
         "created_at": row["created_at"].isoformat(),
     }
+    if "email" in row.keys():
+        result["email"] = row["email"]
+        result["email_verified"] = row["email_verified"]
+    return result
 
 
 def _serialize_deck_row(row) -> dict:
@@ -238,30 +242,101 @@ async def get_cards_by_ids(card_ids: list[str]) -> list[dict]:
 # ── User functions ──────────────────────────────────────────────────────
 
 
-async def create_user(username: str, password_hash: str, role: str = "user") -> dict:
+async def create_user(username: str, password_hash: str, role: str = "user",
+                      email: str | None = None, email_verified: bool = False) -> dict:
     pool = await get_pool()
     row = await pool.fetchrow(
-        "INSERT INTO users (username, password_hash, role) VALUES ($1, $2, $3) RETURNING id, username, role, created_at",
-        username, password_hash, role,
+        """INSERT INTO users (username, password_hash, role, email, email_verified)
+           VALUES ($1, $2, $3, $4, $5)
+           RETURNING id, username, role, email, email_verified, created_at""",
+        username, password_hash, role, email, email_verified,
     )
-    return {"id": str(row["id"]), "username": row["username"], "role": row["role"]}
+    return {
+        "id": str(row["id"]), "username": row["username"], "role": row["role"],
+        "email": row["email"], "email_verified": row["email_verified"],
+    }
 
 
 async def get_user_by_username(username: str) -> dict | None:
     pool = await get_pool()
     row = await pool.fetchrow(
-        "SELECT id, username, password_hash, role FROM users WHERE username = $1",
+        "SELECT id, username, password_hash, role, email, email_verified FROM users WHERE username = $1",
         username,
     )
     if not row:
         return None
-    return {"id": str(row["id"]), "username": row["username"], "password_hash": row["password_hash"], "role": row["role"]}
+    return {
+        "id": str(row["id"]), "username": row["username"],
+        "password_hash": row["password_hash"], "role": row["role"],
+        "email": row["email"], "email_verified": row["email_verified"],
+    }
+
+
+async def get_user_by_email(email: str) -> dict | None:
+    pool = await get_pool()
+    row = await pool.fetchrow(
+        "SELECT id, username, role, email, email_verified FROM users WHERE email = $1",
+        email,
+    )
+    if not row:
+        return None
+    return {
+        "id": str(row["id"]), "username": row["username"], "role": row["role"],
+        "email": row["email"], "email_verified": row["email_verified"],
+    }
+
+
+MAX_VERIFICATION_ATTEMPTS = 5
+
+
+async def set_verification_code(user_id: str, code: str, expires_at) -> None:
+    pool = await get_pool()
+    await pool.execute(
+        """UPDATE users SET verification_code = $1, verification_code_expires_at = $2,
+                           verification_attempts = 0
+           WHERE id = $3::uuid""",
+        code, expires_at, user_id,
+    )
+
+
+async def verify_user_email(user_id: str, code: str) -> str:
+    """Check the verification code and mark email as verified.
+
+    Returns: "ok", "invalid", or "too_many_attempts".
+    """
+    pool = await get_pool()
+    # Check attempt count first
+    row = await pool.fetchrow(
+        "SELECT verification_attempts, verification_code, verification_code_expires_at FROM users WHERE id = $1::uuid",
+        user_id,
+    )
+    if not row:
+        return "invalid"
+    if row["verification_attempts"] >= MAX_VERIFICATION_ATTEMPTS:
+        return "too_many_attempts"
+
+    # Increment attempts
+    await pool.execute(
+        "UPDATE users SET verification_attempts = verification_attempts + 1 WHERE id = $1::uuid",
+        user_id,
+    )
+
+    # Try to verify
+    matched = await pool.fetchrow(
+        """UPDATE users SET email_verified = TRUE, verification_code = NULL,
+                           verification_code_expires_at = NULL, verification_attempts = 0
+           WHERE id = $1::uuid AND verification_code = $2
+             AND verification_code_expires_at > now()
+           RETURNING id""",
+        user_id, code,
+    )
+    return "ok" if matched else "invalid"
 
 
 async def get_user_by_id(user_id: str) -> dict | None:
     pool = await get_pool()
     row = await pool.fetchrow(
-        "SELECT id, username, role, created_at FROM users WHERE id = $1::uuid",
+        "SELECT id, username, role, email, email_verified, created_at FROM users WHERE id = $1::uuid",
         user_id,
     )
     if not row:
@@ -271,7 +346,7 @@ async def get_user_by_id(user_id: str) -> dict | None:
 
 async def list_all_users() -> list[dict]:
     pool = await get_pool()
-    rows = await pool.fetch("SELECT id, username, role, created_at FROM users ORDER BY created_at")
+    rows = await pool.fetch("SELECT id, username, role, email, email_verified, created_at FROM users ORDER BY created_at")
     return [_serialize_user_row(row) for row in rows]
 
 
@@ -708,12 +783,13 @@ async def discover_cards(
 # ── Search log functions ───────────────────────────────────────────────
 
 
-async def log_search(user_id: str | None, query: str, tokens_prompt: int, tokens_completion: int):
+async def log_search(user_id: str | None, query: str, tokens_prompt: int, tokens_completion: int,
+                     ip_address: str | None = None):
     """Log a search request with optional user and token usage."""
     pool = await get_pool()
     await pool.execute(
-        "INSERT INTO search_logs (user_id, query, tokens_prompt, tokens_completion) VALUES ($1::uuid, $2, $3, $4)",
-        user_id, query, tokens_prompt, tokens_completion,
+        "INSERT INTO search_logs (user_id, query, tokens_prompt, tokens_completion, ip_address) VALUES ($1::uuid, $2, $3, $4, $5)",
+        user_id, query, tokens_prompt, tokens_completion, ip_address,
     )
 
 

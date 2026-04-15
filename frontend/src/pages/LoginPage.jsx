@@ -8,8 +8,15 @@ function LoginPage() {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+  const [email, setEmail] = useState("");
   const [submitting, setSubmitting] = useState(false);
-  const { login, register } = useAuth();
+
+  // Verification state
+  const [showVerification, setShowVerification] = useState(false);
+  const [verificationCode, setVerificationCode] = useState("");
+  const [resending, setResending] = useState(false);
+
+  const { login, register, verifyEmail, resendVerification } = useAuth();
   const { showToast } = useToast();
   const navigate = useNavigate();
 
@@ -20,19 +27,47 @@ function LoginPage() {
       showToast("两次输入的密码不一致", "error");
       return;
     }
-    if (tab === "register" && password.length < 4) {
-      showToast("密码至少需要4个字符", "error");
+    if (tab === "register" && password.length < 6) {
+      showToast("密码至少需要6个字符", "error");
+      return;
+    }
+    if (tab === "register" && !email.trim()) {
+      showToast("请输入邮箱地址", "error");
       return;
     }
     setSubmitting(true);
     try {
       if (tab === "login") {
-        await login(username.trim(), password);
-        showToast("登录成功");
+        const user = await login(username.trim(), password);
+        if (user.email_verified === false) {
+          setEmail(user.email || "");
+          // Resend a fresh code since the old one may have expired
+          try { await resendVerification(); } catch {}
+          setShowVerification(true);
+          showToast("请先验证邮箱，验证码已发送");
+        } else {
+          showToast("登录成功");
+          navigate("/");
+        }
       } else {
-        await register(username.trim(), password);
-        showToast("注册成功");
+        await register(username.trim(), password, email.trim());
+        showToast("注册成功，验证码已发送到邮箱");
+        setShowVerification(true);
       }
+    } catch (err) {
+      showToast(err.message, "error");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleVerify = async (e) => {
+    e.preventDefault();
+    if (!verificationCode.trim()) return;
+    setSubmitting(true);
+    try {
+      await verifyEmail(verificationCode.trim());
+      showToast("邮箱验证成功");
       navigate("/");
     } catch (err) {
       showToast(err.message, "error");
@@ -40,6 +75,60 @@ function LoginPage() {
       setSubmitting(false);
     }
   };
+
+  const handleResend = async () => {
+    setResending(true);
+    try {
+      await resendVerification();
+      showToast("验证码已重新发送");
+    } catch (err) {
+      showToast(err.message, "error");
+    } finally {
+      setResending(false);
+    }
+  };
+
+  if (showVerification) {
+    return (
+      <div className="login-page">
+        <div className="login-card">
+          <h2 className="login-title">验证邮箱</h2>
+          <p className="verify-hint">
+            验证码已发送至 <strong>{email || "你的邮箱"}</strong>，请查收并输入 6 位验证码。
+          </p>
+          <form onSubmit={handleVerify} className="login-form">
+            <div className="form-group">
+              <label htmlFor="verification-code">验证码</label>
+              <input
+                id="verification-code"
+                type="text"
+                inputMode="numeric"
+                maxLength={6}
+                value={verificationCode}
+                onChange={(e) => setVerificationCode(e.target.value.replace(/\D/g, ""))}
+                placeholder="输入 6 位验证码"
+                autoComplete="one-time-code"
+                disabled={submitting}
+                className="verify-code-input"
+              />
+            </div>
+            <button type="submit" className="login-submit" disabled={submitting || verificationCode.length !== 6}>
+              {submitting ? "验证中..." : "确认验证"}
+            </button>
+          </form>
+          <div className="verify-actions">
+            <button
+              className="verify-resend"
+              onClick={handleResend}
+              disabled={resending}
+            >
+              {resending ? "发送中..." : "重新发送验证码"}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="login-page">
@@ -74,6 +163,20 @@ function LoginPage() {
               disabled={submitting}
             />
           </div>
+          {tab === "register" && (
+            <div className="form-group">
+              <label htmlFor="email">邮箱</label>
+              <input
+                id="email"
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="输入邮箱地址"
+                autoComplete="email"
+                disabled={submitting}
+              />
+            </div>
+          )}
           <div className="form-group">
             <label htmlFor="password">密码</label>
             <input

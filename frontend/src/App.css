@@ -1205,6 +1205,52 @@ body {
   cursor: not-allowed;
 }
 
+.verify-hint {
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+  text-align: center;
+  margin-bottom: 1.2rem;
+  line-height: 1.5;
+}
+
+.verify-hint strong {
+  color: var(--accent);
+  word-break: break-all;
+}
+
+.verify-code-input {
+  text-align: center;
+  font-size: 1.5rem !important;
+  letter-spacing: 8px;
+  font-weight: 600;
+}
+
+.verify-actions {
+  display: flex;
+  justify-content: center;
+  margin-top: 1rem;
+}
+
+.verify-resend {
+  background: none;
+  border: none;
+  color: var(--accent);
+  font-family: "Crimson Text", Georgia, serif;
+  font-size: 0.9rem;
+  cursor: pointer;
+  text-decoration: underline;
+  padding: 0.3rem 0.5rem;
+}
+
+.verify-resend:hover:not(:disabled) {
+  color: var(--accent-hover);
+}
+
+.verify-resend:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 /* ===== Decks Page ===== */
 .decks-page {
   max-width: 900px;

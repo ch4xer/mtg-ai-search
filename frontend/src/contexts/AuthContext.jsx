@@ -72,11 +72,11 @@ export function AuthProvider({ children }) {
     return data.user;
   }, []);
 
-  const register = useCallback(async (username, password) => {
+  const register = useCallback(async (username, password, email) => {
     const res = await fetch("/api/auth/register", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username, password }),
+      body: JSON.stringify({ username, password, email }),
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
@@ -88,6 +88,34 @@ export function AuthProvider({ children }) {
     return data.user;
   }, []);
 
+  const verifyEmail = useCallback(async (code) => {
+    const res = await apiFetch("/api/auth/verify-email", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || "Verification failed");
+    }
+    // Update local user state
+    setUser((prev) => {
+      const updated = { ...prev, email_verified: true };
+      localStorage.setItem("mtg-user", JSON.stringify(updated));
+      return updated;
+    });
+  }, []);
+
+  const resendVerification = useCallback(async () => {
+    const res = await apiFetch("/api/auth/resend-verification", {
+      method: "POST",
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || "Failed to resend code");
+    }
+  }, []);
+
   const logout = useCallback(() => {
     clearTokens();
     localStorage.removeItem("mtg-user");
@@ -95,7 +123,7 @@ export function AuthProvider({ children }) {
   }, []);
 
   return (
-    <AuthContext.Provider value={{ user, loading, login, register, logout }}>
+    <AuthContext.Provider value={{ user, loading, login, register, logout, verifyEmail, resendVerification }}>
       {children}
     </AuthContext.Provider>
   );
