@@ -233,7 +233,25 @@ async def incremental_sync(status_callback: StatusCallback = None) -> dict:
                 _emit_status(status_callback, "正在同步卡牌数据...")
                 insert_cards(conn, valid_cards)
 
+                # Remove stale cards whose id is no longer in oracle_cards.
+                # When Scryfall picks a new preferred printing for a card,
+                # the old id stays in our DB alongside the new one, causing
+                # duplicate names.  Clean them up here.
+                current_ids = [c["id"] for c in valid_cards]
                 with conn.cursor() as cur:
+                    cur.execute("CREATE TEMP TABLE _sync_ids (id TEXT PRIMARY KEY)")
+                    batch_size = 5000
+                    for i in range(0, len(current_ids), batch_size):
+                        batch = [(cid,) for cid in current_ids[i:i + batch_size]]
+                        cur.executemany("INSERT INTO _sync_ids (id) VALUES (%s)", batch)
+                    cur.execute("""
+                        DELETE FROM cards
+                        WHERE id NOT IN (SELECT id FROM _sync_ids)
+                    """)
+                    deleted = cur.rowcount
+                    cur.execute("DROP TABLE _sync_ids")
+                    if deleted:
+                        logger.info("[sync] Removed %d stale card rows.", deleted)
                     cur.execute("""
                         UPDATE cards SET is_playtest = TRUE
                         WHERE is_playtest = FALSE AND data->>'set_type' = 'funny'
