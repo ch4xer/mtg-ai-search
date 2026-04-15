@@ -836,12 +836,22 @@ async def get_user_search_stats() -> list[dict]:
     ]
 
 
-async def get_user_daily_search_count(user_id: str) -> int:
-    """Count today's AI searches for a given user (UTC day)."""
+async def get_user_hourly_search_count(user_id: str) -> int:
+    """Count AI searches in the last hour for a given user."""
     pool = await get_pool()
     row = await pool.fetchrow(
-        "SELECT COUNT(*) AS cnt FROM search_logs WHERE user_id = $1::uuid AND created_at >= date_trunc('day', now())",
+        "SELECT COUNT(*) AS cnt FROM search_logs WHERE user_id = $1::uuid AND created_at >= now() - interval '1 hour'",
         user_id,
+    )
+    return int(row["cnt"]) if row else 0
+
+
+async def get_ip_hourly_search_count(ip_address: str) -> int:
+    """Count AI searches in the last hour for a given IP address."""
+    pool = await get_pool()
+    row = await pool.fetchrow(
+        "SELECT COUNT(*) AS cnt FROM search_logs WHERE ip_address = $1 AND user_id IS NULL AND created_at >= now() - interval '1 hour'",
+        ip_address,
     )
     return int(row["cnt"]) if row else 0
 

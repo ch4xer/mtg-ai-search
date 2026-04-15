@@ -1,20 +1,21 @@
 import asyncio
 import os
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from .agent import run_search
-from .auth import get_current_user
 from .config import get_allowed_origins
-from .db import discover_cards, get_user_by_id, get_user_daily_search_count, log_search
+from .db import discover_cards, get_ip_hourly_search_count, get_user_by_id, get_user_hourly_search_count, log_search
+from .dependencies import get_optional_user
 from .routes_admin import admin_router
 from .routes_auth import auth_router
 from .routes_decks import deck_router
 from .startup import lifespan
 
-DAILY_SEARCH_LIMIT = int(os.getenv("DAILY_SEARCH_LIMIT", "30"))
+ANON_HOURLY_LIMIT = int(os.getenv("ANON_HOURLY_LIMIT", "5"))
+USER_HOURLY_LIMIT = int(os.getenv("USER_HOURLY_LIMIT", "30"))
 
 
 app = FastAPI(title="MTG AI Card Search", lifespan=lifespan, redirect_slashes=False)
@@ -40,16 +41,39 @@ class SearchResponse(BaseModel):
     results: list[dict]
 
 
+def _get_client_ip(request: Request) -> str:
+    """Extract client IP, respecting X-Forwarded-For behind a reverse proxy."""
+    forwarded = request.headers.get("X-Forwarded-For")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
 @app.post("/api/search", response_model=SearchResponse)
-async def search_cards(request: SearchRequest, user_id: str = Depends(get_current_user)):
-    # Rate limit: check daily search count (admin exempt)
-    user = await get_user_by_id(user_id)
-    if not user or user.get("role") != "admin":
-        count = await get_user_daily_search_count(user_id)
-        if count >= DAILY_SEARCH_LIMIT:
+async def search_cards(
+    request: SearchRequest,
+    raw_request: Request,
+    user_id: str | None = Depends(get_optional_user),
+):
+    client_ip = _get_client_ip(raw_request)
+
+    if user_id:
+        # Registered user: 30/hour (admin exempt)
+        user = await get_user_by_id(user_id)
+        if not user or user.get("role") != "admin":
+            count = await get_user_hourly_search_count(user_id)
+            if count >= USER_HOURLY_LIMIT:
+                raise HTTPException(
+                    status_code=429,
+                    detail=f"搜索次数已达上限 ({USER_HOURLY_LIMIT}次/小时)",
+                )
+    else:
+        # Anonymous user: 10/hour by IP
+        count = await get_ip_hourly_search_count(client_ip)
+        if count >= ANON_HOURLY_LIMIT:
             raise HTTPException(
                 status_code=429,
-                detail=f"今日搜索次数已达上限 ({DAILY_SEARCH_LIMIT}次/天)",
+                detail=f"未登录用户搜索次数已达上限 ({ANON_HOURLY_LIMIT}次/小时)，请登录后使用",
             )
 
     search_result = await run_search(request.query)
@@ -58,6 +82,7 @@ async def search_cards(request: SearchRequest, user_id: str = Depends(get_curren
         user_id, request.query,
         search_result["tokens_prompt"],
         search_result["tokens_completion"],
+        ip_address=client_ip,
     ))
     return SearchResponse(results=search_result["ranked_results"])
 

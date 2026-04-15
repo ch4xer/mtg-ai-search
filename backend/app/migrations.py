@@ -71,8 +71,10 @@ CREATE INDEX IF NOT EXISTS idx_sync_logs_started_at ON sync_logs(started_at DESC
 
 CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
 CREATE INDEX IF NOT EXISTS idx_decks_user_id ON decks(user_id);
+ALTER TABLE search_logs ADD COLUMN IF NOT EXISTS ip_address TEXT;
 CREATE INDEX IF NOT EXISTS idx_search_logs_user_id ON search_logs(user_id);
 CREATE INDEX IF NOT EXISTS idx_search_logs_created_at ON search_logs(created_at);
+CREATE INDEX IF NOT EXISTS idx_search_logs_ip_address ON search_logs(ip_address);
 """
 
 # Migrations for the cards table (added after it has been seeded).
