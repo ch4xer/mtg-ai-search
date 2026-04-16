@@ -1,9 +1,11 @@
-import { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { apiFetch, getAccessToken } from "../utils/apiFetch.js";
 import { useToast } from "../contexts/ToastContext.jsx";
+import { useLanguage } from "../contexts/LanguageContext.jsx";
 import { FORMATS, getFormatLabel, getCardLegality, isCardLegal, legalityLabel } from "../utils/formats.js";
 import { getImageUri } from "../utils/cardImage.js";
+import { parseManaCost, parseOracleText } from "../utils/manaSymbols.js";
 
 /* ── Type classification ── */
 
@@ -20,9 +22,25 @@ function classifyCard(card) {
   return "Other";
 }
 
-const TYPE_LABELS = {
+const TYPE_LABELS_EN = {
+  Creature: "Creature", Planeswalker: "Planeswalker", Instant: "Instant", Sorcery: "Sorcery",
+  Enchantment: "Enchantment", Artifact: "Artifact", Land: "Land", Other: "Other",
+};
+
+const TYPE_LABELS_ZH = {
   Creature: "生物", Planeswalker: "旅法师", Instant: "瞬间", Sorcery: "法术",
   Enchantment: "结界", Artifact: "神器", Land: "地", Other: "其他",
+};
+
+const TYPE_MANA_CLASSES = {
+  Creature: "ms-creature",
+  Planeswalker: "ms-planeswalker",
+  Instant: "ms-instant",
+  Sorcery: "ms-sorcery",
+  Enchantment: "ms-enchantment",
+  Artifact: "ms-artifact",
+  Land: "ms-land",
+  Other: null,
 };
 
 
@@ -32,6 +50,7 @@ function DeckDetailPage({ imageMode }) {
   const { id } = useParams();
   const navigate = useNavigate();
   const { showToast } = useToast();
+  const { t, language } = useLanguage();
   const [deck, setDeck] = useState(null);
   const [cards, setCards] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -39,11 +58,16 @@ function DeckDetailPage({ imageMode }) {
   const [editName, setEditName] = useState("");
   const [exporting, setExporting] = useState(false);
   const [exportProgress, setExportProgress] = useState(null);
+  const [exportingImages, setExportingImages] = useState(false);
+  const [exportImagesProgress, setExportImagesProgress] = useState(null);
   const [importing, setImporting] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
   const [importText, setImportText] = useState("");
   const [importNotFound, setImportNotFound] = useState([]);
   const [selectedCard, setSelectedCard] = useState(null);
+  const [showExportMenu, setShowExportMenu] = useState(false);
+
+  const TYPE_LABELS = language === 'zh' ? TYPE_LABELS_ZH : TYPE_LABELS_EN;
 
   // ── Data fetching ──
 
@@ -54,7 +78,7 @@ function DeckDetailPage({ imageMode }) {
         apiFetch(`/api/decks/${id}/cards`),
       ]);
       if (deckRes.status === 404) {
-        showToast("卡组不存在", "error");
+        showToast(t('deckNotFound'), "error");
         navigate("/decks");
         return;
       }
@@ -65,7 +89,7 @@ function DeckDetailPage({ imageMode }) {
         setCards(await cardsRes.json());
       }
     } catch {
-      showToast("加载失败", "error");
+      showToast(t('loadFailed'), "error");
     } finally {
       setLoading(false);
     }
@@ -73,8 +97,42 @@ function DeckDetailPage({ imageMode }) {
 
   useEffect(() => { fetchDeck(); }, [id]);
 
-  // ── Group cards by type ──
+  // Close export dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (showExportMenu && !e.target.closest('.export-dropdown')) {
+        setShowExportMenu(false);
+      }
+    };
+    document.addEventListener('click', handleClickOutside);
+    return () => document.removeEventListener('click', handleClickOutside);
+  }, [showExportMenu]);
 
+  // ── Group cards by board, then by type ──
+
+  const { mainboardGroups, sideboardGroups } = useMemo(() => {
+    const buildGroups = (boardCards) => {
+      const groups = {};
+      for (const item of boardCards) {
+        const type = classifyCard(item.card);
+        if (!groups[type]) groups[type] = [];
+        groups[type].push(item);
+      }
+      const ordered = [];
+      for (const type of TYPE_ORDER) {
+        if (groups[type]) {
+          const count = groups[type].reduce((s, c) => s + c.quantity, 0);
+          ordered.push({ type, label: TYPE_LABELS[type], count, items: groups[type] });
+        }
+      }
+      return ordered;
+    };
+    const mainCards = cards.filter((c) => c.board !== "sideboard");
+    const sideCards = cards.filter((c) => c.board === "sideboard");
+    return { mainboardGroups: buildGroups(mainCards), sideboardGroups: buildGroups(sideCards) };
+  }, [cards, language]);
+
+  // Combined for analysis (kept for compatibility)
   const groupedCards = useMemo(() => {
     const groups = {};
     for (const item of cards) {
@@ -82,7 +140,6 @@ function DeckDetailPage({ imageMode }) {
       if (!groups[type]) groups[type] = [];
       groups[type].push(item);
     }
-    // Sort groups by TYPE_ORDER
     const ordered = [];
     for (const type of TYPE_ORDER) {
       if (groups[type]) {
@@ -91,7 +148,7 @@ function DeckDetailPage({ imageMode }) {
       }
     }
     return ordered;
-  }, [cards]);
+  }, [cards, language]);
 
   // ── Deck analysis ──
 
@@ -100,7 +157,9 @@ function DeckDetailPage({ imageMode }) {
 
     // Color distribution
     const colorCounts = { W: 0, U: 0, B: 0, R: 0, G: 0 };
-    const colorLabels = { W: "白", U: "蓝", B: "黑", R: "红", G: "绿" };
+    const colorLabelsEn = { W: "White", U: "Blue", B: "Black", R: "Red", G: "Green" };
+    const colorLabelsZh = { W: "白", U: "蓝", B: "黑", R: "红", G: "绿" };
+    const colorLabels = language === 'zh' ? colorLabelsZh : colorLabelsEn;
     for (const item of cards) {
       const ci = item.card.color_identity || item.card.colors || [];
       for (const c of ci) {
@@ -121,7 +180,9 @@ function DeckDetailPage({ imageMode }) {
 
     // Rarity distribution
     const rarityOrder = ["common", "uncommon", "rare", "mythic"];
-    const rarityLabels = { common: "普通", uncommon: "非普通", rare: "稀有", mythic: "秘稀" };
+    const rarityLabelsEn = { common: "Common", uncommon: "Uncommon", rare: "Rare", mythic: "Mythic" };
+    const rarityLabelsZh = { common: "普通", uncommon: "非普通", rare: "稀有", mythic: "秘稀" };
+    const rarityLabels = language === 'zh' ? rarityLabelsZh : rarityLabelsEn;
     const rarityCounts = {};
     for (const item of cards) {
       const r = item.card.rarity || "common";
@@ -131,7 +192,7 @@ function DeckDetailPage({ imageMode }) {
     const totalColorCards = Object.values(colorCounts).reduce((s, v) => s + v, 0) || 1;
 
     return { colorCounts, colorLabels, totalColorCards, cmcBuckets, cmcMax, rarityCounts, rarityLabels, rarityOrder };
-  }, [cards]);
+  }, [cards, language]);
 
   // Auto-select first card
   useEffect(() => {
@@ -154,7 +215,7 @@ function DeckDetailPage({ imageMode }) {
     if (res.ok) {
       const updated = await res.json();
       setDeck((prev) => ({ ...prev, name: updated.name }));
-      showToast("卡组已重命名");
+      showToast(t('deckRenamed'));
     }
     setEditing(false);
   };
@@ -169,51 +230,53 @@ function DeckDetailPage({ imageMode }) {
     if (res.ok) {
       const updated = await res.json();
       setDeck((prev) => ({ ...prev, format: updated.format }));
-      showToast(`模式已切换为「${getFormatLabel(updated.format)}」`);
+      showToast(language === 'zh' ? `赛制已切换为「${getFormatLabel(updated.format)}」` : `Format changed to "${getFormatLabel(updated.format)}"`);
     }
   };
 
   const handleDelete = async () => {
-    if (!confirm("确定要删除这个卡组吗？")) return;
+    if (!confirm(language === 'zh' ? "确定要删除这个卡组吗？" : "Are you sure you want to delete this deck?")) return;
     const res = await apiFetch(`/api/decks/${id}`, { method: "DELETE" });
     if (res.ok) {
-      showToast("卡组已删除");
+      showToast(t('deckDeleted'));
       navigate("/decks");
     }
   };
 
-  const handleQuantityChange = async (cardId, delta) => {
-    const card = cards.find((c) => c.card_id === cardId);
+  const handleQuantityChange = async (cardId, delta, board = "mainboard") => {
+    const card = cards.find((c) => c.card_id === cardId && c.board === board);
     if (!card) return;
     const newQty = card.quantity + delta;
     if (newQty <= 0) {
-      await handleRemoveCard(cardId);
+      await handleRemoveCard(cardId, board);
       return;
     }
     const res = await apiFetch(`/api/decks/${id}/cards`, {
       method: "POST",
-      body: { card_id: cardId, quantity: delta },
+      body: { card_id: cardId, quantity: delta, board },
     });
     if (res.ok) {
       setCards((prev) =>
-        prev.map((c) => (c.card_id === cardId ? { ...c, quantity: newQty } : c))
+        prev.map((c) => (c.card_id === cardId && c.board === board ? { ...c, quantity: newQty } : c))
       );
-      if (selectedCard?.card_id === cardId) {
+      if (selectedCard?.card_id === cardId && selectedCard?.board === board) {
         setSelectedCard((prev) => ({ ...prev, quantity: newQty }));
       }
     }
   };
 
-  const handleRemoveCard = async (cardId) => {
-    const res = await apiFetch(`/api/decks/${id}/cards/${cardId}`, { method: "DELETE" });
+  const handleRemoveCard = async (cardId, board) => {
+    const boardParam = board ? `?board=${board}` : "";
+    const res = await apiFetch(`/api/decks/${id}/cards/${cardId}${boardParam}`, { method: "DELETE" });
     if (res.ok) {
-      setCards((prev) => prev.filter((c) => c.card_id !== cardId));
-      if (selectedCard?.card_id === cardId) setSelectedCard(null);
-      showToast("已移除卡牌");
+      setCards((prev) => prev.filter((c) => !(c.card_id === cardId && c.board === board)));
+      if (selectedCard?.card_id === cardId && selectedCard?.board === board) setSelectedCard(null);
+      showToast(t('cardRemoved'));
     }
   };
 
   const handleExport = async () => {
+    setShowExportMenu(false);
     setExporting(true);
     setExportProgress({ phase: "download", current: 0, total: 0 });
     try {
@@ -223,7 +286,7 @@ function DeckDetailPage({ imageMode }) {
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        showToast(err.detail || "导出失败", "error");
+        showToast(err.detail || t('exportFailed'), "error");
         return;
       }
       const reader = res.body.getReader();
@@ -246,7 +309,7 @@ function DeckDetailPage({ imageMode }) {
       }
       if (exportId) {
         const pdfRes = await apiFetch(`/api/decks/${id}/export/download/${exportId}`);
-        if (!pdfRes.ok) { showToast("下载 PDF 失败", "error"); return; }
+        if (!pdfRes.ok) { showToast(language === 'zh' ? "下载 PDF 失败" : "Failed to download PDF", "error"); return; }
         const blob = await pdfRes.blob();
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
@@ -254,20 +317,68 @@ function DeckDetailPage({ imageMode }) {
         a.download = `${deck?.name || "deck"}_cards.pdf`;
         a.click();
         URL.revokeObjectURL(url);
-        showToast("PDF 导出成功");
+        showToast(t('exportSuccess'));
       }
-    } catch { showToast("导出失败", "error"); }
+    } catch { showToast(t('exportFailed'), "error"); }
     finally { setExporting(false); setExportProgress(null); }
+  };
+
+  const handleExportImages = async () => {
+    setShowExportMenu(false);
+    setExportingImages(true);
+    setExportImagesProgress({ phase: "download", current: 0, total: 0 });
+    try {
+      const token = getAccessToken();
+      const res = await fetch(`/api/decks/${id}/export/images/stream`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        showToast(err.detail || t('exportFailed'), "error");
+        return;
+      }
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let exportId = null;
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const parts = buffer.split("\n\n");
+        buffer = parts.pop();
+        for (const part of parts) {
+          const line = part.trim();
+          if (!line.startsWith("data: ")) continue;
+          const data = JSON.parse(line.slice(6));
+          if (data.type === "progress") setExportImagesProgress(data);
+          else if (data.type === "complete") exportId = data.export_id;
+        }
+      }
+      if (exportId) {
+        const zipRes = await apiFetch(`/api/decks/${id}/export/images/download/${exportId}`);
+        if (!zipRes.ok) { showToast(language === 'zh' ? "下载 ZIP 失败" : "Failed to download ZIP", "error"); return; }
+        const blob = await zipRes.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `${deck?.name || "deck"}_images.zip`;
+        a.click();
+        URL.revokeObjectURL(url);
+        showToast(t('exportImagesSuccess'));
+      }
+    } catch { showToast(t('exportFailed'), "error"); }
+    finally { setExportingImages(false); setExportImagesProgress(null); }
   };
 
   const handleExportText = async () => {
     try {
       const res = await apiFetch(`/api/decks/${id}/export/text`);
-      if (!res.ok) { showToast(((await res.json().catch(() => ({}))).detail) || "复制失败", "error"); return; }
+      if (!res.ok) { showToast(((await res.json().catch(() => ({}))).detail) || t('copyFailed'), "error"); return; }
       const text = await res.text();
       await navigator.clipboard.writeText(text);
-      showToast("牌表已复制到剪切板");
-    } catch { showToast("复制失败", "error"); }
+      showToast(t('decklistCopied'));
+    } catch { showToast(t('copyFailed'), "error"); }
   };
 
   const handleImportSubmit = async () => {
@@ -275,16 +386,19 @@ function DeckDetailPage({ imageMode }) {
     setImporting(true);
     try {
       const res = await apiFetch(`/api/decks/${id}/import`, { method: "POST", body: { text: importText } });
-      if (!res.ok) { showToast(((await res.json().catch(() => ({}))).detail) || "导入失败", "error"); return; }
+      if (!res.ok) { showToast(((await res.json().catch(() => ({}))).detail) || language === 'zh' ? "导入失败" : "Import failed", "error"); return; }
       const data = await res.json();
       const addedCount = data.added.reduce((s, c) => s + c.quantity, 0);
       const notFoundCount = data.not_found.length;
-      showToast(`成功导入 ${addedCount} 张卡牌${notFoundCount > 0 ? `，${notFoundCount} 张未找到` : ""}`, notFoundCount > 0 ? "warning" : "success");
+      const msg = language === 'zh'
+        ? `成功导入 ${addedCount} 张卡牌${notFoundCount > 0 ? `，${notFoundCount} 张未找到` : ""}`
+        : `Successfully imported ${addedCount} cards${notFoundCount > 0 ? `, ${notFoundCount} not found` : ""}`;
+      showToast(msg, notFoundCount > 0 ? "warning" : "success");
       if (notFoundCount > 0) setImportNotFound(data.not_found);
       setShowImportModal(false);
       setImportText("");
       await fetchDeck();
-    } catch { showToast("导入失败", "error"); }
+    } catch { showToast(language === 'zh' ? "导入失败" : "Import failed", "error"); }
     finally { setImporting(false); }
   };
 
@@ -306,44 +420,77 @@ function DeckDetailPage({ imageMode }) {
     return (
       <div className="loading">
         <div className="loading-spinner" />
-        <p>加载卡组中...</p>
+        <p>{t('loadingDeck')}</p>
       </div>
     );
   }
   if (!deck) return null;
 
-  const totalCards = cards.reduce((sum, c) => sum + c.quantity, 0);
+  const mainboardCount = cards.filter((c) => c.board !== "sideboard").reduce((sum, c) => sum + c.quantity, 0);
+  const sideboardCount = cards.filter((c) => c.board === "sideboard").reduce((sum, c) => sum + c.quantity, 0);
+  const totalCards = mainboardCount + sideboardCount;
 
   return (
     <div className="deck-detail">
       {/* Header */}
       <div className="deck-detail-header">
-        <button className="btn-secondary" onClick={() => navigate("/decks")}>&larr; 返回卡组列表</button>
+        <button className="btn-secondary" onClick={() => navigate("/decks")}>&larr; {t('backToDecks')}</button>
         <div className="deck-detail-title">
           {editing ? (
             <form onSubmit={(e) => { e.preventDefault(); handleRename(); }} className="deck-rename-form">
               <input value={editName} onChange={(e) => setEditName(e.target.value)} autoFocus onBlur={handleRename} />
             </form>
           ) : (
-            <h2 onClick={() => setEditing(true)} title="点击重命名">{deck.name}</h2>
+            <h2 onClick={() => setEditing(true)} title={t('clickToRename')}>{deck.name}</h2>
           )}
           <select
             className={`deck-format-select format-${deck.format || "undefined"}`}
             value={deck.format || "undefined"}
             onChange={handleFormatChange}
-            title="切换模式"
+            title={t('switchFormat')}
           >
             {FORMATS.map((f) => <option key={f.key} value={f.key}>{f.label}</option>)}
           </select>
-          <span className="deck-detail-count">{totalCards} 张卡牌</span>
+          <span className="deck-detail-count">
+            {totalCards} {t('cardsCount')}{sideboardCount > 0 && ` (${t('mainboardCards')} ${mainboardCount} / ${t('sideboardCards')} ${sideboardCount})`}
+          </span>
         </div>
         <div className="deck-detail-actions">
-          <button className="btn-secondary" onClick={() => setShowImportModal(true)}>导入牌表</button>
-          <button className="btn-secondary" onClick={handleExportText} disabled={cards.length === 0}>复制牌表</button>
-          <button className="btn-accent" onClick={handleExport} disabled={exporting || cards.length === 0}>
-            {exporting ? "导出中..." : "导出 PDF"}
-          </button>
-          <button className="btn-danger" onClick={handleDelete}>删除卡组</button>
+          <button className="btn-secondary" onClick={() => setShowImportModal(true)}>{t('importDecklist')}</button>
+          <button className="btn-secondary" onClick={handleExportText} disabled={cards.length === 0}>{t('copyDecklist')}</button>
+          <div className="export-dropdown">
+            <button
+              className="btn-accent"
+              onClick={() => setShowExportMenu(!showExportMenu)}
+              disabled={(exporting || exportingImages) || cards.length === 0}
+            >
+              {exporting || exportingImages ? `${t('downloadProgress')}...` : t('exportDeck')}
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ marginLeft: '4px' }}>
+                <polyline points="6 9 12 15 18 9" />
+              </svg>
+            </button>
+            {showExportMenu && (
+              <div className="export-dropdown-menu">
+                <button onClick={handleExport} disabled={exporting}>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="2" y="3" width="20" height="18" rx="2" ry="2" />
+                    <line x1="2" y1="7" x2="22" y2="7" />
+                    <line x1="2" y1="17" x2="22" y2="17" />
+                  </svg>
+                  {t('exportPdf')}
+                </button>
+                <button onClick={handleExportImages} disabled={exportingImages}>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+                    <circle cx="8.5" cy="8.5" r="1.5" />
+                    <polyline points="21 15 16 10 5 21" />
+                  </svg>
+                  {t('exportImages')}
+                </button>
+              </div>
+            )}
+          </div>
+          <button className="btn-danger" onClick={handleDelete}>{t('deleteDeck')}</button>
         </div>
       </div>
 
@@ -353,7 +500,22 @@ function DeckDetailPage({ imageMode }) {
             <div className="export-progress-fill" style={{ width: `${exportProgress.total > 0 ? (exportProgress.current / exportProgress.total) * 100 : 0}%` }} />
           </div>
           <span className="export-progress-text">
-            {exportProgress.phase === "download" ? `下载卡牌图片 ${exportProgress.current}/${exportProgress.total}` : "生成 PDF..."}
+            {exportProgress.phase === "download"
+              ? `${t('downloadProgress')} ${exportProgress.current}/${exportProgress.total}`
+              : t('generatingPdf')}
+          </span>
+        </div>
+      )}
+
+      {exportImagesProgress && (
+        <div className="export-progress">
+          <div className="export-progress-bar">
+            <div className="export-progress-fill" style={{ width: `${exportImagesProgress.total > 0 ? (exportImagesProgress.current / exportImagesProgress.total) * 100 : 0}%` }} />
+          </div>
+          <span className="export-progress-text">
+            {exportImagesProgress.phase === "download"
+              ? `${t('downloadProgress')} ${exportImagesProgress.current}/${exportImagesProgress.total}`
+              : t('generatingZip')}
           </span>
         </div>
       )}
@@ -361,7 +523,7 @@ function DeckDetailPage({ imageMode }) {
       {importNotFound.length > 0 && (
         <div className="import-not-found">
           <div className="import-not-found-header">
-            <span>以下 {importNotFound.length} 张卡牌未在数据库中找到：</span>
+            <span>{language === 'zh' ? `以下 ${importNotFound.length} 张卡牌未在数据库中找到：` : `The following ${importNotFound.length} cards were not found in the database:`}</span>
             <button className="import-not-found-close" onClick={() => setImportNotFound([])}>&times;</button>
           </div>
           <ul>{importNotFound.map((name, i) => <li key={i}>{name}</li>)}</ul>
@@ -369,7 +531,7 @@ function DeckDetailPage({ imageMode }) {
       )}
 
       {cards.length === 0 ? (
-        <div className="no-results"><p>卡组为空，去搜索页面添加卡牌吧</p></div>
+        <div className="no-results"><p>{t('deckEmpty')}</p></div>
       ) : (
         <div className="deck-body">
           {/* Left: Card detail panel */}
@@ -382,11 +544,21 @@ function DeckDetailPage({ imageMode }) {
                 <div className="deck-preview-info">
                   <h3 className="deck-preview-name">{selectedCard.card.name}</h3>
                   {selectedCard.card.mana_cost && (
-                    <span className="deck-preview-mana">{selectedCard.card.mana_cost}</span>
+                    <span className="deck-preview-mana">
+                      {parseManaCost(selectedCard.card.mana_cost).map((sym, idx) =>
+                        sym.half ? (
+                          <span key={idx} className="ms-half">
+                            <i className={`ms ${sym.classes}`} aria-hidden="true" />
+                          </span>
+                        ) : (
+                          <i key={idx} className={`ms ${sym.classes}`} aria-hidden="true" />
+                        )
+                      )}
+                    </span>
                   )}
                   <p className="deck-preview-type">{selectedCard.card.type_line}</p>
                   {selectedCard.card.oracle_text && (
-                    <p className="deck-preview-oracle">{selectedCard.card.oracle_text}</p>
+                    <p className="deck-preview-oracle">{parseOracleText(selectedCard.card.oracle_text, React.createElement)}</p>
                   )}
                   {(selectedCard.card.power || selectedCard.card.toughness) && (
                     <p className="deck-preview-pt">{selectedCard.card.power}/{selectedCard.card.toughness}</p>
@@ -403,58 +575,118 @@ function DeckDetailPage({ imageMode }) {
               </>
             ) : (
               <div className="deck-preview-empty">
-                <p>点击卡牌查看详情</p>
+                <p>{t('clickCardDetails')}</p>
               </div>
             )}
           </aside>
 
           {/* Center: CSS columns layout */}
           <div className="deck-groups">
-            {groupedCards.map((group) => (
-              <div key={group.type} className="deck-type-group">
-                <div className="deck-type-header">
-                  <span className="deck-type-label">{group.label}</span>
-                  <span className="deck-type-count">{group.count}</span>
-                </div>
-                <div className="deck-stack-grid">
-                  {group.items.map((item) => {
-                    const img = getCardDisplayImage(item);
-                    const isSelected = selectedCard?.card_id === item.card_id;
-                    const illegal = deck.format && deck.format !== "undefined" && !isCardLegal(item.card, deck.format);
-                    return (
-                      <div
-                        key={item.card_id}
-                        className={`deck-stack-card ${isSelected ? "selected" : ""}`}
-                        onMouseEnter={() => setSelectedCard(item)}
-                      >
-                        {img ? (
-                          <img src={img} alt={item.card.name} className="deck-stack-img" loading="lazy" />
-                        ) : (
-                          <div className="deck-stack-placeholder">{item.card.name}</div>
-                        )}
-                        <div className="deck-stack-overlay" />
-                        <div className="deck-stack-name">
-                          {illegal && <span className="deck-illegal-icon" title={`该卡牌在「${getFormatLabel(deck.format)}」中不合法`}>!</span>}
-                          {item.card.name}
-                        </div>
-                        <div className="deck-stack-controls">
-                          <button onClick={(e) => { e.stopPropagation(); handleQuantityChange(item.card_id, -1); }}>-</button>
-                          <span>{item.quantity}</span>
-                          <button onClick={(e) => { e.stopPropagation(); handleQuantityChange(item.card_id, 1); }}>+</button>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            ))}
+            {mainboardGroups.length > 0 && (
+              <>
+                {sideboardGroups.length > 0 && (
+                  <div className="deck-board-header">{t('mainboard')} ({mainboardCount})</div>
+                )}
+                {mainboardGroups.map((group) => (
+                  <div key={group.type} className="deck-type-group">
+                    <div className="deck-type-header">
+                      {TYPE_MANA_CLASSES[group.type] && (
+                        <span className="deck-type-icon">
+                          <i className={`ms ${TYPE_MANA_CLASSES[group.type]}`} aria-hidden="true" />
+                        </span>
+                      )}
+                      <span className="deck-type-label">{group.label}</span>
+                      <span className="deck-type-count">{group.count}</span>
+                    </div>
+                    <div className="deck-stack-grid">
+                      {group.items.map((item) => {
+                        const img = getCardDisplayImage(item);
+                        const isSelected = selectedCard?.card_id === item.card_id && selectedCard?.board === item.board;
+                        const illegal = deck.format && deck.format !== "undefined" && !isCardLegal(item.card, deck.format);
+                        return (
+                          <div
+                            key={item.card_id}
+                            className={`deck-stack-card ${isSelected ? "selected" : ""}`}
+                            onMouseEnter={() => setSelectedCard(item)}
+                          >
+                            {img ? (
+                              <img src={img} alt={item.card.name} className="deck-stack-img" loading="lazy" />
+                            ) : (
+                              <div className="deck-stack-placeholder">{item.card.name}</div>
+                            )}
+                            <div className="deck-stack-overlay" />
+                            <div className="deck-stack-name">
+                              {illegal && <span className="deck-illegal-icon" title={t('cardIllegalInFormat')}>!</span>}
+                              {item.card.name}
+                            </div>
+                            <div className="deck-stack-controls">
+                              <button onClick={(e) => { e.stopPropagation(); handleQuantityChange(item.card_id, -1, item.board); }}>-</button>
+                              <span>{item.quantity}</span>
+                              <button onClick={(e) => { e.stopPropagation(); handleQuantityChange(item.card_id, 1, item.board); }}>+</button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
+              </>
+            )}
+            {sideboardGroups.length > 0 && (
+              <>
+                <div className="deck-board-header">{t('sideboard')} ({sideboardCount})</div>
+                {sideboardGroups.map((group) => (
+                  <div key={`side-${group.type}`} className="deck-type-group">
+                    <div className="deck-type-header">
+                      {TYPE_MANA_CLASSES[group.type] && (
+                        <span className="deck-type-icon">
+                          <i className={`ms ${TYPE_MANA_CLASSES[group.type]}`} aria-hidden="true" />
+                        </span>
+                      )}
+                      <span className="deck-type-label">{group.label}</span>
+                      <span className="deck-type-count">{group.count}</span>
+                    </div>
+                    <div className="deck-stack-grid">
+                      {group.items.map((item) => {
+                        const img = getCardDisplayImage(item);
+                        const isSelected = selectedCard?.card_id === item.card_id && selectedCard?.board === item.board;
+                        const illegal = deck.format && deck.format !== "undefined" && !isCardLegal(item.card, deck.format);
+                        return (
+                          <div
+                            key={`side-${item.card_id}`}
+                            className={`deck-stack-card ${isSelected ? "selected" : ""}`}
+                            onMouseEnter={() => setSelectedCard(item)}
+                          >
+                            {img ? (
+                              <img src={img} alt={item.card.name} className="deck-stack-img" loading="lazy" />
+                            ) : (
+                              <div className="deck-stack-placeholder">{item.card.name}</div>
+                            )}
+                            <div className="deck-stack-overlay" />
+                            <div className="deck-stack-name">
+                              {illegal && <span className="deck-illegal-icon" title={t('cardIllegalInFormat')}>!</span>}
+                              {item.card.name}
+                            </div>
+                            <div className="deck-stack-controls">
+                              <button onClick={(e) => { e.stopPropagation(); handleQuantityChange(item.card_id, -1, item.board); }}>-</button>
+                              <span>{item.quantity}</span>
+                              <button onClick={(e) => { e.stopPropagation(); handleQuantityChange(item.card_id, 1, item.board); }}>+</button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
+              </>
+            )}
           </div>
 
           {/* Right: Deck Analysis */}
           {deckAnalysis && (
             <aside className="deck-analysis">
               <div className="analysis-card">
-                <h3 className="analysis-title">卡牌类型</h3>
+                <h3 className="analysis-title">{t('cardTypes')}</h3>
                 <div className="analysis-bars">
                   {groupedCards.map((group) => (
                     <div key={group.type} className="analysis-bar-row">
@@ -472,7 +704,7 @@ function DeckDetailPage({ imageMode }) {
               </div>
 
               <div className="analysis-card">
-                <h3 className="analysis-title">颜色分布</h3>
+                <h3 className="analysis-title">{t('colorDistribution')}</h3>
                 {(() => {
                   const COLOR_HEX = { W: "#d5c67a", U: "#0e68ab", B: "#3d3a3a", R: "#d3202a", G: "#00733e" };
                   const colors = ["W", "U", "B", "R", "G"];
@@ -513,7 +745,7 @@ function DeckDetailPage({ imageMode }) {
               </div>
 
               <div className="analysis-card">
-                <h3 className="analysis-title">法术力曲线</h3>
+                <h3 className="analysis-title">{t('manaCurve')}</h3>
                 <div className="analysis-mana-curve">
                   {deckAnalysis.cmcBuckets.map((count, i) => (
                     <div key={i} className="mana-curve-col">
@@ -531,7 +763,7 @@ function DeckDetailPage({ imageMode }) {
               </div>
 
               <div className="analysis-card">
-                <h3 className="analysis-title">稀有度分布</h3>
+                <h3 className="analysis-title">{t('rarityDistribution')}</h3>
                 <div className="analysis-bars">
                   {deckAnalysis.rarityOrder.map((r) => {
                     const count = deckAnalysis.rarityCounts[r] || 0;
@@ -561,21 +793,21 @@ function DeckDetailPage({ imageMode }) {
         <div className="modal-overlay" onClick={() => { setShowImportModal(false); setImportText(""); }}>
           <div className="modal-content import-modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
-              <h3>导入牌表</h3>
+              <h3>{t('importDecklist')}</h3>
               <button className="modal-close" onClick={() => { setShowImportModal(false); setImportText(""); }}>&times;</button>
             </div>
             <textarea
               className="import-textarea"
               value={importText}
               onChange={(e) => setImportText(e.target.value)}
-              placeholder={"粘贴牌表文本，每行格式：数量 卡牌名称\n例如：\n1 Sol Ring\n4 Lightning Bolt\n9 Wastes"}
+              placeholder={t('importPlaceholder')}
               autoFocus
               rows={12}
             />
             <div className="modal-actions">
-              <button className="btn-secondary" onClick={() => { setShowImportModal(false); setImportText(""); }}>取消</button>
+              <button className="btn-secondary" onClick={() => { setShowImportModal(false); setImportText(""); }}>{t('cancel')}</button>
               <button className="btn-accent" onClick={handleImportSubmit} disabled={importing || !importText.trim()}>
-                {importing ? "导入中..." : "导入"}
+                {importing ? `${language === 'zh' ? '导入中...' : 'Importing...'}` : `${language === 'zh' ? '导入' : 'Import'}`}
               </button>
             </div>
           </div>

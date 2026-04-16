@@ -6,7 +6,7 @@ export function useDiscoverCards({ enabled = true } = {}) {
   const [q, setQ] = useState("");
   const [colors, setColors] = useState(new Set());
   const [types, setTypes] = useState(new Set());
-  const [rarities, setRarities] = useState(new Set());
+  const [rarity, setRarity] = useState("");
   const [selectedKeywords, setSelectedKeywords] = useState(new Set());
   const [selectedSubtypes, setSelectedSubtypes] = useState(new Set());
   const [includePlaytest, setIncludePlaytest] = useState(false);
@@ -21,19 +21,29 @@ export function useDiscoverCards({ enabled = true } = {}) {
   const [total, setTotal] = useState(0);
   const [facets, setFacets] = useState({});
   const [loading, setLoading] = useState(false);
-  const [keywordSearch, setKeywordSearch] = useState("");
   const [subtypeSearch, setSubtypeSearch] = useState("");
   const [filtersOpen, setFiltersOpen] = useState(false);
+  const [allKeywords, setAllKeywords] = useState([]);
 
   const abortRef = useRef(null);
   const debounceRef = useRef(null);
+
+  // Fetch all keywords on mount
+  useEffect(() => {
+    if (enabled) {
+      fetch("/api/keywords")
+        .then((res) => res.json())
+        .then((data) => setAllKeywords(data.keywords || []))
+        .catch((err) => console.error("Failed to fetch keywords:", err));
+    }
+  }, [enabled]);
 
   const buildBody = useCallback((pageNum) => {
     const body = { page: pageNum, page_size: PAGE_SIZE };
     if (q.trim()) body.q = q.trim();
     if (colors.size > 0) body.colors = [...colors];
     if (types.size > 0) body.types = [...types];
-    if (rarities.size > 0) body.rarities = [...rarities];
+    if (rarity) body.rarities = [rarity];
     if (selectedKeywords.size > 0) body.keywords = [...selectedKeywords];
     if (selectedSubtypes.size > 0) body.subtypes = [...selectedSubtypes];
     if (includePlaytest) body.include_playtest = true;
@@ -44,7 +54,7 @@ export function useDiscoverCards({ enabled = true } = {}) {
     if (toughnessMin !== "") body.toughness_min = parseFloat(toughnessMin);
     if (toughnessMax !== "") body.toughness_max = parseFloat(toughnessMax);
     return body;
-  }, [q, colors, types, rarities, selectedKeywords, selectedSubtypes, includePlaytest, cmcMin, cmcMax, powerMin, powerMax, toughnessMin, toughnessMax]);
+  }, [q, colors, types, rarity, selectedKeywords, selectedSubtypes, includePlaytest, cmcMin, cmcMax, powerMin, powerMax, toughnessMin, toughnessMax]);
 
   const fetchResults = useCallback(async (pageNum) => {
     if (abortRef.current) abortRef.current.abort();
@@ -99,7 +109,7 @@ export function useDiscoverCards({ enabled = true } = {}) {
     setQ("");
     setColors(new Set());
     setTypes(new Set());
-    setRarities(new Set());
+    setRarity("");
     setSelectedKeywords(new Set());
     setSelectedSubtypes(new Set());
     setSubtypeSearch("");
@@ -110,7 +120,6 @@ export function useDiscoverCards({ enabled = true } = {}) {
     setPowerMax("");
     setToughnessMin("");
     setToughnessMax("");
-    setKeywordSearch("");
   }, []);
 
   const handlePageChange = useCallback((newPage) => {
@@ -123,10 +132,7 @@ export function useDiscoverCards({ enabled = true } = {}) {
   const subtypeFacets = (facets.subtypes || []).filter(
     (st) => st.name.toLowerCase().includes(subtypeSearch.toLowerCase())
   );
-  const keywordFacets = (facets.keywords || []).filter(
-    (kw) => kw.name.toLowerCase().includes(keywordSearch.toLowerCase())
-  );
-  const hasFilters = q || colors.size || types.size || rarities.size || selectedKeywords.size || selectedSubtypes.size
+  const hasFilters = q || colors.size || types.size || rarity || selectedKeywords.size || selectedSubtypes.size
     || cmcMin !== "" || cmcMax !== "" || powerMin !== "" || powerMax !== ""
     || toughnessMin !== "" || toughnessMax !== "";
 
@@ -134,7 +140,7 @@ export function useDiscoverCards({ enabled = true } = {}) {
     q, setQ,
     colors, setColors,
     types, setTypes,
-    rarities, setRarities,
+    rarity, setRarity,
     selectedKeywords, setSelectedKeywords,
     selectedSubtypes, setSelectedSubtypes,
     includePlaytest, setIncludePlaytest,
@@ -149,7 +155,6 @@ export function useDiscoverCards({ enabled = true } = {}) {
     total,
     facets,
     loading,
-    keywordSearch, setKeywordSearch,
     subtypeSearch, setSubtypeSearch,
     filtersOpen, setFiltersOpen,
     toggleSet,
@@ -158,7 +163,8 @@ export function useDiscoverCards({ enabled = true } = {}) {
     handlePageChange,
     showSubtypes,
     subtypeFacets,
-    keywordFacets,
+    keywordFacets: facets.keywords || [],
+    allKeywords,
     hasFilters,
     totalPages: Math.ceil(total / PAGE_SIZE),
   };

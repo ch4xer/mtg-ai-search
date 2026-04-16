@@ -239,6 +239,38 @@ async def get_cards_by_ids(card_ids: list[str]) -> list[dict]:
     return [card_map[cid] for cid in card_ids if cid in card_map]
 
 
+async def get_all_keywords() -> list[str]:
+    """Return all keyword ability names from the database."""
+    pool = await get_pool()
+    rows = await pool.fetch("SELECT name FROM keyword_abilities ORDER BY name")
+    return [row["name"] for row in rows]
+
+
+async def text_match_cards(query: str, limit: int = 20) -> list[dict]:
+    """Search cards by exact substring match on name, oracle_text, or type_line.
+
+    Returns full card data for matches, deduplicated by name (keeps the
+    newest printing), prioritising name matches first.
+    """
+    pool = await get_pool()
+    pattern = f"%{query}%"
+    rows = await pool.fetch(
+        """SELECT data FROM (
+             SELECT DISTINCT ON (name) data,
+                    CASE WHEN name ILIKE $1 THEN 0 ELSE 1 END AS sort_key
+             FROM cards
+             WHERE name ILIKE $1
+                OR data->>'oracle_text' ILIKE $1
+                OR data->>'type_line' ILIKE $1
+             ORDER BY name, data->>'released_at' DESC
+           ) sub
+           ORDER BY sort_key, sub.data->>'name'
+           LIMIT $2""",
+        pattern, limit,
+    )
+    return [_decode_card_data(row["data"]) for row in rows]
+
+
 # ── User functions ──────────────────────────────────────────────────────
 
 
@@ -440,7 +472,7 @@ async def delete_deck(deck_id: str):
 async def get_deck_cards(deck_id: str) -> list[dict]:
     pool = await get_pool()
     rows = await pool.fetch(
-        """SELECT dc.card_id, dc.quantity, dc.added_at, dc.image_url, dc.display_url, c.data
+        """SELECT dc.card_id, dc.quantity, dc.added_at, dc.image_url, dc.display_url, dc.board, c.data
            FROM deck_cards dc
            JOIN cards c ON c.id = dc.card_id
            WHERE dc.deck_id = $1::uuid
@@ -454,6 +486,7 @@ async def get_deck_cards(deck_id: str) -> list[dict]:
             "quantity": r["quantity"],
             "image_url": r["image_url"],
             "display_url": r["display_url"],
+            "board": r["board"],
             "added_at": r["added_at"].isoformat(),
         }
         for r in rows
@@ -463,37 +496,46 @@ async def get_deck_cards(deck_id: str) -> list[dict]:
 async def add_card_to_deck(
     deck_id: str, card_id: str, quantity: int = 1,
     image_url: str | None = None, display_url: str | None = None,
-    update_image: bool = False,
+    update_image: bool = False, board: str = "mainboard",
 ) -> dict:
     pool = await get_pool()
     if update_image:
         row = await pool.fetchrow(
-            """INSERT INTO deck_cards (deck_id, card_id, quantity, image_url, display_url)
-               VALUES ($1::uuid, $2, $3, $4, $5)
-               ON CONFLICT (deck_id, card_id)
+            """INSERT INTO deck_cards (deck_id, card_id, quantity, image_url, display_url, board)
+               VALUES ($1::uuid, $2, $3, $4, $5, $6)
+               ON CONFLICT (deck_id, card_id, board)
                DO UPDATE SET quantity = deck_cards.quantity + EXCLUDED.quantity,
                              image_url = $4,
                              display_url = $5
-               RETURNING card_id, quantity""",
-            deck_id, card_id, quantity, image_url, display_url,
+               RETURNING card_id, quantity, board""",
+            deck_id, card_id, quantity, image_url, display_url, board,
         )
     else:
         row = await pool.fetchrow(
-            """INSERT INTO deck_cards (deck_id, card_id, quantity, image_url, display_url)
-               VALUES ($1::uuid, $2, $3, $4, $5)
-               ON CONFLICT (deck_id, card_id)
+            """INSERT INTO deck_cards (deck_id, card_id, quantity, image_url, display_url, board)
+               VALUES ($1::uuid, $2, $3, $4, $5, $6)
+               ON CONFLICT (deck_id, card_id, board)
                DO UPDATE SET quantity = deck_cards.quantity + EXCLUDED.quantity,
                              image_url = COALESCE(EXCLUDED.image_url, deck_cards.image_url),
                              display_url = COALESCE(EXCLUDED.display_url, deck_cards.display_url)
-               RETURNING card_id, quantity""",
-            deck_id, card_id, quantity, image_url, display_url,
+               RETURNING card_id, quantity, board""",
+            deck_id, card_id, quantity, image_url, display_url, board,
         )
-    return {"card_id": row["card_id"], "quantity": row["quantity"]}
+    return {"card_id": row["card_id"], "quantity": row["quantity"], "board": row["board"]}
 
 
-async def remove_card_from_deck(deck_id: str, card_id: str):
+async def remove_card_from_deck(deck_id: str, card_id: str, board: str | None = None):
     pool = await get_pool()
-    await pool.execute("DELETE FROM deck_cards WHERE deck_id = $1::uuid AND card_id = $2", deck_id, card_id)
+    if board:
+        await pool.execute(
+            "DELETE FROM deck_cards WHERE deck_id = $1::uuid AND card_id = $2 AND board = $3",
+            deck_id, card_id, board,
+        )
+    else:
+        await pool.execute(
+            "DELETE FROM deck_cards WHERE deck_id = $1::uuid AND card_id = $2",
+            deck_id, card_id,
+        )
 
 
 async def update_deck_card_image(
@@ -501,6 +543,7 @@ async def update_deck_card_image(
     card_id: str,
     image_url: str | None,
     display_url: str | None,
+    board: str | None = None,
 ) -> dict | None:
     """Update the image override for a deck card without touching quantity.
 
@@ -508,13 +551,22 @@ async def update_deck_card_image(
     Returns the updated row or None if the card is not in the deck.
     """
     pool = await get_pool()
-    row = await pool.fetchrow(
-        """UPDATE deck_cards
-           SET image_url = $3, display_url = $4
-           WHERE deck_id = $1::uuid AND card_id = $2
-           RETURNING card_id, quantity, image_url, display_url""",
-        deck_id, card_id, image_url, display_url,
-    )
+    if board:
+        row = await pool.fetchrow(
+            """UPDATE deck_cards
+               SET image_url = $3, display_url = $4
+               WHERE deck_id = $1::uuid AND card_id = $2 AND board = $5
+               RETURNING card_id, quantity, image_url, display_url, board""",
+            deck_id, card_id, image_url, display_url, board,
+        )
+    else:
+        row = await pool.fetchrow(
+            """UPDATE deck_cards
+               SET image_url = $3, display_url = $4
+               WHERE deck_id = $1::uuid AND card_id = $2
+               RETURNING card_id, quantity, image_url, display_url, board""",
+            deck_id, card_id, image_url, display_url,
+        )
     if not row:
         return None
     return {
@@ -522,6 +574,7 @@ async def update_deck_card_image(
         "quantity": row["quantity"],
         "image_url": row["image_url"],
         "display_url": row["display_url"],
+        "board": row["board"],
     }
 
 
@@ -553,20 +606,20 @@ async def get_cards_by_names(names: list[str]) -> dict[str, str]:
 
 
 async def get_deck_cards_for_export(deck_id: str) -> list[dict]:
-    """Get card names and quantities for text export.
+    """Get card names, quantities, and board for text export.
 
     Uses only the front face name for double-faced cards.
     """
     pool = await get_pool()
     rows = await pool.fetch(
-        """SELECT split_part(c.name, ' // ', 1) AS name, dc.quantity
+        """SELECT split_part(c.name, ' // ', 1) AS name, dc.quantity, dc.board
            FROM deck_cards dc
            JOIN cards c ON c.id = dc.card_id
            WHERE dc.deck_id = $1::uuid
-           ORDER BY name""",
+           ORDER BY dc.board, name""",
         deck_id,
     )
-    return [{"name": r["name"], "quantity": r["quantity"]} for r in rows]
+    return [{"name": r["name"], "quantity": r["quantity"], "board": r["board"]} for r in rows]
 
 async def discover_cards(
     q: str = "",
@@ -677,15 +730,24 @@ async def discover_cards(
 
     where = " AND ".join(clauses) if clauses else "TRUE"
 
-    # ── Total count ──
-    total = await pool.fetchval(f"SELECT COUNT(*) FROM cards WHERE {where}", *params)
+    # ── Total count (deduplicated by name) ──
+    total = await pool.fetchval(
+        f"SELECT COUNT(*) FROM (SELECT DISTINCT ON (name) id FROM cards WHERE {where} ORDER BY name, data->>'released_at' DESC) sub",
+        *params,
+    )
 
-    # ── Paginated results ──
+    # ── Paginated results (deduplicated by name, newest printing) ──
     offset = (page - 1) * page_size
     limit_idx = idx
     offset_idx = idx + 1
     rows = await pool.fetch(
-        f"SELECT data FROM cards WHERE {where} ORDER BY name LIMIT ${limit_idx} OFFSET ${offset_idx}",
+        f"""SELECT data FROM (
+              SELECT DISTINCT ON (name) data
+              FROM cards WHERE {where}
+              ORDER BY name, data->>'released_at' DESC
+            ) sub
+            ORDER BY sub.data->>'name'
+            LIMIT ${limit_idx} OFFSET ${offset_idx}""",
         *params, page_size, offset,
     )
     cards = [_decode_card_data(row["data"]) for row in rows]

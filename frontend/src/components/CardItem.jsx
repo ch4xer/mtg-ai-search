@@ -1,10 +1,12 @@
-import { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import { createPortal } from "react-dom";
 import { useAuth } from "../contexts/AuthContext.jsx";
 import { apiFetch } from "../utils/apiFetch.js";
 import { useToast } from "../contexts/ToastContext.jsx";
 import { getFormatLabel, getCardLegality, legalityLabel } from "../utils/formats.js";
 import { getImageUri } from "../utils/cardImage.js";
+import { getSetIconClass } from "../utils/keyrune.js";
+import { parseManaCost, parseOracleText } from "../utils/manaSymbols.js";
 
 function CardItem({ card, imageMode, decks: propDecks }) {
   const [imgError, setImgError] = useState(false);
@@ -21,16 +23,6 @@ function CardItem({ card, imageMode, decks: propDecks }) {
   const { showToast } = useToast();
 
   const decks = localDecks ?? propDecks ?? [];
-
-  const colorMap = {
-    W: "mana-white",
-    U: "mana-blue",
-    B: "mana-black",
-    R: "mana-red",
-    G: "mana-green",
-  };
-
-  const colors = Array.isArray(card.colors) ? card.colors : [];
 
   const isDoubleFaced =
     card.card_faces &&
@@ -64,6 +56,10 @@ function CardItem({ card, imageMode, decks: propDecks }) {
   const displayPower = activeFace?.power || card.power || frontFace?.power;
   const displayToughness = activeFace?.toughness || card.toughness || frontFace?.toughness;
   const displayLoyalty = activeFace?.loyalty || card.loyalty || frontFace?.loyalty;
+  const displaySetName = selectedArt?.setName || card.set_name;
+  const displaySet = selectedArt?.set || card.set;
+  const displayRarity = selectedArt?.rarity || card.rarity;
+  const setIconClass = getSetIconClass({ set: displaySet, rarity: displayRarity });
 
   useEffect(() => {
     if (!showDeckMenu) return;
@@ -96,6 +92,8 @@ function CardItem({ card, imageMode, decks: propDecks }) {
           png: p.image_uris.png,
           image_uris: p.image_uris,
           setName: p.set_name,
+          set: p.set,
+          rarity: p.rarity,
           artist: p.artist,
         }));
       setPrints(allPrints);
@@ -332,30 +330,44 @@ function CardItem({ card, imageMode, decks: propDecks }) {
       )}
 
       <div className="card-info">
-        <h3 className="card-name">
-          {displayName}
-          {selectedArt && <span className="card-alt-set"> ({selectedArt.setName})</span>}
-        </h3>
+        <h3 className="card-name">{displayName}</h3>
         <div className="card-meta">
-          {displayManaCost && <span className="card-mana">{displayManaCost}</span>}
-          {colors.length > 0 && (
-            <span className="card-colors">
-              {colors.map((c) => (
-                <span key={c} className={`mana-dot ${colorMap[c] || ""}`} title={c} />
-              ))}
-            </span>
-          )}
-          {card.rarity && <span className="card-rarity">{card.rarity}</span>}
+          <div className="card-meta-left">
+            {displayManaCost && (
+              <span className="card-mana">
+                {parseManaCost(displayManaCost).map((sym, idx) =>
+                  sym.half ? (
+                    <span key={idx} className="ms-half">
+                      <i className={`ms ${sym.classes}`} aria-hidden="true" />
+                    </span>
+                  ) : (
+                    <i key={idx} className={`ms ${sym.classes}`} aria-hidden="true" />
+                  )
+                )}
+              </span>
+            )}
+          </div>
+          <div className="card-meta-right">
+            {displayRarity && <span className="card-rarity">{displayRarity}</span>}
+            {setIconClass && (
+              <span
+                className="card-set-icon-wrap"
+                title={`${displaySetName || displaySet}`}
+              >
+                <i className={setIconClass} aria-hidden="true" />
+              </span>
+            )}
+          </div>
         </div>
         <p className="card-type">{displayTypeLine}</p>
-        {displayOracleText && <p className="card-text">{displayOracleText}</p>}
-        {isArtCrop && (displayPower || displayLoyalty || card.set_name) && (
+        {displayOracleText && <p className="card-text">{parseOracleText(displayOracleText, React.createElement)}</p>}
+        {isArtCrop && (displayPower || displayLoyalty || displaySetName) && (
           <div className="card-info-footer">
             <span className="card-info-pt">
               {displayPower && displayToughness && `${displayPower}/${displayToughness}`}
               {displayLoyalty && displayLoyalty}
             </span>
-            {card.set_name && <span className="card-info-set">{card.set_name}</span>}
+            {displaySetName && <span className="card-info-set">{displaySetName}</span>}
           </div>
         )}
       </div>

@@ -6,12 +6,13 @@ import json
 import logging
 import re
 import time as _time
+import zipfile
 from urllib.parse import quote
 from uuid import uuid4
 
 import httpx
 from PIL import Image
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import PlainTextResponse, StreamingResponse
 from pydantic import BaseModel
 from reportlab.lib.pagesizes import A4
@@ -77,11 +78,13 @@ class AddCardRequest(BaseModel):
     quantity: int = 1
     image_url: str | None = None
     display_url: str | None = None
+    board: str = "mainboard"
 
 
 class UpdateCardImageRequest(BaseModel):
     image_url: str | None = None
     display_url: str | None = None
+    board: str | None = None
 
 
 def _require_deck_name(name: str) -> str:
@@ -166,7 +169,7 @@ async def add_card(deck_id: str, req: AddCardRequest, user_id: str = Depends(get
     _require_positive_quantity(req.quantity)
     update_image = "image_url" in req.model_fields_set or "display_url" in req.model_fields_set
     return await add_card_to_deck(
-        deck_id, req.card_id, req.quantity, req.image_url, req.display_url, update_image
+        deck_id, req.card_id, req.quantity, req.image_url, req.display_url, update_image, req.board
     )
 
 
@@ -182,36 +185,57 @@ async def update_card_image(
     Passing null values resets the override to the default card image.
     """
     await _verify_deck_ownership(deck_id, user_id)
-    updated = await update_deck_card_image(deck_id, card_id, req.image_url, req.display_url)
+    updated = await update_deck_card_image(deck_id, card_id, req.image_url, req.display_url, req.board)
     if not updated:
         raise HTTPException(status_code=404, detail="Card not in deck")
     return updated
 
 
 @deck_router.delete("/{deck_id}/cards/{card_id}", status_code=204)
-async def remove_card(deck_id: str, card_id: str, user_id: str = Depends(get_current_user)):
+async def remove_card(
+    deck_id: str, card_id: str,
+    board: str | None = Query(None),
+    user_id: str = Depends(get_current_user),
+):
     await _verify_deck_ownership(deck_id, user_id)
-    await remove_card_from_deck(deck_id, card_id)
+    await remove_card_from_deck(deck_id, card_id, board)
 
 
 # ── Deck Import / Export (text) ────────────────────────────────────────
 
 
-def _parse_decklist(text: str) -> list[tuple[int, str]]:
-    """Parse a decklist text into [(quantity, card_name), ...].
+def _parse_decklist(text: str) -> list[tuple[int, str, str]]:
+    """Parse a decklist text into [(quantity, card_name, board), ...].
     Accepts formats like '1 Sol Ring' or 'Sol Ring' (defaults to qty 1).
-    Blank lines and lines starting with '#' or '//' are skipped.
+    Lines starting with '#' or '//' are skipped.
+
+    Board tracking:
+    - Cards default to 'mainboard'.
+    - A line matching 'SIDEBOARD' (case-insensitive) switches to 'sideboard'.
+    - An empty line after sideboard cards switches back to 'mainboard'.
     """
-    entries: list[tuple[int, str]] = []
+    entries: list[tuple[int, str, str]] = []
+    board = "mainboard"
+    has_sideboard_cards = False
     for raw_line in text.splitlines():
         line = raw_line.strip()
-        if not line or line.startswith("#") or line.startswith("//"):
+        if line.startswith("#") or line.startswith("//"):
+            continue
+        if line.upper() == "SIDEBOARD":
+            board = "sideboard"
+            has_sideboard_cards = False
+            continue
+        if not line:
+            if board == "sideboard" and has_sideboard_cards:
+                board = "mainboard"
             continue
         m = DECKLIST_ENTRY_RE.match(line)
         if m:
-            entries.append((int(m.group(1)), m.group(2).strip()))
+            entries.append((int(m.group(1)), m.group(2).strip(), board))
         else:
-            entries.append((1, line))
+            entries.append((1, line, board))
+        if board == "sideboard":
+            has_sideboard_cards = True
     return entries
 
 
@@ -221,7 +245,11 @@ async def export_deck_text(deck_id: str, user_id: str = Depends(get_current_user
     cards = await get_deck_cards_for_export(deck_id)
     if not cards:
         raise HTTPException(status_code=400, detail="Deck is empty")
-    lines = [f"{c['quantity']} {c['name']}" for c in cards]
+    main_lines = [f"{c['quantity']} {c['name']}" for c in cards if c["board"] == "mainboard"]
+    side_lines = [f"{c['quantity']} {c['name']}" for c in cards if c["board"] == "sideboard"]
+    lines = main_lines
+    if side_lines:
+        lines += ["", "SIDEBOARD"] + side_lines
     content = "\n".join(lines) + "\n"
     filename = f"{deck['name']}.txt"
     return PlainTextResponse(
@@ -242,16 +270,16 @@ async def import_deck(deck_id: str, req: ImportDeckRequest, user_id: str = Depen
     if not entries:
         raise HTTPException(status_code=400, detail="No cards found in text")
 
-    unique_names = list({name for _, name in entries})
+    unique_names = list({name for _, name, _ in entries})
     name_to_id = await get_cards_by_names(unique_names)
 
     added = []
     not_found = []
-    for qty, name in entries:
+    for qty, name, board in entries:
         card_id = name_to_id.get(name.lower())
         if card_id:
-            await add_card_to_deck(deck_id, card_id, qty)
-            added.append({"name": name, "quantity": qty})
+            await add_card_to_deck(deck_id, card_id, qty, board=board)
+            added.append({"name": name, "quantity": qty, "board": board})
         else:
             not_found.append(name)
 
@@ -443,5 +471,158 @@ async def export_download(deck_id: str, export_id: str, user_id: str = Depends(g
     return StreamingResponse(
         io.BytesIO(pdf_bytes),
         media_type="application/pdf",
+        headers=_build_attachment_headers(filename),
+    )
+
+
+# ── Deck Image Collection Export (ZIP) ─────────────────────────────────────
+
+# Separate cache for image exports to avoid conflicts with PDF exports
+_image_export_cache: dict[str, tuple[bytes, str, float]] = {}
+_IMAGE_EXPORT_CACHE_TTL = 300  # 5 minutes
+
+
+def _cleanup_image_export_cache():
+    now = _time.time()
+    expired = [k for k, v in _image_export_cache.items() if now - v[2] > _IMAGE_EXPORT_CACHE_TTL]
+    for k in expired:
+        del _image_export_cache[k]
+
+
+def _sanitize_filename(name: str) -> str:
+    """Remove/replace characters that are invalid in filenames."""
+    # Replace common problematic characters
+    name = re.sub(r'[<>:"/\\|?*]', '_', name)
+    # Remove leading/trailing dots and spaces
+    name = name.strip('. ')
+    # Limit length to avoid filesystem issues
+    if len(name) > 200:
+        name = name[:200]
+    return name or "card"
+
+
+def _build_zip(unique_data: list[bytes | None], slots: list[tuple[str, str]], slot_url_index: list[int]) -> io.BytesIO:
+    """Create a ZIP archive containing all card images.
+
+    Each card is named as "{quantity}x {card_name}.png".
+    For duplicate copies of the same card, they share the same image data.
+    """
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
+        # Track filenames to handle duplicates
+        filename_counts: dict[str, int] = {}
+
+        for slot_idx, (card_name, _) in enumerate(slots):
+            uid = slot_url_index[slot_idx]
+            if uid >= len(unique_data) or unique_data[uid] is None:
+                continue
+
+            data = unique_data[uid]
+            # Sanitize card name for filename
+            safe_name = _sanitize_filename(card_name)
+
+            # Handle duplicate filenames
+            if safe_name in filename_counts:
+                filename_counts[safe_name] += 1
+                base_name = safe_name
+                # Try adding number suffix
+                for i in range(2, filename_counts[safe_name] + 10):
+                    candidate = f"{base_name}_{i}"
+                    if candidate not in filename_counts:
+                        safe_name = candidate
+                        filename_counts[candidate] = 1
+                        break
+            else:
+                filename_counts[safe_name] = 1
+
+            filename = f"{safe_name}.png"
+            zf.writestr(filename, data)
+
+    buf.seek(0)
+    return buf
+
+
+@deck_router.get("/{deck_id}/export/images/stream")
+async def export_deck_images_stream(deck_id: str, user_id: str = Depends(get_current_user)):
+    """SSE endpoint that streams download progress for image collection, then caches the ZIP."""
+    deck = await _verify_deck_ownership(deck_id, user_id)
+    cards = await get_deck_card_images(deck_id)
+    slots = _expand_slots(cards)
+
+    if not slots:
+        raise HTTPException(status_code=400, detail="No card images to export")
+
+    total = len(slots)
+    filename = f"{deck['name']}_images.zip"
+
+    async def event_stream():
+        _cleanup_image_export_cache()
+
+        # Deduplicate downloads: same URL only fetched once
+        unique_urls: dict[str, int] = {}  # url -> index in unique list
+        slot_url_index: list[int] = []
+        for _, url in slots:
+            if url not in unique_urls:
+                unique_urls[url] = len(unique_urls)
+            slot_url_index.append(unique_urls[url])
+        unique_url_list = list(unique_urls.keys())
+        unique_count = len(unique_url_list)
+        unique_data: list[bytes | None] = [None] * unique_count
+
+        sem = asyncio.Semaphore(10)
+        progress_queue: asyncio.Queue[int | None] = asyncio.Queue()
+
+        async def fetch_one(client: httpx.AsyncClient, url: str, uid: int):
+            async with sem:
+                try:
+                    resp = await client.get(url)
+                    if resp.status_code == 200:
+                        unique_data[uid] = resp.content
+                except Exception as e:
+                    logger.warning("Failed to download %s: %s", url, e)
+            await progress_queue.put(uid)
+
+        async def download_all():
+            async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
+                tasks = [fetch_one(client, url, i) for i, url in enumerate(unique_url_list)]
+                await asyncio.gather(*tasks)
+            await progress_queue.put(None)
+
+        dl_task = asyncio.create_task(download_all())
+
+        completed = 0
+        while True:
+            idx = await progress_queue.get()
+            if idx is None:
+                break
+            completed += 1
+            yield f"data: {json.dumps({'type': 'progress', 'phase': 'download', 'current': completed, 'total': unique_count})}\n\n"
+
+        await dl_task
+
+        yield f"data: {json.dumps({'type': 'progress', 'phase': 'zip', 'current': total, 'total': total})}\n\n"
+
+        # Build ZIP archive
+        zip_buf = await asyncio.to_thread(_build_zip, unique_data, slots, slot_url_index)
+
+        export_id = str(uuid4())
+        _image_export_cache[export_id] = (zip_buf.getvalue(), filename, _time.time())
+
+        yield f"data: {json.dumps({'type': 'complete', 'export_id': export_id})}\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+@deck_router.get("/{deck_id}/export/images/download/{export_id}")
+async def export_images_download(deck_id: str, export_id: str, user_id: str = Depends(get_current_user)):
+    """Download a previously generated ZIP by export_id."""
+    await _verify_deck_ownership(deck_id, user_id)
+    entry = _image_export_cache.pop(export_id, None)
+    if not entry:
+        raise HTTPException(status_code=404, detail="Export not found or expired")
+    zip_bytes, filename, _ = entry
+    return StreamingResponse(
+        io.BytesIO(zip_bytes),
+        media_type="application/zip",
         headers=_build_attachment_headers(filename),
     )

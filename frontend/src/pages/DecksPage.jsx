@@ -2,9 +2,11 @@ import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { apiFetch } from "../utils/apiFetch.js";
 import { useToast } from "../contexts/ToastContext.jsx";
+import { useLanguage } from "../contexts/LanguageContext.jsx";
 import { FORMATS, getFormatLabel } from "../utils/formats.js";
 
 function DecksPage() {
+  const { t, language } = useLanguage();
   const [decks, setDecks] = useState([]);
   const [loading, setLoading] = useState(true);
   const [newDeckName, setNewDeckName] = useState("");
@@ -46,10 +48,10 @@ function DecksPage() {
         setNewDeckName("");
         setNewDeckFormat("undefined");
         setShowInput(false);
-        showToast(`卡组「${deck.name}」已创建`);
+        showToast(language === 'zh' ? `卡组「${deck.name}」已创建` : `Deck "${deck.name}" created`);
       }
     } catch (err) {
-      showToast("创建失败", "error");
+      showToast(language === 'zh' ? "创建失败" : "Failed to create", "error");
     } finally {
       setCreating(false);
     }
@@ -59,7 +61,7 @@ function DecksPage() {
     return (
       <div className="loading">
         <div className="loading-spinner" />
-        <p>加载卡组中...</p>
+        <p>{language === 'zh' ? '加载卡组中...' : 'Loading decks...'}</p>
       </div>
     );
   }
@@ -67,10 +69,10 @@ function DecksPage() {
   return (
     <div className="decks-page">
       <div className="decks-header">
-        <h2>卡组</h2>
+        <h2>{t('myDecks')}</h2>
         {!showInput ? (
           <button className="btn-accent" onClick={() => setShowInput(true)}>
-            + 新建卡组
+            + {language === 'zh' ? '新建卡组' : 'New Deck'}
           </button>
         ) : (
           <form onSubmit={handleCreate} className="new-deck-form">
@@ -78,7 +80,7 @@ function DecksPage() {
               type="text"
               value={newDeckName}
               onChange={(e) => setNewDeckName(e.target.value)}
-              placeholder="卡组名称"
+              placeholder={t('deckName')}
               autoFocus
               disabled={creating}
             />
@@ -90,7 +92,7 @@ function DecksPage() {
             >
               {FORMATS.map((f) => (
                 <option key={f.key} value={f.key}>
-                  {f.label}
+                  {language === 'zh' ? f.label : f.key}
                 </option>
               ))}
             </select>
@@ -99,7 +101,7 @@ function DecksPage() {
               className="btn-accent"
               disabled={creating || !newDeckName.trim()}
             >
-              创建
+              {t('createDeck')}
             </button>
             <button
               type="button"
@@ -110,14 +112,14 @@ function DecksPage() {
                 setNewDeckFormat("undefined");
               }}
             >
-              取消
+              {language === 'zh' ? '取消' : 'Cancel'}
             </button>
           </form>
         )}
       </div>
       {decks.length === 0 ? (
         <div className="no-results">
-          <p>还没有卡组，点击上方按钮创建一个吧</p>
+          <p>{language === 'zh' ? '还没有卡组，点击上方按钮创建一个吧' : 'No decks yet. Click the button above to create one.'}</p>
         </div>
       ) : (
         <div className="deck-grid">
@@ -131,11 +133,11 @@ function DecksPage() {
               <span
                 className={`format-badge format-${deck.format || "undefined"}`}
               >
-                {getFormatLabel(deck.format)}
+                {language === 'zh' ? getFormatLabel(deck.format) : deck.format || 'Undefined'}
               </span>
-              <p className="deck-card-count">{deck.card_count || 0} 张卡牌</p>
+              <p className="deck-card-count">{deck.card_count || 0} {language === 'zh' ? '张卡牌' : 'cards'}</p>
               <p className="deck-card-date">
-                {new Date(deck.created_at).toLocaleDateString("zh-CN")}
+                {new Date(deck.created_at).toLocaleDateString(language === 'zh' ? "zh-CN" : "en-US")}
               </p>
             </div>
           ))}

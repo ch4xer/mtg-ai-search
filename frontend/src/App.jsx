@@ -9,6 +9,7 @@ import AdminPage from "./pages/AdminPage.jsx";
 import DiscoverPage from "./pages/DiscoverPage.jsx";
 import { AuthProvider, useAuth } from "./contexts/AuthContext.jsx";
 import { ToastProvider } from "./contexts/ToastContext.jsx";
+import { LanguageProvider } from "./contexts/LanguageContext.jsx";
 
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth();
@@ -72,9 +73,11 @@ function AppContent() {
 function App() {
   return (
     <AuthProvider>
-      <ToastProvider>
-        <AppContent />
-      </ToastProvider>
+      <LanguageProvider>
+        <ToastProvider>
+          <AppContent />
+        </ToastProvider>
+      </LanguageProvider>
     </AuthProvider>
   );
 }

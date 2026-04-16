@@ -7,7 +7,7 @@ from pydantic import BaseModel
 
 from .agent import run_search
 from .config import get_allowed_origins
-from .db import discover_cards, get_ip_hourly_search_count, get_user_by_id, get_user_hourly_search_count, log_search
+from .db import discover_cards, get_all_keywords, get_ip_hourly_search_count, get_user_by_id, get_user_hourly_search_count, log_search
 from .dependencies import get_optional_user
 from .routes_admin import admin_router
 from .routes_auth import auth_router
@@ -125,6 +125,13 @@ async def discover(request: DiscoverRequest):
         page_size=request.page_size,
     )
     return result
+
+
+@app.get("/api/keywords")
+async def list_keywords():
+    """Return all keyword abilities from the database."""
+    keywords = await get_all_keywords()
+    return {"keywords": keywords}
 
 
 @app.get("/api/health")

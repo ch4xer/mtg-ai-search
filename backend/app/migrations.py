@@ -98,7 +98,29 @@ CREATE TABLE IF NOT EXISTS deck_cards (
 );
 ALTER TABLE deck_cards ADD COLUMN IF NOT EXISTS image_url TEXT;
 ALTER TABLE deck_cards ADD COLUMN IF NOT EXISTS display_url TEXT;
+ALTER TABLE deck_cards ADD COLUMN IF NOT EXISTS board TEXT NOT NULL DEFAULT 'mainboard';
 CREATE INDEX IF NOT EXISTS idx_deck_cards_deck_id ON deck_cards(deck_id);
+
+-- Migrate unique constraint from (deck_id, card_id) to (deck_id, card_id, board)
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'deck_cards_deck_id_card_id_key'
+    ) THEN
+        ALTER TABLE deck_cards DROP CONSTRAINT deck_cards_deck_id_card_id_key;
+    END IF;
+END $$;
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'deck_cards_deck_id_card_id_board_key'
+    ) THEN
+        ALTER TABLE deck_cards ADD CONSTRAINT deck_cards_deck_id_card_id_board_key
+            UNIQUE (deck_id, card_id, board);
+    END IF;
+END $$;
 """
 
 

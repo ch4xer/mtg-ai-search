@@ -19,6 +19,11 @@ def parse_keyword_abilities(filepath: str) -> dict[str, str]:
 
         header_match = re.match(r"702\.(\d+)\.\s+(.+)", line)
         if header_match:
+            # Skip 702.1 which is just an introduction paragraph, not a keyword ability
+            if header_match.group(1) == "1":
+                current_name = None
+                current_lines = []
+                continue
             if current_name:
                 result[current_name] = " ".join(current_lines)
             current_name = header_match.group(2).strip()
