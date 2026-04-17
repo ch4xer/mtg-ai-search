@@ -90,6 +90,7 @@ function CardItem({ card, imageMode, decks: propDecks }) {
         .map((p) => ({
           id: p.id,
           png: p.image_uris.png,
+          normal: p.image_uris.normal,
           image_uris: p.image_uris,
           setName: p.set_name,
           set: p.set,
@@ -325,7 +326,7 @@ function CardItem({ card, imageMode, decks: propDecks }) {
                     onClick={() => handleSelectArt(p)}
                     title={`${p.setName} - ${p.artist}`}
                   >
-                    <img src={getImageUri(p.image_uris, imageMode)} alt={p.setName} loading="lazy" />
+                    <img src={p.normal} alt={p.setName} loading="lazy" />
                     <span className="art-picker-label">{p.setName}</span>
                   </div>
                 ))}
