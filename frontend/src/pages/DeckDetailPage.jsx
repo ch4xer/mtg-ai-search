@@ -70,6 +70,7 @@ function DeckDetailPage({ imageMode }) {
     const [showArtPicker, setShowArtPicker] = useState(false);
     const [artPrints, setArtPrints] = useState([]);
     const [loadingPrints, setLoadingPrints] = useState(false);
+    const [analyzing, setAnalyzing] = useState(false);
 
     const hoverTimerRef = useRef(null);
     const previewLockedRef = useRef(false);
@@ -391,6 +392,44 @@ function DeckDetailPage({ imageMode }) {
             }
         } catch { showToast(t('exportFailed'), "error"); }
         finally { setExportingImages(false); setExportImagesProgress(null); }
+    };
+
+    const handleAnalyze = async () => {
+        if (analyzing) return;
+        if (!cards.length) {
+            showToast(t('analysisEmptyDeck'), "error");
+            return;
+        }
+        setAnalyzing(true);
+        try {
+            const res = await apiFetch(`/api/decks/${id}/analyze`, {
+                method: "POST",
+                body: {},
+            });
+            if (!res.ok) {
+                const detail = (await res.json().catch(() => ({}))).detail;
+                showToast(detail || t('analysisFailed'), "error");
+                return;
+            }
+            const analysis = await res.json();
+            setDeck((prev) => (prev ? { ...prev, analysis, updated_at: prev.updated_at } : prev));
+        } catch {
+            showToast(t('analysisFailed'), "error");
+        } finally {
+            setAnalyzing(false);
+        }
+    };
+
+    const formatRelativeTime = (isoString) => {
+        if (!isoString) return "";
+        const diff = Date.now() - new Date(isoString).getTime();
+        const minutes = Math.floor(diff / 60000);
+        if (minutes < 1) return t('justNow');
+        if (minutes < 60) return t('minutesAgo').replace('{n}', minutes);
+        const hours = Math.floor(minutes / 60);
+        if (hours < 24) return t('hoursAgo').replace('{n}', hours);
+        const days = Math.floor(hours / 24);
+        return t('daysAgo').replace('{n}', days);
     };
 
     const handleExportText = async () => {
@@ -822,6 +861,63 @@ function DeckDetailPage({ imageMode }) {
                     {/* Right: Deck Analysis */}
                     {deckAnalysis && (
                         <aside className="deck-analysis">
+                            <div className={`analysis-card analyze-card ${deck?.analysis ? 'has-analysis' : ''}`}>
+                                {deck?.analysis ? (
+                                    <>
+                                        <div className="analyze-header">
+                                            <button
+                                                className="analyze-btn analyze-btn-compact"
+                                                onClick={handleAnalyze}
+                                                disabled={analyzing}
+                                            >
+                                                {analyzing ? (
+                                                    <><span className="analyze-spinner" aria-hidden="true" /> {t('analyzing')}</>
+                                                ) : (
+                                                    <><span className="analyze-sparkle" aria-hidden="true">✦</span> {t('reanalyzeDeck')}</>
+                                                )}
+                                            </button>
+                                            <div className="analyze-meta">
+                                                <span>{t('analysisLastUpdated')} {formatRelativeTime(deck.analysis.updated_at)}</span>
+                                                {new Date(deck.updated_at).getTime() > new Date(deck.analysis.updated_at).getTime() && (
+                                                    <span className="analyze-stale" title={t('analysisDeckChanged')}>● {t('analysisDeckChanged')}</span>
+                                                )}
+                                            </div>
+                                        </div>
+                                        {analyzing ? (
+                                            <div className="analyze-skeleton">
+                                                <div className="analyze-skeleton-block" />
+                                                <div className="analyze-skeleton-block" />
+                                                <div className="analyze-skeleton-block" />
+                                            </div>
+                                        ) : (() => {
+                                            const block = deck.analysis[language] || deck.analysis.zh || deck.analysis.en;
+                                            if (!block) return null;
+                                            return (
+                                                <>
+                                                    <p className="analyze-summary">{block.summary}</p>
+                                                    <h4 className="analyze-subtitle">{t('analysisPlaystyle')}</h4>
+                                                    <p className="analyze-text">{block.playstyle}</p>
+                                                    <h4 className="analyze-subtitle">{t('analysisWeaknesses')}</h4>
+                                                    <p className="analyze-text">{block.weaknesses}</p>
+                                                </>
+                                            );
+                                        })()}
+                                    </>
+                                ) : (
+                                    <button
+                                        className="analyze-btn analyze-btn-primary"
+                                        onClick={handleAnalyze}
+                                        disabled={analyzing}
+                                    >
+                                        {analyzing ? (
+                                            <><span className="analyze-spinner" aria-hidden="true" /> {t('analyzing')}</>
+                                        ) : (
+                                            <><span className="analyze-sparkle" aria-hidden="true">✦</span> {t('analyzeDeck')}</>
+                                        )}
+                                    </button>
+                                )}
+                            </div>
+
                             <div className="analysis-card">
                                 <h3 className="analysis-title">{t('cardTypes')}</h3>
                                 <div className="analysis-bars">

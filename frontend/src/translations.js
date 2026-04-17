@@ -106,6 +106,19 @@ export const translations = {
     colorDistribution: "Color Distribution",
     manaCurve: "Mana Curve",
     rarityDistribution: "Rarity Distribution",
+    analyzeDeck: "Analyze Deck",
+    reanalyzeDeck: "Re-analyze",
+    analyzing: "Analyzing…",
+    analysisFailed: "Analysis failed, please try again",
+    analysisEmptyDeck: "Add cards to the deck before analyzing",
+    analysisPlaystyle: "Playstyle",
+    analysisWeaknesses: "Weaknesses",
+    analysisDeckChanged: "Deck has changed since this analysis",
+    analysisLastUpdated: "Last analyzed",
+    justNow: "just now",
+    minutesAgo: "{n} min ago",
+    hoursAgo: "{n} h ago",
+    daysAgo: "{n} d ago",
     cardIllegalInFormat: "Card illegal in this format",
     importPlaceholder: "Paste decklist text. Each line: quantity card name [(SET) collector_number]\nExamples:\n4 Lightning Bolt\n1 The Ur-Dragon (SLD) 11 *F*\n1 Sol Ring (SLD) 1494★\n\nSIDEBOARD\n2 Negate\n1 Pyroblast",
     cancel: "Cancel",
@@ -168,6 +181,9 @@ export const translations = {
     artChanged: "Card art updated",
     artResetSuccess: "Card art reset to default",
     artChangeFailed: "Failed to update card art",
+
+    // Footer
+    footerText: "Unofficial Fan Content — not approved or endorsed by Wizards of the Coast. Card images and data © Wizards of the Coast. Card data provided by Scryfall (CC0).",
   },
 
   zh: {
@@ -276,6 +292,19 @@ export const translations = {
     colorDistribution: "颜色分布",
     manaCurve: "法术力曲线",
     rarityDistribution: "稀有度分布",
+    analyzeDeck: "分析卡组",
+    reanalyzeDeck: "重新分析",
+    analyzing: "分析中…",
+    analysisFailed: "分析失败，请稍后重试",
+    analysisEmptyDeck: "请先添加卡牌再进行分析",
+    analysisPlaystyle: "对战思路",
+    analysisWeaknesses: "主要弱点",
+    analysisDeckChanged: "卡组自上次分析以来有改动",
+    analysisLastUpdated: "最近分析于",
+    justNow: "刚刚",
+    minutesAgo: "{n} 分钟前",
+    hoursAgo: "{n} 小时前",
+    daysAgo: "{n} 天前",
     cardIllegalInFormat: "该卡牌在此赛制中不合法",
     importPlaceholder: "粘贴牌表文本，每行格式：数量 卡牌名称 [(系列代码) 收藏编号]\n例如：\n4 Lightning Bolt\n1 The Ur-Dragon (SLD) 11 *F*\n1 Sol Ring (SLD) 1494★\n\nSIDEBOARD\n2 Negate\n1 Pyroblast",
     cancel: "取消",
@@ -338,6 +367,9 @@ export const translations = {
     artChanged: "卡图已更新",
     artResetSuccess: "卡图已恢复默认",
     artChangeFailed: "更新卡图失败",
+
+    // Footer
+    footerText: "非官方粉丝内容，未经威世智（Wizards of the Coast）批准或认可。卡牌图像及数据 © Wizards of the Coast。卡牌数据由 Scryfall 以 CC0 协议提供。",
   }
 };
 
