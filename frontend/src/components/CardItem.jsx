@@ -144,12 +144,19 @@ function CardItem({ card, imageMode, decks: propDecks }) {
     return null;
   };
 
+  const getDisplayUrlForDeck = () => {
+    if (selectedArt) return getImageUri(selectedArt.image_uris, "art_crop");
+    return null;
+  };
+
   const handleAddToDeck = async (deckId, deckName) => {
     setShowDeckMenu(false);
     try {
       const body = { card_id: card.id };
       const pngUrl = getPngUrlForDeck();
       if (pngUrl) body.image_url = pngUrl;
+      const displayUrl = getDisplayUrlForDeck();
+      if (displayUrl) body.display_url = displayUrl;
       const res = await apiFetch(`/api/decks/${deckId}/cards`, {
         method: "POST",
         body,

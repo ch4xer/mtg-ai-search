@@ -2,18 +2,19 @@
 export const translations = {
   en: {
     // Header
-    appTitle: "MTG Card Search",
+    appTitle: "MTG AI Search",
 
     // Navigation
     aiSearch: "AI Search",
     exactMatch: "Exact Match",
     decks: "Decks",
+    settings: "Settings",
     admin: "Admin",
     login: "Login",
     logout: "Logout",
 
     // Search modes
-    searchPlaceholder: "Describe the card you want to find...",
+    searchPlaceholder: "A black creature that makes opponents discard",
     searchPlaceholderDiscover: "Search name, type, text...",
     searchButton: "Search",
     searching: "Searching...",
@@ -122,19 +123,62 @@ export const translations = {
     searchLimitReached: "Search limit reached",
     searchLimitReachedAnon: "Anonymous search limit reached, please login",
 
+    // Settings page
+    settingsTitle: "Account Settings",
+    accountInfo: "Account Information",
+    usernameLabel: "Username",
+    emailLabel: "Email",
+    roleLabel: "Role",
+    emailNotSet: "Not set",
+    emailVerified: "Verified",
+    emailNotVerified: "Not verified",
+    changePassword: "Change Password",
+    changePasswordHint: "Changing your password requires email verification. Click the button below to send a verification code to your registered email.",
+    sendCode: "Send Code",
+    sending: "Sending...",
+    codeSentTo: "Verification code sent to",
+    enterCodeAndPassword: "Please enter the verification code and your new password.",
+    verificationCode: "Verification Code",
+    verificationCodePlaceholder: "Enter 6-digit code",
+    newPassword: "New Password",
+    newPasswordPlaceholder: "Enter new password (at least 6 characters)",
+    confirmPassword: "Confirm Password",
+    confirmPasswordPlaceholder: "Enter password again",
+    confirmChange: "Confirm Change",
+    changing: "Changing...",
+    resendCode: "Resend Code",
+    noEmailBound: "Your account has no email bound, cannot change password.",
+    passwordMinLength: "Password must be at least 6 characters",
+    passwordMismatch: "Passwords do not match",
+    codeSentSuccess: "Verification code sent to your email",
+    passwordChangedSuccess: "Password changed successfully",
+    sendCodeFailed: "Failed to send verification code",
+    changePasswordFailed: "Failed to change password",
+
     // Image mode
     artCrop: "Art Crop",
     borderCrop: "Full Card",
+
+    // Art picker (deck)
+    changeArt: "Change art",
+    selectArtVersion: "Select art version",
+    resetDefaultArt: "Reset",
+    loadingVersions: "Loading...",
+    fetchVersionsFailed: "Failed to fetch versions",
+    artChanged: "Card art updated",
+    artResetSuccess: "Card art reset to default",
+    artChangeFailed: "Failed to update card art",
   },
 
   zh: {
     // Header
-    appTitle: "MTG 卡牌搜索",
+    appTitle: "MTG AI Search",
 
     // Navigation
     aiSearch: "AI 搜索",
     exactMatch: "精准匹配",
     decks: "卡组",
+    settings: "设置",
     admin: "管理",
     login: "登录",
     logout: "退出",
@@ -249,9 +293,51 @@ export const translations = {
     searchLimitReached: "搜索次数已达上限",
     searchLimitReachedAnon: "未登录用户搜索次数已达上限，请登录后使用",
 
+    // Settings page
+    settingsTitle: "账号设置",
+    accountInfo: "账号信息",
+    usernameLabel: "用户名",
+    emailLabel: "邮箱",
+    roleLabel: "角色",
+    emailNotSet: "未设置",
+    emailVerified: "已验证",
+    emailNotVerified: "未验证",
+    changePassword: "修改密码",
+    changePasswordHint: "修改密码需要通过邮箱验证。点击下方按钮，验证码将发送到你的注册邮箱。",
+    sendCode: "发送验证码",
+    sending: "发送中...",
+    codeSentTo: "验证码已发送至",
+    enterCodeAndPassword: "请输入验证码和新密码。",
+    verificationCode: "验证码",
+    verificationCodePlaceholder: "输入 6 位验证码",
+    newPassword: "新密码",
+    newPasswordPlaceholder: "输入新密码（至少 6 位）",
+    confirmPassword: "确认密码",
+    confirmPasswordPlaceholder: "再次输入新密码",
+    confirmChange: "确认修改",
+    changing: "修改中...",
+    resendCode: "重新发送验证码",
+    noEmailBound: "你的账号未绑定邮箱，无法修改密码。",
+    passwordMinLength: "密码至少需要6个字符",
+    passwordMismatch: "两次输入的密码不一致",
+    codeSentSuccess: "验证码已发送到你的邮箱",
+    passwordChangedSuccess: "密码修改成功",
+    sendCodeFailed: "发送验证码失败",
+    changePasswordFailed: "密码修改失败",
+
     // Image mode
     artCrop: "画作裁切",
     borderCrop: "完整卡牌",
+
+    // Art picker (deck)
+    changeArt: "切换卡图",
+    selectArtVersion: "选择卡图版本",
+    resetDefaultArt: "恢复默认",
+    loadingVersions: "加载中...",
+    fetchVersionsFailed: "获取版本列表失败",
+    artChanged: "卡图已更新",
+    artResetSuccess: "卡图已恢复默认",
+    artChangeFailed: "更新卡图失败",
   }
 };
 
@@ -264,6 +350,3 @@ export function getBrowserLanguage() {
   }
   return 'en';
 }
-
-// Default language based on browser
-export const defaultLanguage = getBrowserLanguage();

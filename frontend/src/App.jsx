@@ -7,6 +7,7 @@ import DecksPage from "./pages/DecksPage.jsx";
 import DeckDetailPage from "./pages/DeckDetailPage.jsx";
 import AdminPage from "./pages/AdminPage.jsx";
 import DiscoverPage from "./pages/DiscoverPage.jsx";
+import SettingsPage from "./pages/SettingsPage.jsx";
 import { AuthProvider, useAuth } from "./contexts/AuthContext.jsx";
 import { ToastProvider } from "./contexts/ToastContext.jsx";
 import { LanguageProvider } from "./contexts/LanguageContext.jsx";
@@ -63,6 +64,7 @@ function AppContent() {
           <Route path="/login" element={<LoginPage />} />
           <Route path="/decks" element={<ProtectedRoute><DecksPage /></ProtectedRoute>} />
           <Route path="/decks/:id" element={<ProtectedRoute><DeckDetailPage imageMode={imageMode} /></ProtectedRoute>} />
+          <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
           <Route path="/admin" element={<AdminRoute><AdminPage /></AdminRoute>} />
         </Routes>
       </main>

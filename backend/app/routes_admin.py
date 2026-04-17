@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from .auth import require_admin
-from .db import delete_user, get_pool, get_user_search_stats, update_user_role
+from .db import delete_user, get_pool, search_users, update_user_role
 from .maintenance import full_reseed, incremental_sync, regenerate_embeddings
 
 logger = logging.getLogger(__name__)
@@ -53,8 +53,13 @@ class UpdateRoleRequest(BaseModel):
 
 
 @admin_router.get("/users")
-async def admin_list_users(_: str = Depends(require_admin)):
-    return await get_user_search_stats()
+async def admin_list_users(
+    q: str = "",
+    page: int = 1,
+    page_size: int = 20,
+    _: str = Depends(require_admin),
+):
+    return await search_users(q=q, page=page, page_size=page_size)
 
 
 @admin_router.put("/users/{user_id}/role")

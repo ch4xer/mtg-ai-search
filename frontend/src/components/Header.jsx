@@ -27,7 +27,9 @@ function Header({ theme, onToggleTheme }) {
               <Link to="/decks" className="header-link">
                 {t('decks')}
               </Link>
-              <span className="header-user">{user.username}</span>
+              <Link to="/settings" className="header-user-link">
+                {user.username}
+              </Link>
               <button className="header-link-btn" onClick={logout}>
                 {t('logout')}
               </button>

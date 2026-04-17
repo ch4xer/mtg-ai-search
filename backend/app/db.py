@@ -68,6 +68,8 @@ def _serialize_user_row(row) -> dict:
     if "email" in row.keys():
         result["email"] = row["email"]
         result["email_verified"] = row["email_verified"]
+    if "last_active_at" in row.keys():
+        result["last_active_at"] = row["last_active_at"].isoformat() if row["last_active_at"] else None
     return result
 
 
@@ -247,21 +249,22 @@ async def get_all_keywords() -> list[str]:
 
 
 async def text_match_cards(query: str, limit: int = 20) -> list[dict]:
-    """Search cards by exact substring match on name, oracle_text, or type_line.
+    """Search cards by whole-word match on name, oracle_text, or type_line.
 
     Returns full card data for matches, deduplicated by name (keeps the
     newest printing), prioritising name matches first.
     """
     pool = await get_pool()
-    pattern = f"%{query}%"
+    escaped = re.sub(r'([\\.*+?^${}()|[\]])', r'\\\1', query)
+    pattern = r'\m' + escaped + r'\M'
     rows = await pool.fetch(
         """SELECT data FROM (
              SELECT DISTINCT ON (name) data,
-                    CASE WHEN name ILIKE $1 THEN 0 ELSE 1 END AS sort_key
+                    CASE WHEN name ~* $1 THEN 0 ELSE 1 END AS sort_key
              FROM cards
-             WHERE name ILIKE $1
-                OR data->>'oracle_text' ILIKE $1
-                OR data->>'type_line' ILIKE $1
+             WHERE name ~* $1
+                OR data->>'oracle_text' ~* $1
+                OR data->>'type_line' ~* $1
              ORDER BY name, data->>'released_at' DESC
            ) sub
            ORDER BY sort_key, sub.data->>'name'
@@ -365,10 +368,29 @@ async def verify_user_email(user_id: str, code: str) -> str:
     return "ok" if matched else "invalid"
 
 
+async def update_last_active(user_id: str) -> None:
+    """Touch the last_active_at timestamp for a user."""
+    pool = await get_pool()
+    await pool.execute(
+        "UPDATE users SET last_active_at = now() WHERE id = $1::uuid",
+        user_id,
+    )
+
+
+async def update_user_password(user_id: str, password_hash: str) -> bool:
+    """Update a user's password hash. Returns True if the user was found."""
+    pool = await get_pool()
+    result = await pool.execute(
+        "UPDATE users SET password_hash = $1 WHERE id = $2::uuid",
+        password_hash, user_id,
+    )
+    return result == "UPDATE 1"
+
+
 async def get_user_by_id(user_id: str) -> dict | None:
     pool = await get_pool()
     row = await pool.fetchrow(
-        "SELECT id, username, role, email, email_verified, created_at FROM users WHERE id = $1::uuid",
+        "SELECT id, username, role, email, email_verified, created_at, last_active_at FROM users WHERE id = $1::uuid",
         user_id,
     )
     if not row:
@@ -378,8 +400,84 @@ async def get_user_by_id(user_id: str) -> dict | None:
 
 async def list_all_users() -> list[dict]:
     pool = await get_pool()
-    rows = await pool.fetch("SELECT id, username, role, email, email_verified, created_at FROM users ORDER BY created_at")
+    rows = await pool.fetch("SELECT id, username, role, email, email_verified, created_at, last_active_at FROM users ORDER BY created_at")
     return [_serialize_user_row(row) for row in rows]
+
+
+async def search_users(
+    q: str = "",
+    page: int = 1,
+    page_size: int = 20,
+) -> dict:
+    """Search and paginate users with search stats."""
+    pool = await get_pool()
+
+    where = "TRUE"
+    params: list = []
+    idx = 1
+
+    if q.strip():
+        where = f"(u.username ILIKE ${idx} OR u.email ILIKE ${idx})"
+        params.append(f"%{q.strip()}%")
+        idx += 1
+
+    total = await pool.fetchval(
+        f"SELECT COUNT(*) FROM users u WHERE {where}",
+        *params,
+    )
+
+    offset = (page - 1) * page_size
+    rows = await pool.fetch(f"""
+        SELECT
+            u.id,
+            u.username,
+            u.role,
+            u.email,
+            u.email_verified,
+            u.created_at,
+            u.last_active_at,
+            COALESCE(s.total_searches, 0)       AS total_searches,
+            COALESCE(s.searches_7d, 0)           AS searches_7d,
+            COALESCE(s.searches_3h, 0)           AS searches_3h,
+            COALESCE(s.total_tokens, 0)          AS total_tokens,
+            COALESCE(s.tokens_7d, 0)             AS tokens_7d,
+            COALESCE(s.tokens_3h, 0)             AS tokens_3h
+        FROM users u
+        LEFT JOIN LATERAL (
+            SELECT
+                COUNT(*)                                                                  AS total_searches,
+                COUNT(*) FILTER (WHERE sl.created_at >= now() - interval '7 days')        AS searches_7d,
+                COUNT(*) FILTER (WHERE sl.created_at >= now() - interval '3 hours')       AS searches_3h,
+                SUM(sl.tokens_prompt + sl.tokens_completion)                              AS total_tokens,
+                SUM(sl.tokens_prompt + sl.tokens_completion) FILTER (WHERE sl.created_at >= now() - interval '7 days')  AS tokens_7d,
+                SUM(sl.tokens_prompt + sl.tokens_completion) FILTER (WHERE sl.created_at >= now() - interval '3 hours') AS tokens_3h
+            FROM search_logs sl
+            WHERE sl.user_id = u.id
+        ) s ON TRUE
+        WHERE {where}
+        ORDER BY u.created_at DESC
+        LIMIT ${idx} OFFSET ${idx + 1}
+    """, *params, page_size, offset)
+
+    users = [
+        {
+            **_serialize_user_row(r),
+            "total_searches": int(r["total_searches"]),
+            "searches_7d": int(r["searches_7d"]),
+            "searches_3h": int(r["searches_3h"]),
+            "total_tokens": int(r["total_tokens"]),
+            "tokens_7d": int(r["tokens_7d"]),
+            "tokens_3h": int(r["tokens_3h"]),
+        }
+        for r in rows
+    ]
+
+    return {
+        "users": users,
+        "total": int(total),
+        "page": page,
+        "page_size": page_size,
+    }
 
 
 async def delete_user(user_id: str):
@@ -863,7 +961,10 @@ async def get_user_search_stats() -> list[dict]:
             u.id,
             u.username,
             u.role,
+            u.email,
+            u.email_verified,
             u.created_at,
+            u.last_active_at,
             COALESCE(s.total_searches, 0)       AS total_searches,
             COALESCE(s.searches_7d, 0)           AS searches_7d,
             COALESCE(s.searches_3h, 0)           AS searches_3h,

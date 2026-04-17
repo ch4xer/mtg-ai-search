@@ -86,6 +86,7 @@ async def backfill_missing_embeddings(status_callback: StatusCallback = None) ->
 async def full_reseed(with_embeddings: bool = True, status_callback: StatusCallback = None) -> int:
     def _do_reseed() -> None:
         from scripts.seed_pg import (
+            create_schema,
             generate_ability_embeddings,
             generate_card_embeddings,
             get_conn,
@@ -96,6 +97,8 @@ async def full_reseed(with_embeddings: bool = True, status_callback: StatusCallb
 
         conn = get_conn()
         try:
+            create_schema(conn)
+
             logger.info("[reseed] Clearing existing card data...")
             with conn.cursor() as cur:
                 cur.execute("DELETE FROM deck_cards")

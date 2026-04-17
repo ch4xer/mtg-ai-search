@@ -221,7 +221,7 @@ def _parse_decklist(text: str) -> list[tuple[int, str, str]]:
         line = raw_line.strip()
         if line.startswith("#") or line.startswith("//"):
             continue
-        if line.upper() == "SIDEBOARD":
+        if "SIDEBOARD" in line.upper():
             board = "sideboard"
             has_sideboard_cards = False
             continue

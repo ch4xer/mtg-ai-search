@@ -18,7 +18,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env"))
 
 from app.data_loader import download_scryfall_cards, parse_keyword_abilities
-from app.embedding import encode
 
 KEYWORD_ABILITY_FILE = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),

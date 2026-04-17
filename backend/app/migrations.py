@@ -33,6 +33,7 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS verification_code_expires_at TIMESTAM
 ALTER TABLE users ADD COLUMN IF NOT EXISTS verification_attempts INT NOT NULL DEFAULT 0;
 -- Existing users (no email) are treated as verified
 UPDATE users SET email_verified = TRUE WHERE email IS NULL AND email_verified = FALSE;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS last_active_at TIMESTAMPTZ;
 
 CREATE TABLE IF NOT EXISTS decks (
     id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),

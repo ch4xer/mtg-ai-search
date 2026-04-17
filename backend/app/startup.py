@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import FastAPI
 
-from .auth import hash_password
+from .auth import hash_password, verify_password
 from .config import get_admin_credentials
 from .db import close_pool, get_pool
 from .maintenance import backfill_missing_embeddings, incremental_sync, seed_cards_if_empty
@@ -15,13 +15,18 @@ logger = logging.getLogger(__name__)
 
 
 async def ensure_admin_account(pool) -> None:
-    """Create or promote the built-in admin account configured in env vars."""
+    """Create or promote the built-in admin account configured in env vars.
+
+    If the account already exists and the env password differs from the stored
+    hash, the password is updated so that operators can rotate credentials by
+    changing the environment variable.
+    """
     admin_user, admin_password = get_admin_credentials()
     if not admin_user or not admin_password:
         return
 
     existing_user = await pool.fetchrow(
-        "SELECT id FROM users WHERE username = $1",
+        "SELECT id, password_hash FROM users WHERE username = $1",
         admin_user,
     )
     if existing_user:
@@ -29,6 +34,14 @@ async def ensure_admin_account(pool) -> None:
             "UPDATE users SET role = 'admin' WHERE username = $1",
             admin_user,
         )
+        # Update password if it changed in the environment
+        if not verify_password(admin_password, existing_user["password_hash"]):
+            await pool.execute(
+                "UPDATE users SET password_hash = $1 WHERE username = $2",
+                hash_password(admin_password),
+                admin_user,
+            )
+            logger.info("Admin account '%s' password updated from environment.", admin_user)
         return
 
     await pool.execute(
