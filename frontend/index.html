@@ -4,6 +4,20 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>MTG AI Search</title>
+    <script>
+      // Must run in <head>, before any stylesheet is parsed and before <body> enters
+      // the DOM. body has `transition: background-color 0.3s` — if we set data-theme
+      // after body exists with light computed styles, the change would animate.
+      (function () {
+        var theme = localStorage.getItem("mtg-theme");
+        if (theme !== "light" && theme !== "dark") {
+          theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+        }
+        var root = document.documentElement;
+        root.setAttribute("data-theme", theme);
+        root.style.colorScheme = theme;
+      })();
+    </script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -12,25 +26,6 @@
     />
   </head>
   <body>
-    <script>
-      // Apply theme + background before first paint to prevent flash of white
-      (function() {
-        var theme = localStorage.getItem("mtg-theme");
-        if (!theme) {
-          theme = window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
-        }
-        document.documentElement.setAttribute("data-theme", theme);
-        // Set background immediately and suppress transitions until first paint
-        var bg = theme === "dark" ? "#1e1e2e" : "#eff1f5";
-        var color = theme === "dark" ? "#cdd6f4" : "#4c4f69";
-        document.body.style.cssText = "background-color:" + bg + ";color:" + color + ";transition:none !important";
-        requestAnimationFrame(function() {
-          requestAnimationFrame(function() {
-            document.body.style.removeProperty("transition");
-          });
-        });
-      })();
-    </script>
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
   </body>
