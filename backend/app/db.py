@@ -860,29 +860,25 @@ async def discover_cards(
             params.append(f"%{token}%")
             idx += 1
 
-    # Color filter — card has at least one of the selected colors
+    # Color filter — card must contain all selected colors
     if colors:
-        clauses.append(f"colors && ${idx}::text[]")
+        clauses.append(f"colors @> ${idx}::text[]")
         params.append(colors)
         idx += 1
 
-    # Type filter — card type_line contains at least one of the selected types
+    # Type filter — card type_line must contain all selected types
     if types:
-        type_conds = []
         for t in types:
-            type_conds.append(f"type_line ILIKE ${idx}")
+            clauses.append(f"type_line ILIKE ${idx}")
             params.append(f"%{t}%")
             idx += 1
-        clauses.append(f"({' OR '.join(type_conds)})")
 
-    # Subtype filter — matches subtypes after the em dash in type_line
+    # Subtype filter — card must contain all selected subtypes
     if subtypes:
-        sub_conds = []
         for st in subtypes:
-            sub_conds.append(f"split_part(type_line, '\u2014', 2) ILIKE ${idx}")
+            clauses.append(f"split_part(type_line, '\u2014', 2) ILIKE ${idx}")
             params.append(f"%{st}%")
             idx += 1
-        clauses.append(f"({' OR '.join(sub_conds)})")
 
     # Rarity filter
     if rarities:
@@ -890,9 +886,9 @@ async def discover_cards(
         params.append(rarities)
         idx += 1
 
-    # Keyword abilities filter — card has at least one of the selected keywords
+    # Keyword abilities filter — card must have all selected keywords
     if keywords:
-        clauses.append(f"keywords && ${idx}::text[]")
+        clauses.append(f"keywords @> ${idx}::text[]")
         params.append(keywords)
         idx += 1
 
