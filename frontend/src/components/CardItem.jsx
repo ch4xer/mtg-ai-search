@@ -89,7 +89,6 @@ function CardItem({ card, imageMode, decks: propDecks }) {
         .filter((p) => p.image_uris?.png)
         .map((p) => ({
           id: p.id,
-          png: p.image_uris.png,
           normal: p.image_uris.normal,
           image_uris: p.image_uris,
           setName: p.set_name,
@@ -138,10 +137,10 @@ function CardItem({ card, imageMode, decks: propDecks }) {
     setImgError(false);
   };
 
-  const getPngUrlForDeck = () => {
-    if (selectedArt) return selectedArt.png;
-    if (card.image_uris?.png) return card.image_uris.png;
-    if (card.card_faces?.[0]?.image_uris?.png) return card.card_faces[0].image_uris.png;
+  const getImageUrlForDeck = () => {
+    if (selectedArt) return selectedArt.normal;
+    if (card.image_uris?.normal) return card.image_uris.normal;
+    if (card.card_faces?.[0]?.image_uris?.normal) return card.card_faces[0].image_uris.normal;
     return null;
   };
 
@@ -154,8 +153,8 @@ function CardItem({ card, imageMode, decks: propDecks }) {
     setShowDeckMenu(false);
     try {
       const body = { card_id: card.id };
-      const pngUrl = getPngUrlForDeck();
-      if (pngUrl) body.image_url = pngUrl;
+      const imageUrl = getImageUrlForDeck();
+      if (imageUrl) body.image_url = imageUrl;
       const displayUrl = getDisplayUrlForDeck();
       if (displayUrl) body.display_url = displayUrl;
       const res = await apiFetch(`/api/decks/${deckId}/cards`, {

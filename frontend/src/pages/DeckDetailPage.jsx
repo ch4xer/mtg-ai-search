@@ -497,7 +497,6 @@ function DeckDetailPage({ imageMode }) {
                 .filter((p) => p.image_uris?.png)
                 .map((p) => ({
                     id: p.id,
-                    png: p.image_uris.png,
                     normal: p.image_uris.normal,
                     image_uris: p.image_uris,
                     setName: p.set_name,
@@ -516,7 +515,7 @@ function DeckDetailPage({ imageMode }) {
     const handleSelectArt = async (print) => {
         if (!selectedCard) return;
         const displayUrl = getImageUri(print.image_uris, "art_crop");
-        const imageUrl = print.png;
+        const imageUrl = print.normal;
         try {
             const res = await apiFetch(`/api/decks/${id}/cards/${selectedCard.card_id}`, {
                 method: "PATCH",
