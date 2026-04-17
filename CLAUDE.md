@@ -33,12 +33,3 @@
 
 ## 需要修复的问题
 
-1. Add a button in the deck detail page. When user click it, the system will collect all text information of the cards and count duplicate items, like "3x Lightning Bolt <other card information>", then send the deck content to Deepseek, which will analyse the deck's overall strategy and playstyle, helping users quickly understand and get familiar with how to pilot the deck. It will also provide key cautions and important considerations when playing the deck, as well as suggestions for potential future optimizations and improvements notes on the usage. The output of Deepseek should contains the following sections:
-
-- deck_summary: 一句话概括这个卡组的核心玩法风格（1-2 句）,
-- playstyle: 详细的对战思路和核心打法（200字以内）,
-- weaknesses: 这个卡组的主要弱点/容易被针对的地方
-
-Finally, the AI-generated analysis and suggestions will be automatically saved to the deck’s record in the database. The saved analysis will be displayed at the top of the right-side Deck Analysis panel. The next time the user clicks the “Analyze Deck” button, the system will refresh and update the information in that panel with the latest analysis.
-
-The style of “Analyze Deck” button should be consistent with catppucin theme, while have color indicating its intelegence.
