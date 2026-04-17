@@ -201,7 +201,11 @@ def insert_abilities(conn, abilities: dict[str, str]):
             for name, desc in abilities.items()
         ]
         cur.executemany(
-            "INSERT INTO keyword_abilities (id, name, description) VALUES (%s, %s, %s) ON CONFLICT (id) DO NOTHING",
+            """INSERT INTO keyword_abilities (id, name, description) VALUES (%s, %s, %s)
+               ON CONFLICT (id) DO UPDATE SET
+                   description = EXCLUDED.description,
+                   embedding = CASE WHEN keyword_abilities.description IS NOT DISTINCT FROM EXCLUDED.description
+                                    THEN keyword_abilities.embedding ELSE NULL END""",
             values,
         )
     conn.commit()

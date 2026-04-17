@@ -4,6 +4,7 @@ import os
 from collections.abc import Callable
 
 import requests
+from openai import OpenAI
 
 from .db import get_pool
 
@@ -33,6 +34,105 @@ def _make_progress_callback(callback: StatusCallback, prefix: str):
         callback(f"{prefix}（{done}/{total}）...")
 
     return _progress
+
+
+_KEYWORD_DESCRIBE_PROMPT = (
+    "You are a Magic: The Gathering rules expert. "
+    "Given a keyword ability name and oracle texts from cards that have this ability, "
+    "write a concise one-sentence description of what this keyword ability does, "
+    "focusing on the core game effect. "
+    "Use simple MTG terms a player would search for.\n\n"
+    "Examples of good descriptions:\n"
+    "- Lifelink: Damage dealt by a source with lifelink causes its controller to gain that much life.\n"
+    "- Flying: This creature can only be blocked by creatures with flying or reach.\n"
+    "- Annihilator: Whenever this creature attacks, defending player sacrifices permanents.\n"
+    "- Deathtouch: Any amount of damage this deals to a creature is enough to destroy it.\n\n"
+    "Return ONLY the description sentence, nothing else."
+)
+
+
+def _describe_new_keyword(client: OpenAI, name: str, oracle_texts: list[str]) -> str | None:
+    """Use DeepSeek to generate a concise description for a new keyword ability."""
+    cards_text = "\n".join(f"{i + 1}. {text}" for i, text in enumerate(oracle_texts))
+    user_message = f"Keyword: {name}\n\nOracle texts from cards with this ability:\n{cards_text}"
+    try:
+        response = client.chat.completions.create(
+            model="deepseek-chat",
+            messages=[
+                {"role": "system", "content": _KEYWORD_DESCRIBE_PROMPT},
+                {"role": "user", "content": user_message},
+            ],
+            temperature=0.1,
+            max_tokens=150,
+        )
+        return response.choices[0].message.content.strip()
+    except Exception as e:
+        logger.error("[keyword-sync] DeepSeek API error for '%s': %s", name, e)
+        return None
+
+
+def _sync_new_keywords(conn, status_callback: StatusCallback = None) -> list[str]:
+    """Detect new keywords from card data, generate descriptions, insert into DB.
+
+    Compares distinct keywords in the cards table against keyword_abilities.
+    Does NOT generate embeddings — caller should run generate_ability_embeddings().
+    Returns list of newly added keyword names.
+    """
+    with conn.cursor() as cur:
+        cur.execute("SELECT DISTINCT unnest(keywords) FROM cards")
+        card_keywords = {row[0] for row in cur.fetchall()}
+
+    with conn.cursor() as cur:
+        cur.execute("SELECT name FROM keyword_abilities")
+        db_keywords = {row[0].lower() for row in cur.fetchall()}
+
+    new_keywords = sorted(kw for kw in card_keywords if kw.lower() not in db_keywords)
+    if not new_keywords:
+        logger.info("[keyword-sync] No new keywords detected.")
+        return []
+
+    logger.info("[keyword-sync] Detected %d new keywords: %s", len(new_keywords), new_keywords)
+    _emit_status(status_callback, f"发现 {len(new_keywords)} 个新关键词，正在生成描述...")
+
+    client = OpenAI(
+        api_key=os.getenv("DEEPSEEK_API_KEY", ""),
+        base_url="https://api.deepseek.com",
+    )
+
+    added = []
+    for kw in new_keywords:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT oracle_text FROM cards WHERE %s = ANY(keywords) AND oracle_text IS NOT NULL LIMIT 10",
+                (kw,),
+            )
+            rows = cur.fetchall()
+
+        if not rows:
+            logger.warning("[keyword-sync] No cards found for keyword '%s', skipping.", kw)
+            continue
+
+        oracle_texts = [r[0] for r in rows]
+        description = _describe_new_keyword(client, kw, oracle_texts)
+        if not description:
+            continue
+
+        kw_id = kw.lower().replace(" ", "_")
+        with conn.cursor() as cur:
+            cur.execute(
+                """INSERT INTO keyword_abilities (id, name, description)
+                   VALUES (%s, %s, %s)
+                   ON CONFLICT (id) DO UPDATE SET description = EXCLUDED.description, embedding = NULL""",
+                (kw_id, kw, description),
+            )
+        conn.commit()
+        added.append(kw)
+        logger.info("[keyword-sync] Added '%s': %s", kw, description)
+
+    if added:
+        _emit_status(status_callback, f"已添加 {len(added)} 个新关键词")
+
+    return added
 
 
 async def seed_cards_if_empty() -> None:
@@ -115,6 +215,9 @@ async def full_reseed(with_embeddings: bool = True, status_callback: StatusCallb
 
             abilities = parse_keyword_abilities(_ability_file())
             insert_abilities(conn, abilities)
+
+            _emit_status(status_callback, "正在检查 Scryfall 新关键词...")
+            _sync_new_keywords(conn, status_callback)
 
             if with_embeddings:
                 _emit_status(status_callback, "正在生成卡牌 embedding...")
@@ -220,7 +323,7 @@ async def incremental_sync(status_callback: StatusCallback = None) -> dict:
         )
 
         def _do_sync() -> None:
-            from scripts.seed_pg import generate_card_embeddings, get_conn, insert_cards
+            from scripts.seed_pg import generate_ability_embeddings, generate_card_embeddings, get_conn, insert_cards
 
             from .data_loader import download_scryfall_cards
 
@@ -266,6 +369,12 @@ async def incremental_sync(status_callback: StatusCallback = None) -> dict:
                     conn,
                     on_progress=_make_progress_callback(status_callback, "正在生成 embedding"),
                 )
+
+                _emit_status(status_callback, "正在检查 Scryfall 新关键词...")
+                added_keywords = _sync_new_keywords(conn, status_callback)
+                if added_keywords:
+                    _emit_status(status_callback, "正在为新关键词生成 embedding...")
+                    generate_ability_embeddings(conn)
             finally:
                 conn.close()
 
