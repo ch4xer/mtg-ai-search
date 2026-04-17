@@ -107,7 +107,7 @@ export const translations = {
     manaCurve: "Mana Curve",
     rarityDistribution: "Rarity Distribution",
     cardIllegalInFormat: "Card illegal in this format",
-    importPlaceholder: "Paste decklist text, each line: quantity card name\nExample:\n4 Lightning Bolt\n4 Counterspell\n\nSIDEBOARD\n2 Negate\n1 Pyroblast",
+    importPlaceholder: "Paste decklist text. Each line: quantity card name [(SET) collector_number]\nExamples:\n4 Lightning Bolt\n1 The Ur-Dragon (SLD) 11 *F*\n1 Sol Ring (SLD) 1494★\n\nSIDEBOARD\n2 Negate\n1 Pyroblast",
     cancel: "Cancel",
     confirm: "Confirm",
 
@@ -277,7 +277,7 @@ export const translations = {
     manaCurve: "法术力曲线",
     rarityDistribution: "稀有度分布",
     cardIllegalInFormat: "该卡牌在此赛制中不合法",
-    importPlaceholder: "粘贴牌表文本，每行格式：数量 卡牌名称\n例如：\n4 Lightning Bolt\n4 Counterspell\n\nSIDEBOARD\n2 Negate\n1 Pyroblast",
+    importPlaceholder: "粘贴牌表文本，每行格式：数量 卡牌名称 [(系列代码) 收藏编号]\n例如：\n4 Lightning Bolt\n1 The Ur-Dragon (SLD) 11 *F*\n1 Sol Ring (SLD) 1494★\n\nSIDEBOARD\n2 Negate\n1 Pyroblast",
     cancel: "取消",
     confirm: "确定",
 

@@ -703,6 +703,45 @@ async def get_cards_by_names(names: list[str]) -> dict[str, str]:
     return result
 
 
+async def get_cards_by_printing(
+    keys: list[tuple[str, str, str]],
+) -> dict[tuple[str, str, str], str]:
+    """Look up card IDs by (name_lower, set_lower, collector_number).
+
+    Returns {(name_lower, set_lower, collector): card_id} for matches.
+    Also matches double-faced cards by front face name (before ' // ').
+    """
+    if not keys:
+        return {}
+    pool = await get_pool()
+    names = [k[0] for k in keys]
+    sets = [k[1] for k in keys]
+    collectors = [k[2] for k in keys]
+    rows = await pool.fetch(
+        """SELECT c.id,
+                  LOWER(c.name) AS name_l,
+                  LOWER(split_part(c.name, ' // ', 1)) AS front_l,
+                  LOWER(c.data->>'set') AS set_l,
+                  c.data->>'collector_number' AS col
+           FROM cards c
+           JOIN unnest($1::text[], $2::text[], $3::text[]) AS k(name_l, set_l, col)
+             ON (LOWER(c.name) = k.name_l
+                 OR LOWER(split_part(c.name, ' // ', 1)) = k.name_l)
+            AND LOWER(c.data->>'set') = k.set_l
+            AND c.data->>'collector_number' = k.col""",
+        names, sets, collectors,
+    )
+    result: dict[tuple[str, str, str], str] = {}
+    for row in rows:
+        key_full = (row["name_l"], row["set_l"], row["col"])
+        key_front = (row["front_l"], row["set_l"], row["col"])
+        if key_full not in result:
+            result[key_full] = row["id"]
+        if key_front not in result:
+            result[key_front] = row["id"]
+    return result
+
+
 async def get_deck_cards_for_export(deck_id: str) -> list[dict]:
     """Get card names, quantities, and board for text export.
 

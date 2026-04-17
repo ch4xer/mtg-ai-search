@@ -26,6 +26,7 @@ from .db import (
     create_deck,
     delete_deck,
     get_cards_by_names,
+    get_cards_by_printing,
     get_deck,
     get_deck_card_images,
     get_deck_cards,
@@ -39,6 +40,10 @@ from .db import (
 logger = logging.getLogger(__name__)
 
 deck_router = APIRouter(prefix="/api/decks", tags=["decks"])
+# Extended: "<qty> <name> (<SET>) <collector_number>" with optional trailing *F*/*E*/etc. markers.
+DECKLIST_ENTRY_PRINT_RE = re.compile(
+    r"^(\d+)\s+(.+?)\s+\(([A-Za-z0-9]{2,6})\)\s+(\S+?)(?:\s+\*\w+\*)*\s*$"
+)
 DECKLIST_ENTRY_RE = re.compile(r"^(\d+)\s+(.+)$")
 
 
@@ -204,9 +209,14 @@ async def remove_card(
 # ── Deck Import / Export (text) ────────────────────────────────────────
 
 
-def _parse_decklist(text: str) -> list[tuple[int, str, str]]:
-    """Parse a decklist text into [(quantity, card_name, board), ...].
-    Accepts formats like '1 Sol Ring' or 'Sol Ring' (defaults to qty 1).
+def _parse_decklist(text: str) -> list[tuple[int, str, str, str | None, str | None]]:
+    """Parse a decklist text into [(quantity, card_name, board, set_code, collector_number), ...].
+
+    Accepted line formats:
+    - '<qty> <name> (<SET>) <collector_number> [*F*|*E*|...]' — extended, with printing info
+    - '<qty> <name>' — fallback, no printing info
+    - '<name>' — defaults to qty 1, no printing info
+
     Lines starting with '#' or '//' are skipped.
 
     Board tracking:
@@ -214,7 +224,7 @@ def _parse_decklist(text: str) -> list[tuple[int, str, str]]:
     - A line matching 'SIDEBOARD' (case-insensitive) switches to 'sideboard'.
     - An empty line after sideboard cards switches back to 'mainboard'.
     """
-    entries: list[tuple[int, str, str]] = []
+    entries: list[tuple[int, str, str, str | None, str | None]] = []
     board = "mainboard"
     has_sideboard_cards = False
     for raw_line in text.splitlines():
@@ -229,11 +239,19 @@ def _parse_decklist(text: str) -> list[tuple[int, str, str]]:
             if board == "sideboard" and has_sideboard_cards:
                 board = "mainboard"
             continue
-        m = DECKLIST_ENTRY_RE.match(line)
-        if m:
-            entries.append((int(m.group(1)), m.group(2).strip(), board))
+        m_print = DECKLIST_ENTRY_PRINT_RE.match(line)
+        if m_print:
+            qty = int(m_print.group(1))
+            name = m_print.group(2).strip()
+            set_code = m_print.group(3).lower()
+            collector = m_print.group(4).rstrip("★")
+            entries.append((qty, name, board, set_code, collector))
         else:
-            entries.append((1, line, board))
+            m = DECKLIST_ENTRY_RE.match(line)
+            if m:
+                entries.append((int(m.group(1)), m.group(2).strip(), board, None, None))
+            else:
+                entries.append((1, line, board, None, None))
         if board == "sideboard":
             has_sideboard_cards = True
     return entries
@@ -270,13 +288,26 @@ async def import_deck(deck_id: str, req: ImportDeckRequest, user_id: str = Depen
     if not entries:
         raise HTTPException(status_code=400, detail="No cards found in text")
 
-    unique_names = list({name for _, name, _ in entries})
+    printing_keys = list(
+        {
+            (name.lower(), set_code, collector)
+            for _, name, _, set_code, collector in entries
+            if set_code and collector
+        }
+    )
+    printing_to_id = await get_cards_by_printing(printing_keys) if printing_keys else {}
+
+    unique_names = list({name for _, name, _, _, _ in entries})
     name_to_id = await get_cards_by_names(unique_names)
 
     added = []
     not_found = []
-    for qty, name, board in entries:
-        card_id = name_to_id.get(name.lower())
+    for qty, name, board, set_code, collector in entries:
+        card_id = None
+        if set_code and collector:
+            card_id = printing_to_id.get((name.lower(), set_code, collector))
+        if not card_id:
+            card_id = name_to_id.get(name.lower())
         if card_id:
             await add_card_to_deck(deck_id, card_id, qty, board=board)
             added.append({"name": name, "quantity": qty, "board": board})
