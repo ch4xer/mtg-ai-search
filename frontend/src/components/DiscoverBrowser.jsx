@@ -166,21 +166,58 @@ function DiscoverBrowser({ imageMode, onToggleImageMode, enabled = true }) {
           </div>
 
           {showSubtypes && (
-            <div className="filter-group">
+            <div className="filter-group filter-abilities-group">
               <span className="filter-group-title">{t('subtype')}</span>
-              <input
-                type="text"
-                className="filter-text-input-small"
-                placeholder=""
-                value={subtypeSearch}
-                onChange={(e) => setSubtypeSearch(e.target.value)}
-                list="subtype-list"
-              />
-              <datalist id="subtype-list">
-                {subtypeFacets.slice(0, 10).map((st) => (
-                  <option key={st.name} value={st.name} />
-                ))}
-              </datalist>
+              <div className="filter-abilities-wrapper">
+                <input
+                  type="text"
+                  className="filter-text-input-small"
+                  placeholder=""
+                  value={subtypeSearch}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setSubtypeSearch(val);
+                    const allSubs = facets.subtypes || [];
+                    const match = allSubs.find(st => st.name.toLowerCase() === val.toLowerCase());
+                    if (match && !selectedSubtypes.has(match.name)) {
+                      setSelectedSubtypes(new Set([...selectedSubtypes, match.name]));
+                      setSubtypeSearch("");
+                    }
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && subtypeSearch.trim()) {
+                      e.preventDefault();
+                      if (!selectedSubtypes.has(subtypeSearch.trim())) {
+                        setSelectedSubtypes(new Set([...selectedSubtypes, subtypeSearch.trim()]));
+                      }
+                      setSubtypeSearch("");
+                    }
+                  }}
+                  list="subtype-list"
+                />
+                <datalist id="subtype-list">
+                  {subtypeFacets.slice(0, 10).map((st) => (
+                    <option key={st.name} value={st.name} />
+                  ))}
+                </datalist>
+                {selectedSubtypes.size > 0 && (
+                  <div className="filter-selected-keywords">
+                    {[...selectedSubtypes].map((st) => (
+                      <span key={st} className="filter-keyword-tag" onClick={() => {
+                        const next = new Set(selectedSubtypes);
+                        next.delete(st);
+                        setSelectedSubtypes(next);
+                      }}>
+                        {st}
+                        <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
+                          <line x1="18" y1="6" x2="6" y2="18" />
+                          <line x1="6" y1="6" x2="18" y2="18" />
+                        </svg>
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
           )}
 
