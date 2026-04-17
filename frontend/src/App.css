@@ -3281,6 +3281,11 @@ body {
   font-size: 1rem;
 }
 
+.filter-color-check .ms-cost::before {
+  position: relative;
+  top: 0.05em;
+}
+
 /* Small text input for filters */
 .filter-text-input-small {
   width: 80px;
