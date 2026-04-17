@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { Routes, Route, Navigate } from "react-router-dom";
 import Header from "./components/Header.jsx";
+import Footer from "./components/Footer.jsx";
 import SearchPage from "./pages/SearchPage.jsx";
 import LoginPage from "./pages/LoginPage.jsx";
 import DecksPage from "./pages/DecksPage.jsx";
@@ -31,7 +32,7 @@ function AppContent() {
   const [theme, setTheme] = useState(() => {
     const saved = localStorage.getItem("mtg-theme");
     if (saved) return saved;
-    return window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+    return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
   });
   const [imageMode, setImageMode] = useState(() => {
     return localStorage.getItem("mtg-image-mode") || "art_crop";
@@ -39,6 +40,7 @@ function AppContent() {
 
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
+    document.documentElement.style.colorScheme = theme;
     localStorage.setItem("mtg-theme", theme);
   }, [theme]);
 
@@ -68,6 +70,7 @@ function AppContent() {
           <Route path="/admin" element={<AdminRoute><AdminPage /></AdminRoute>} />
         </Routes>
       </main>
+      <Footer />
     </div>
   );
 }
