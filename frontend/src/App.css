@@ -384,6 +384,7 @@ body {
 
 .search-input {
   flex: 1;
+  min-width: 0;
   padding: 0.85rem 1.2rem;
   font-family: "Crimson Text", Georgia, serif;
   font-size: 1.1rem;
@@ -393,6 +394,7 @@ body {
   border-radius: 8px;
   outline: none;
   transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  box-sizing: border-box;
 }
 
 .search-input::placeholder {
@@ -2152,8 +2154,11 @@ body {
 .analysis-bar-label {
   font-size: 0.82rem;
   color: var(--text-secondary);
-  width: 3rem;
+  width: 6rem;
   flex-shrink: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .analysis-bar-track {
@@ -3412,14 +3417,6 @@ body {
 
   .main-content {
     padding: 1.25rem 1rem;
-  }
-
-  .search-input-wrapper {
-    flex-direction: column;
-  }
-
-  .search-btn {
-    width: 100%;
   }
 
   .card-grid {

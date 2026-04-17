@@ -7,7 +7,14 @@ from pydantic import BaseModel
 
 from .agent import run_search
 from .config import get_allowed_origins
-from .db import discover_cards, get_all_keywords, get_ip_hourly_search_count, get_user_by_id, get_user_hourly_search_count, log_search
+from .db import (
+    discover_cards,
+    get_all_keywords,
+    get_ip_hourly_search_count,
+    get_user_by_id,
+    get_user_hourly_search_count,
+    log_search,
+)
 from .dependencies import get_optional_user
 from .routes_admin import admin_router
 from .routes_auth import auth_router
@@ -78,12 +85,15 @@ async def search_cards(
 
     search_result = await run_search(request.query)
     # Log search asynchronously — don't block the response
-    asyncio.create_task(log_search(
-        user_id, request.query,
-        search_result["tokens_prompt"],
-        search_result["tokens_completion"],
-        ip_address=client_ip,
-    ))
+    asyncio.create_task(
+        log_search(
+            user_id,
+            request.query,
+            search_result["tokens_prompt"],
+            search_result["tokens_completion"],
+            ip_address=client_ip,
+        )
+    )
     return SearchResponse(results=search_result["ranked_results"])
 
 
