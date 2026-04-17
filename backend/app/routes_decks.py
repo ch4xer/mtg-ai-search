@@ -577,6 +577,7 @@ def _build_zip(unique_data: list[bytes | None], slots: list[tuple[str, str]], sl
                 continue
 
             data = unique_data[uid]
+            assert data is not None  # Already checked above
             # Sanitize card name for filename
             safe_name = _sanitize_filename(card_name)
 
