@@ -44,6 +44,14 @@ CREATE TABLE IF NOT EXISTS decks (
     updated_at TIMESTAMPTZ DEFAULT now()
 );
 ALTER TABLE decks ADD COLUMN IF NOT EXISTS format TEXT NOT NULL DEFAULT 'undefined';
+-- Bilingual deck analysis: stored as a single JSONB blob so we can grow the
+-- structure without further migrations. Shape: {"zh": {...}, "en": {...}}.
+ALTER TABLE decks ADD COLUMN IF NOT EXISTS analysis_data JSONB;
+ALTER TABLE decks ADD COLUMN IF NOT EXISTS analysis_updated_at TIMESTAMPTZ;
+ALTER TABLE decks DROP COLUMN IF EXISTS analysis_summary;
+ALTER TABLE decks DROP COLUMN IF EXISTS analysis_playstyle;
+ALTER TABLE decks DROP COLUMN IF EXISTS analysis_weaknesses;
+ALTER TABLE decks DROP COLUMN IF EXISTS analysis_language;
 
 CREATE TABLE IF NOT EXISTS search_logs (
     id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),

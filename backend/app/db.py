@@ -82,6 +82,19 @@ def _serialize_deck_row(row) -> dict:
     }
 
 
+def _serialize_analysis(row) -> dict | None:
+    # Nested {"zh": {...}, "en": {...}, "updated_at": "..."} or null.
+    if not row["analysis_updated_at"] or not row["analysis_data"]:
+        return None
+    raw = row["analysis_data"]
+    data = json.loads(raw) if isinstance(raw, (str, bytes)) else raw
+    return {
+        "zh": data.get("zh"),
+        "en": data.get("en"),
+        "updated_at": row["analysis_updated_at"].isoformat(),
+    }
+
+
 def _serialize_deck_summary_row(row) -> dict:
     return {
         "id": str(row["id"]),
@@ -90,6 +103,7 @@ def _serialize_deck_summary_row(row) -> dict:
         "card_count": int(row["card_count"]),
         "created_at": row["created_at"].isoformat(),
         "updated_at": row["updated_at"].isoformat(),
+        "analysis": _serialize_analysis(row),
     }
 
 
@@ -513,6 +527,7 @@ async def get_user_decks(user_id: str) -> list[dict]:
     pool = await get_pool()
     rows = await pool.fetch(
         """SELECT d.id, d.name, d.format, d.created_at, d.updated_at,
+                  d.analysis_data, d.analysis_updated_at,
                   COALESCE(SUM(dc.quantity), 0) AS card_count
            FROM decks d
            LEFT JOIN deck_cards dc ON dc.deck_id = d.id
@@ -527,7 +542,9 @@ async def get_user_decks(user_id: str) -> list[dict]:
 async def get_deck(deck_id: str) -> dict | None:
     pool = await get_pool()
     row = await pool.fetchrow(
-        "SELECT id, user_id, name, format, created_at, updated_at FROM decks WHERE id = $1::uuid",
+        """SELECT id, user_id, name, format, created_at, updated_at,
+                  analysis_data, analysis_updated_at
+           FROM decks WHERE id = $1::uuid""",
         deck_id,
     )
     if not row:
@@ -539,6 +556,7 @@ async def get_deck(deck_id: str) -> dict | None:
         "format": row["format"],
         "created_at": row["created_at"].isoformat(),
         "updated_at": row["updated_at"].isoformat(),
+        "analysis": _serialize_analysis(row),
     }
 
 
@@ -740,6 +758,49 @@ async def get_cards_by_printing(
         if key_front not in result:
             result[key_front] = row["id"]
     return result
+
+
+async def get_deck_cards_for_analysis(deck_id: str) -> list[dict]:
+    """Fetch cards for Deepseek analysis: front-face name, type, mana cost, oracle text.
+
+    Returns rows ordered by board so the payload can be formatted with a
+    MAINBOARD block followed by an optional SIDEBOARD block.
+    """
+    pool = await get_pool()
+    rows = await pool.fetch(
+        """SELECT split_part(c.name, ' // ', 1)               AS name,
+                  COALESCE(c.data->>'type_line', '')          AS type_line,
+                  COALESCE(c.data->>'mana_cost', '')          AS mana_cost,
+                  COALESCE(c.data->>'oracle_text', '')        AS oracle_text,
+                  dc.quantity,
+                  dc.board
+           FROM deck_cards dc
+           JOIN cards c ON c.id = dc.card_id
+           WHERE dc.deck_id = $1::uuid
+           ORDER BY dc.board, name""",
+        deck_id,
+    )
+    return [dict(r) for r in rows]
+
+
+async def update_deck_analysis(deck_id: str, analysis: dict) -> dict:
+    """Persist the bilingual analysis blob ({zh: {...}, en: {...}})."""
+    pool = await get_pool()
+    row = await pool.fetchrow(
+        """UPDATE decks
+              SET analysis_data       = $1::jsonb,
+                  analysis_updated_at = now()
+           WHERE id = $2::uuid
+           RETURNING analysis_data, analysis_updated_at""",
+        json.dumps(analysis), deck_id,
+    )
+    raw = row["analysis_data"]
+    data = json.loads(raw) if isinstance(raw, (str, bytes)) else raw
+    return {
+        "zh": data.get("zh"),
+        "en": data.get("en"),
+        "updated_at": row["analysis_updated_at"].isoformat(),
+    }
 
 
 async def get_deck_cards_for_export(deck_id: str) -> list[dict]:

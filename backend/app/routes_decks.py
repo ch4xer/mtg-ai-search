@@ -30,12 +30,15 @@ from .db import (
     get_deck,
     get_deck_card_images,
     get_deck_cards,
+    get_deck_cards_for_analysis,
     get_deck_cards_for_export,
     get_user_decks,
     remove_card_from_deck,
     update_deck,
+    update_deck_analysis,
     update_deck_card_image,
 )
+from .deck_analysis import analyze_deck
 
 logger = logging.getLogger(__name__)
 
@@ -274,6 +277,31 @@ async def export_deck_text(deck_id: str, user_id: str = Depends(get_current_user
         content,
         headers=_build_attachment_headers(filename),
     )
+
+
+@deck_router.post("/{deck_id}/analyze")
+async def analyze_deck_endpoint(deck_id: str, user_id: str = Depends(get_current_user)):
+    from .agent import DEEPSEEK_API_KEY
+    if not DEEPSEEK_API_KEY:
+        raise HTTPException(status_code=503, detail="Deepseek API key not configured")
+
+    deck = await _verify_deck_ownership(deck_id, user_id)
+
+    cards = await get_deck_cards_for_analysis(deck_id)
+    mainboard = [c for c in cards if c.get("board") != "sideboard"]
+    if not mainboard:
+        raise HTTPException(status_code=400, detail="Deck is empty")
+
+    try:
+        analysis = await analyze_deck(deck["name"], deck.get("format", "undefined"), cards)
+    except ValueError as exc:
+        logger.warning("Deck analysis failed for %s: %s", deck_id, exc)
+        raise HTTPException(status_code=502, detail="Analysis failed, please try again") from exc
+    except Exception as exc:
+        logger.exception("Deck analysis error for %s", deck_id)
+        raise HTTPException(status_code=502, detail="Analysis failed, please try again") from exc
+
+    return await update_deck_analysis(deck_id, analysis)
 
 
 class ImportDeckRequest(BaseModel):

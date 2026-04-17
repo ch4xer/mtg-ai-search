@@ -88,12 +88,14 @@ def create_schema(conn):
         """)
         cur.execute("""
             CREATE TABLE IF NOT EXISTS decks (
-                id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                user_id    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                name       TEXT NOT NULL,
-                format     TEXT NOT NULL DEFAULT 'undefined',
-                created_at TIMESTAMPTZ DEFAULT now(),
-                updated_at TIMESTAMPTZ DEFAULT now()
+                id                   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                user_id              UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                name                 TEXT NOT NULL,
+                format               TEXT NOT NULL DEFAULT 'undefined',
+                analysis_data        JSONB,
+                analysis_updated_at  TIMESTAMPTZ,
+                created_at           TIMESTAMPTZ DEFAULT now(),
+                updated_at           TIMESTAMPTZ DEFAULT now()
             )
         """)
         # Migration for existing deployments
