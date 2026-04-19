@@ -1,21 +1,21 @@
 // Deck formats supported by the app.
 // `key` matches backend value + Scryfall's card.legalities key (where applicable).
-// `label` is the Chinese display label. `undefined` is the default category.
+// `labelZh` and `labelEn` are the display labels for each language. `undefined` is the default category.
 export const FORMATS = [
-  { key: "undefined", label: "未指定", legalityKey: null },
-  { key: "standard", label: "标准 (Standard)", legalityKey: "standard" },
-  { key: "pioneer", label: "先驱 (Pioneer)", legalityKey: "pioneer" },
-  { key: "modern", label: "摩登 (Modern)", legalityKey: "modern" },
-  { key: "legacy", label: "薪传 (Legacy)", legalityKey: "legacy" },
-  { key: "vintage", label: "特选 (Vintage)", legalityKey: "vintage" },
-  { key: "pauper", label: "纯铁 (Pauper)", legalityKey: "pauper" },
-  { key: "commander", label: "指挥官 (Commander)", legalityKey: "commander" },
-  { key: "brawl", label: "争锋 (Brawl)", legalityKey: "brawl" },
-  { key: "historic", label: "史册 (Historic)", legalityKey: "historic" },
-  { key: "alchemy", label: "炼金 (Alchemy)", legalityKey: "alchemy" },
-  { key: "explorer", label: "探索 (Explorer)", legalityKey: "explorer" },
-  { key: "oathbreaker", label: "破誓者 (Oathbreaker)", legalityKey: "oathbreaker" },
-  { key: "premodern", label: "前摩登 (Premodern)", legalityKey: "premodern" },
+  { key: "undefined", labelZh: "未指定", labelEn: "Undefined", legalityKey: null },
+  { key: "standard", labelZh: "标准", labelEn: "Standard", legalityKey: "standard" },
+  { key: "pioneer", labelZh: "先驱", labelEn: "Pioneer", legalityKey: "pioneer" },
+  { key: "modern", labelZh: "摩登", labelEn: "Modern", legalityKey: "modern" },
+  { key: "legacy", labelZh: "薪传", labelEn: "Legacy", legalityKey: "legacy" },
+  { key: "vintage", labelZh: "特选", labelEn: "Vintage", legalityKey: "vintage" },
+  { key: "pauper", labelZh: "纯铁", labelEn: "Pauper", legalityKey: "pauper" },
+  { key: "commander", labelZh: "指挥官", labelEn: "Commander", legalityKey: "commander" },
+  { key: "brawl", labelZh: "争锋", labelEn: "Brawl", legalityKey: "brawl" },
+  { key: "historic", labelZh: "史册", labelEn: "Historic", legalityKey: "historic" },
+  { key: "alchemy", labelZh: "炼金", labelEn: "Alchemy", legalityKey: "alchemy" },
+  { key: "explorer", labelZh: "探索", labelEn: "Explorer", legalityKey: "explorer" },
+  { key: "oathbreaker", labelZh: "破誓者", labelEn: "Oathbreaker", legalityKey: "oathbreaker" },
+  { key: "premodern", labelZh: "前摩登", labelEn: "Premodern", legalityKey: "premodern" },
 ];
 
 const FORMAT_MAP = Object.fromEntries(FORMATS.map((f) => [f.key, f]));
@@ -24,8 +24,9 @@ export function getFormat(key) {
   return FORMAT_MAP[key] || FORMATS[0];
 }
 
-export function getFormatLabel(key) {
-  return getFormat(key).label;
+export function getFormatLabel(key, language = 'zh') {
+  const format = getFormat(key);
+  return language === 'zh' ? format.labelZh : format.labelEn;
 }
 
 /**
@@ -46,17 +47,32 @@ export function isCardLegal(card, formatKey) {
   return status === "legal" || status === "restricted";
 }
 
-export function legalityLabel(status) {
-  switch (status) {
-    case "legal":
-      return "合法";
-    case "not_legal":
-      return "不合法";
-    case "banned":
-      return "禁用";
-    case "restricted":
-      return "限用";
-    default:
-      return "未知";
+export function legalityLabel(status, language = 'zh') {
+  if (language === 'zh') {
+    switch (status) {
+      case "legal":
+        return "合法";
+      case "not_legal":
+        return "不合法";
+      case "banned":
+        return "禁用";
+      case "restricted":
+        return "限用";
+      default:
+        return "未知";
+    }
+  } else {
+    switch (status) {
+      case "legal":
+        return "Legal";
+      case "not_legal":
+        return "Not Legal";
+      case "banned":
+        return "Banned";
+      case "restricted":
+        return "Restricted";
+      default:
+        return "Unknown";
+    }
   }
 }
