@@ -1,12 +1,11 @@
 import asyncio
-import os
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from .agent import run_search
-from .config import get_allowed_origins
+from .config import get_allowed_origins, get_rate_limits
 from .db import (
     discover_cards,
     get_all_keywords,
@@ -18,11 +17,8 @@ from .db import (
 from .dependencies import get_optional_user
 from .routes_admin import admin_router
 from .routes_auth import auth_router
-from .routes_decks import deck_router
+from .routes_decks import deck_router, shared_deck_router
 from .startup import lifespan
-
-ANON_HOURLY_LIMIT = int(os.getenv("ANON_HOURLY_LIMIT", "5"))
-USER_HOURLY_LIMIT = int(os.getenv("USER_HOURLY_LIMIT", "30"))
 
 
 app = FastAPI(title="MTG AI Card Search", lifespan=lifespan, redirect_slashes=False)
@@ -37,6 +33,7 @@ app.add_middleware(
 
 app.include_router(auth_router)
 app.include_router(deck_router)
+app.include_router(shared_deck_router)
 app.include_router(admin_router)
 
 
@@ -64,23 +61,27 @@ async def search_cards(
 ):
     client_ip = _get_client_ip(raw_request)
 
+    limits = get_rate_limits()
+    anon_limit = limits["anon_hourly"]
+    user_limit = limits["user_hourly"]
+
     if user_id:
-        # Registered user: 30/hour (admin exempt)
+        # Registered user (admin exempt)
         user = await get_user_by_id(user_id)
         if not user or user.get("role") != "admin":
             count = await get_user_hourly_search_count(user_id)
-            if count >= USER_HOURLY_LIMIT:
+            if count >= user_limit:
                 raise HTTPException(
                     status_code=429,
-                    detail=f"搜索次数已达上限 ({USER_HOURLY_LIMIT}次/小时)",
+                    detail=f"搜索次数已达上限 ({user_limit}次/小时)",
                 )
     else:
-        # Anonymous user: 10/hour by IP
+        # Anonymous user by IP
         count = await get_ip_hourly_search_count(client_ip)
-        if count >= ANON_HOURLY_LIMIT:
+        if count >= anon_limit:
             raise HTTPException(
                 status_code=429,
-                detail=f"未登录用户搜索次数已达上限 ({ANON_HOURLY_LIMIT}次/小时)，请登录后使用",
+                detail=f"未登录用户搜索次数已达上限 ({anon_limit}次/小时)，请登录后使用",
             )
 
     search_result = await run_search(request.query)

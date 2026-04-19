@@ -6,10 +6,15 @@ from datetime import datetime, timedelta, timezone
 from fastapi import FastAPI
 
 from .auth import hash_password, verify_password
-from .config import get_admin_credentials
+from .config import get_admin_credentials, update_rate_limits
 from .db import close_pool, get_pool
-from .maintenance import backfill_missing_embeddings, incremental_sync, seed_cards_if_empty
-from .migrations import run_cards_migrations, run_post_seed, run_pre_seed
+from .maintenance import (
+    backfill_missing_embeddings,
+    incremental_sync,
+    seed_abilities_if_empty,
+    seed_cards_if_empty,
+)
+from .migrations import migrate_to_oracle_id, run_cards_migrations, run_post_seed, run_pre_seed
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +83,26 @@ async def _daily_sync_loop():
             logger.exception("[scheduler] Sync failed")
 
 
+async def _load_persisted_settings(pool) -> None:
+    """Load rate-limit settings from app_meta into in-memory config."""
+    rows = await pool.fetch(
+        "SELECT key, value FROM app_meta WHERE key IN ('anon_hourly_limit', 'user_hourly_limit')"
+    )
+    kwargs = {}
+    for row in rows:
+        try:
+            val = int(row["value"])
+        except (ValueError, TypeError):
+            continue
+        if row["key"] == "anon_hourly_limit":
+            kwargs["anon_hourly"] = val
+        elif row["key"] == "user_hourly_limit":
+            kwargs["user_hourly"] = val
+    if kwargs:
+        update_rate_limits(**kwargs)
+        logger.info("Loaded persisted rate limits: %s", kwargs)
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     pool = await get_pool()
@@ -85,8 +110,11 @@ async def lifespan(_: FastAPI):
     await run_pre_seed(pool)
     await ensure_admin_account(pool)
     await seed_cards_if_empty()
+    await seed_abilities_if_empty()
     await run_cards_migrations(pool)
     await run_post_seed(pool)
+    await migrate_to_oracle_id(pool)
+    await _load_persisted_settings(pool)
     await backfill_missing_embeddings()
 
     sync_task = asyncio.create_task(_daily_sync_loop())
