@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
 import { createPortal } from "react-dom";
 import { useParams, useNavigate } from "react-router-dom";
-import { apiFetch, getAccessToken } from "../utils/apiFetch.js";
+import { apiFetch } from "../utils/apiFetch.js";
+import { useAuth } from "../contexts/AuthContext.jsx";
 import { useToast } from "../contexts/ToastContext.jsx";
 import { useLanguage } from "../contexts/LanguageContext.jsx";
 import { FORMATS, getFormatLabel, getCardLegality, isCardLegal, legalityLabel } from "../utils/formats.js";
@@ -50,6 +51,7 @@ const TYPE_MANA_CLASSES = {
 function DeckDetailPage({ imageMode }) {
     const { id } = useParams();
     const navigate = useNavigate();
+    const { user } = useAuth();
     const { showToast } = useToast();
     const { t, language } = useLanguage();
     const [deck, setDeck] = useState(null);
@@ -66,6 +68,7 @@ function DeckDetailPage({ imageMode }) {
     const [importText, setImportText] = useState("");
     const [importNotFound, setImportNotFound] = useState([]);
     const [selectedCard, setSelectedCard] = useState(null);
+    const [showMobileSheet, setShowMobileSheet] = useState(false);
     const [showExportMenu, setShowExportMenu] = useState(false);
     const [showArtPicker, setShowArtPicker] = useState(false);
     const [artPrints, setArtPrints] = useState([]);
@@ -74,6 +77,9 @@ function DeckDetailPage({ imageMode }) {
 
     const hoverTimerRef = useRef(null);
     const previewLockedRef = useRef(false);
+    const sheetRef = useRef(null);
+    const sheetDragStartY = useRef(0);
+    const sheetDragDelta = useRef(0);
 
     const cancelPendingSelect = () => {
         if (hoverTimerRef.current) {
@@ -97,12 +103,12 @@ function DeckDetailPage({ imageMode }) {
     const fetchDeck = async () => {
         try {
             const [deckRes, cardsRes] = await Promise.all([
-                apiFetch(`/api/decks/${id}`),
-                apiFetch(`/api/decks/${id}/cards`),
+                fetch(`/api/shared/decks/${id}`),
+                fetch(`/api/shared/decks/${id}/cards`),
             ]);
             if (deckRes.status === 404) {
                 showToast(t('deckNotFound'), "error");
-                navigate("/decks");
+                navigate("/");
                 return;
             }
             if (deckRes.ok && cardsRes.ok) {
@@ -133,6 +139,26 @@ function DeckDetailPage({ imageMode }) {
 
     // ── Group cards by board, then by type ──
 
+    // Color sort order: W → U → B → R → G, multi-color after, colorless last
+    const COLOR_ORDER = { W: 0, U: 1, B: 2, R: 3, G: 4 };
+    const getColorSortIndex = (card) => {
+        const colors = card.color_identity || card.colors || [];
+        if (colors.length === 0) return 100; // colorless
+        if (colors.length === 1) {
+            return COLOR_ORDER[colors[0]] ?? 50;
+        }
+        // Multi-color: use the smallest index among its colors
+        const minIdx = Math.min(...colors.map((c) => COLOR_ORDER[c] ?? 50));
+        return 50 + minIdx; // Multi-color comes after single colors
+    };
+
+    // Check if card has uncertain CMC (contains X in mana cost)
+    const hasUncertainCmc = (card) => {
+        const manaCost = card.mana_cost || "";
+        // Check for X, Y, Z variables in mana cost
+        return /\{[XYZ]\}/i.test(manaCost);
+    };
+
     const { mainboardGroups, sideboardGroups } = useMemo(() => {
         const buildGroups = (boardCards) => {
             const groups = {};
@@ -140,6 +166,33 @@ function DeckDetailPage({ imageMode }) {
                 const type = classifyCard(item.card);
                 if (!groups[type]) groups[type] = [];
                 groups[type].push(item);
+            }
+            // Sort each group by CMC (ascending), then by color, uncertain CMC at end
+            for (const type in groups) {
+                groups[type].sort((a, b) => {
+                    const uncertainA = hasUncertainCmc(a.card);
+                    const uncertainB = hasUncertainCmc(b.card);
+                    const cmcA = a.card.cmc ?? 0;
+                    const cmcB = b.card.cmc ?? 0;
+                    // Both uncertain CMC: sort by color then name
+                    if (uncertainA && uncertainB) {
+                        const colorA = getColorSortIndex(a.card);
+                        const colorB = getColorSortIndex(b.card);
+                        if (colorA !== colorB) return colorA - colorB;
+                        return (a.card.name || "").localeCompare(b.card.name || "");
+                    }
+                    // Uncertain CMC goes last
+                    if (uncertainA) return 1;
+                    if (uncertainB) return -1;
+                    // Same CMC: sort by color then name
+                    if (cmcA === cmcB) {
+                        const colorA = getColorSortIndex(a.card);
+                        const colorB = getColorSortIndex(b.card);
+                        if (colorA !== colorB) return colorA - colorB;
+                        return (a.card.name || "").localeCompare(b.card.name || "");
+                    }
+                    return cmcA - cmcB;
+                });
             }
             const ordered = [];
             for (const type of TYPE_ORDER) {
@@ -162,6 +215,29 @@ function DeckDetailPage({ imageMode }) {
             const type = classifyCard(item.card);
             if (!groups[type]) groups[type] = [];
             groups[type].push(item);
+        }
+        for (const type in groups) {
+            groups[type].sort((a, b) => {
+                const uncertainA = hasUncertainCmc(a.card);
+                const uncertainB = hasUncertainCmc(b.card);
+                const cmcA = a.card.cmc ?? 0;
+                const cmcB = b.card.cmc ?? 0;
+                if (uncertainA && uncertainB) {
+                    const colorA = getColorSortIndex(a.card);
+                    const colorB = getColorSortIndex(b.card);
+                    if (colorA !== colorB) return colorA - colorB;
+                    return (a.card.name || "").localeCompare(b.card.name || "");
+                }
+                if (uncertainA) return 1;
+                if (uncertainB) return -1;
+                if (cmcA === cmcB) {
+                    const colorA = getColorSortIndex(a.card);
+                    const colorB = getColorSortIndex(b.card);
+                    if (colorA !== colorB) return colorA - colorB;
+                    return (a.card.name || "").localeCompare(b.card.name || "");
+                }
+                return cmcA - cmcB;
+            });
         }
         const ordered = [];
         for (const type of TYPE_ORDER) {
@@ -303,10 +379,7 @@ function DeckDetailPage({ imageMode }) {
         setExporting(true);
         setExportProgress({ phase: "download", current: 0, total: 0 });
         try {
-            const token = getAccessToken();
-            const res = await fetch(`/api/decks/${id}/export/stream`, {
-                headers: token ? { Authorization: `Bearer ${token}` } : {},
-            });
+            const res = await fetch(`/api/shared/decks/${id}/export/stream`);
             if (!res.ok) {
                 const err = await res.json().catch(() => ({}));
                 showToast(err.detail || t('exportFailed'), "error");
@@ -331,7 +404,7 @@ function DeckDetailPage({ imageMode }) {
                 }
             }
             if (exportId) {
-                const pdfRes = await apiFetch(`/api/decks/${id}/export/download/${exportId}`);
+                const pdfRes = await fetch(`/api/shared/decks/${id}/export/download/${exportId}`);
                 if (!pdfRes.ok) { showToast(language === 'zh' ? "下载 PDF 失败" : "Failed to download PDF", "error"); return; }
                 const blob = await pdfRes.blob();
                 const url = URL.createObjectURL(blob);
@@ -351,10 +424,7 @@ function DeckDetailPage({ imageMode }) {
         setExportingImages(true);
         setExportImagesProgress({ phase: "download", current: 0, total: 0 });
         try {
-            const token = getAccessToken();
-            const res = await fetch(`/api/decks/${id}/export/images/stream`, {
-                headers: token ? { Authorization: `Bearer ${token}` } : {},
-            });
+            const res = await fetch(`/api/shared/decks/${id}/export/images/stream`);
             if (!res.ok) {
                 const err = await res.json().catch(() => ({}));
                 showToast(err.detail || t('exportFailed'), "error");
@@ -379,7 +449,7 @@ function DeckDetailPage({ imageMode }) {
                 }
             }
             if (exportId) {
-                const zipRes = await apiFetch(`/api/decks/${id}/export/images/download/${exportId}`);
+                const zipRes = await fetch(`/api/shared/decks/${id}/export/images/download/${exportId}`);
                 if (!zipRes.ok) { showToast(language === 'zh' ? "下载 ZIP 失败" : "Failed to download ZIP", "error"); return; }
                 const blob = await zipRes.blob();
                 const url = URL.createObjectURL(blob);
@@ -432,9 +502,18 @@ function DeckDetailPage({ imageMode }) {
         return t('daysAgo').replace('{n}', days);
     };
 
+    const handleShareDeck = async () => {
+        try {
+            await navigator.clipboard.writeText(window.location.href);
+            showToast(t('shareLinkCopied'));
+        } catch {
+            showToast(window.location.href, "info");
+        }
+    };
+
     const handleExportText = async () => {
         try {
-            const res = await apiFetch(`/api/decks/${id}/export/text`);
+            const res = await fetch(`/api/shared/decks/${id}/export/text`);
             if (!res.ok) { showToast(((await res.json().catch(() => ({}))).detail) || t('copyFailed'), "error"); return; }
             const text = await res.text();
             await navigator.clipboard.writeText(text);
@@ -570,7 +649,17 @@ function DeckDetailPage({ imageMode }) {
         setArtPrints([]);
     }, [selectedCard?.card_id, selectedCard?.board]);
 
+    // Lock body scroll while the mobile bottom sheet is open
+    useEffect(() => {
+        if (!showMobileSheet) return;
+        const prev = document.body.style.overflow;
+        document.body.style.overflow = 'hidden';
+        return () => { document.body.style.overflow = prev; };
+    }, [showMobileSheet]);
+
     // ── Render ──
+
+    const isOwner = !!(user && deck && user.id === deck.user_id);
 
     if (loading) {
         return (
@@ -590,37 +679,83 @@ function DeckDetailPage({ imageMode }) {
         <div className="deck-detail">
             {/* Header */}
             <div className="deck-detail-header">
-                <button className="btn-secondary" onClick={() => navigate("/decks")}>&larr; {t('backToDecks')}</button>
+                {!isOwner ? (
+                    <button className="btn-secondary" onClick={() => navigate("/")}>&larr; {t('backToHome')}</button>
+                ) : (
+                    <button className="btn-secondary" onClick={() => navigate("/decks")}>&larr; {t('backToDecks')}</button>
+                )}
                 <div className="deck-detail-title">
-                    {editing ? (
+                    {isOwner && editing ? (
                         <form onSubmit={(e) => { e.preventDefault(); handleRename(); }} className="deck-rename-form">
                             <input value={editName} onChange={(e) => setEditName(e.target.value)} autoFocus onBlur={handleRename} />
                         </form>
                     ) : (
-                        <h2 onClick={() => setEditing(true)} title={t('clickToRename')}>{deck.name}</h2>
+                        <h2
+                            onClick={isOwner ? () => setEditing(true) : undefined}
+                            title={isOwner ? t('clickToRename') : undefined}
+                            style={isOwner ? undefined : { cursor: "default" }}
+                        >{deck.name}</h2>
                     )}
-                    <select
-                        className={`deck-format-select format-${deck.format || "undefined"}`}
-                        value={deck.format || "undefined"}
-                        onChange={handleFormatChange}
-                        title={t('switchFormat')}
-                    >
-                        {FORMATS.map((f) => <option key={f.key} value={f.key}>{f.label}</option>)}
-                    </select>
+                    {!isOwner ? (
+                        <span className="deck-format-badge">{getFormatLabel(deck.format || "undefined")}</span>
+                    ) : (
+                        <select
+                            className={`deck-format-select format-${deck.format || "undefined"}`}
+                            value={deck.format || "undefined"}
+                            onChange={handleFormatChange}
+                            title={t('switchFormat')}
+                        >
+                            {FORMATS.map((f) => <option key={f.key} value={f.key}>{f.label}</option>)}
+                        </select>
+                    )}
                     <span className="deck-detail-count">
                         {totalCards} {t('cardsCount')}{sideboardCount > 0 && ` (${t('mainboardCards')} ${mainboardCount} / ${t('sideboardCards')} ${sideboardCount})`}
                     </span>
                 </div>
                 <div className="deck-detail-actions">
-                    <button className="btn-secondary" onClick={() => setShowImportModal(true)}>{t('importDecklist')}</button>
-                    <button className="btn-secondary" onClick={handleExportText} disabled={cards.length === 0}>{t('copyDecklist')}</button>
+                    {isOwner && (
+                        <button className="btn-secondary" onClick={handleShareDeck} title={t('share')}>
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <circle cx="18" cy="5" r="3" />
+                                <circle cx="6" cy="12" r="3" />
+                                <circle cx="18" cy="19" r="3" />
+                                <line x1="8.59" y1="13.51" x2="15.42" y2="17.49" />
+                                <line x1="15.41" y1="6.51" x2="8.59" y2="10.49" />
+                            </svg>
+                            <span className="btn-label">{t('share')}</span>
+                        </button>
+                    )}
+                    {isOwner && (
+                        <button className="btn-secondary" onClick={() => setShowImportModal(true)} title={t('importDecklist')}>
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                                <polyline points="14 2 14 8 20 8" />
+                                <line x1="12" y1="18" x2="12" y2="12" />
+                                <line x1="9" y1="15" x2="15" y2="15" />
+                            </svg>
+                            <span className="btn-label">{t('importDecklist')}</span>
+                        </button>
+                    )}
+                    <button className="btn-secondary" onClick={handleExportText} disabled={cards.length === 0} title={t('copyDecklist')}>
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                        </svg>
+                        <span className="btn-label">{t('copyDecklist')}</span>
+                    </button>
                     <div className="export-dropdown">
                         <button
                             className="btn-accent"
                             onClick={() => setShowExportMenu(!showExportMenu)}
                             disabled={(exporting || exportingImages) || cards.length === 0}
+                            title={t('exportDeck')}
                         >
-                            {exporting || exportingImages ? `${t('downloadProgress')}...` : t('exportDeck')}
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                                <polyline points="7 10 12 15 17 10" />
+                                <line x1="12" y1="15" x2="12" y2="3" />
+                            </svg>
+                            <span className="btn-label">{exporting || exportingImages ? `${t('downloadProgress')}...` : t('exportDeck')}</span>
                             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ marginLeft: '4px' }}>
                                 <polyline points="6 9 12 15 18 9" />
                             </svg>
@@ -646,7 +781,17 @@ function DeckDetailPage({ imageMode }) {
                             </div>
                         )}
                     </div>
-                    <button className="btn-danger" onClick={handleDelete}>{t('deleteDeck')}</button>
+                    {isOwner && (
+                        <button className="btn-danger" onClick={handleDelete} title={t('deleteDeck')}>
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <polyline points="3 6 5 6 21 6" />
+                                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                                <line x1="10" y1="11" x2="10" y2="17" />
+                                <line x1="14" y1="11" x2="14" y2="17" />
+                            </svg>
+                            <span className="btn-label">{t('deleteDeck')}</span>
+                        </button>
+                    )}
                 </div>
             </div>
 
@@ -700,7 +845,7 @@ function DeckDetailPage({ imageMode }) {
                             <>
                                 <div className="deck-preview-image" style={{ position: "relative" }}>
                                     <img src={getCardFullImage(selectedCard)} alt={selectedCard.card.name} />
-                                    {selectedCard.card.prints_search_uri && (
+                                    {isOwner && selectedCard.card.prints_search_uri && (
                                         <button
                                             className="card-art-btn"
                                             onClick={handleOpenArtPicker}
@@ -783,6 +928,7 @@ function DeckDetailPage({ imageMode }) {
                                                         className={`deck-stack-card ${isSelected ? "selected" : ""}`}
                                                         onMouseEnter={() => schedulePreviewSelect(item)}
                                                         onMouseLeave={cancelPendingSelect}
+                                                        onClick={() => { setSelectedCard(item); setShowMobileSheet(true); }}
                                                     >
                                                         {img ? (
                                                             <img src={img} alt={item.card.name} className="deck-stack-img" loading="lazy" />
@@ -794,11 +940,15 @@ function DeckDetailPage({ imageMode }) {
                                                             {illegal && <span className="deck-illegal-icon" title={t('cardIllegalInFormat')}>!</span>}
                                                             {item.card.name}
                                                         </div>
-                                                        <div className="deck-stack-controls">
-                                                            <button onClick={(e) => { e.stopPropagation(); handleQuantityChange(item.card_id, -1, item.board); }}>-</button>
-                                                            <span>{item.quantity}</span>
-                                                            <button onClick={(e) => { e.stopPropagation(); handleQuantityChange(item.card_id, 1, item.board); }}>+</button>
-                                                        </div>
+                                                        {!isOwner ? (
+                                                            <div className="deck-stack-qty">{item.quantity > 1 && `x${item.quantity}`}</div>
+                                                        ) : (
+                                                            <div className="deck-stack-controls">
+                                                                <button onClick={(e) => { e.stopPropagation(); handleQuantityChange(item.card_id, -1, item.board); }}>-</button>
+                                                                <span>{item.quantity}</span>
+                                                                <button onClick={(e) => { e.stopPropagation(); handleQuantityChange(item.card_id, 1, item.board); }}>+</button>
+                                                            </div>
+                                                        )}
                                                     </div>
                                                 );
                                             })}
@@ -832,6 +982,7 @@ function DeckDetailPage({ imageMode }) {
                                                         className={`deck-stack-card ${isSelected ? "selected" : ""}`}
                                                         onMouseEnter={() => schedulePreviewSelect(item)}
                                                         onMouseLeave={cancelPendingSelect}
+                                                        onClick={() => { setSelectedCard(item); setShowMobileSheet(true); }}
                                                     >
                                                         {img ? (
                                                             <img src={img} alt={item.card.name} className="deck-stack-img" loading="lazy" />
@@ -843,11 +994,15 @@ function DeckDetailPage({ imageMode }) {
                                                             {illegal && <span className="deck-illegal-icon" title={t('cardIllegalInFormat')}>!</span>}
                                                             {item.card.name}
                                                         </div>
-                                                        <div className="deck-stack-controls">
-                                                            <button onClick={(e) => { e.stopPropagation(); handleQuantityChange(item.card_id, -1, item.board); }}>-</button>
-                                                            <span>{item.quantity}</span>
-                                                            <button onClick={(e) => { e.stopPropagation(); handleQuantityChange(item.card_id, 1, item.board); }}>+</button>
-                                                        </div>
+                                                        {!isOwner ? (
+                                                            <div className="deck-stack-qty">{item.quantity > 1 && `x${item.quantity}`}</div>
+                                                        ) : (
+                                                            <div className="deck-stack-controls">
+                                                                <button onClick={(e) => { e.stopPropagation(); handleQuantityChange(item.card_id, -1, item.board); }}>-</button>
+                                                                <span>{item.quantity}</span>
+                                                                <button onClick={(e) => { e.stopPropagation(); handleQuantityChange(item.card_id, 1, item.board); }}>+</button>
+                                                            </div>
+                                                        )}
                                                     </div>
                                                 );
                                             })}
@@ -864,25 +1019,27 @@ function DeckDetailPage({ imageMode }) {
                             <div className={`analysis-card analyze-card ${deck?.analysis ? 'has-analysis' : ''}`}>
                                 {deck?.analysis ? (
                                     <>
-                                        <div className="analyze-header">
-                                            <button
-                                                className="analyze-btn analyze-btn-compact"
-                                                onClick={handleAnalyze}
-                                                disabled={analyzing}
-                                            >
-                                                {analyzing ? (
-                                                    <><span className="analyze-spinner" aria-hidden="true" /> {t('analyzing')}</>
-                                                ) : (
-                                                    <><span className="analyze-sparkle" aria-hidden="true">✦</span> {t('reanalyzeDeck')}</>
-                                                )}
-                                            </button>
-                                            <div className="analyze-meta">
-                                                <span>{t('analysisLastUpdated')} {formatRelativeTime(deck.analysis.updated_at)}</span>
-                                                {new Date(deck.updated_at).getTime() > new Date(deck.analysis.updated_at).getTime() && (
-                                                    <span className="analyze-stale" title={t('analysisDeckChanged')}>● {t('analysisDeckChanged')}</span>
-                                                )}
+                                        {isOwner && (
+                                            <div className="analyze-header">
+                                                <button
+                                                    className="analyze-btn analyze-btn-compact"
+                                                    onClick={handleAnalyze}
+                                                    disabled={analyzing}
+                                                >
+                                                    {analyzing ? (
+                                                        <><span className="analyze-spinner" aria-hidden="true" /> {t('analyzing')}</>
+                                                    ) : (
+                                                        <><span className="analyze-sparkle" aria-hidden="true">✦</span> {t('reanalyzeDeck')}</>
+                                                    )}
+                                                </button>
+                                                <div className="analyze-meta">
+                                                    <span>{t('analysisLastUpdated')} {formatRelativeTime(deck.analysis.updated_at)}</span>
+                                                    {new Date(deck.updated_at).getTime() > new Date(deck.analysis.updated_at).getTime() && (
+                                                        <span className="analyze-stale" title={t('analysisDeckChanged')}>● {t('analysisDeckChanged')}</span>
+                                                    )}
+                                                </div>
                                             </div>
-                                        </div>
+                                        )}
                                         {analyzing ? (
                                             <div className="analyze-skeleton">
                                                 <div className="analyze-skeleton-block" />
@@ -903,6 +1060,10 @@ function DeckDetailPage({ imageMode }) {
                                             );
                                         })()}
                                     </>
+                                ) : !isOwner ? (
+                                    <p className="analyze-text" style={{ textAlign: "center", color: "var(--text-muted)" }}>
+                                        {t('noAnalysisYet')}
+                                    </p>
                                 ) : (
                                     <button
                                         className="analyze-btn analyze-btn-primary"
@@ -1052,6 +1213,94 @@ function DeckDetailPage({ imageMode }) {
                                 ))}
                             </div>
                         )}
+                    </div>
+                </>,
+                document.body
+            )}
+
+            {/* Mobile Bottom Sheet */}
+            {showMobileSheet && selectedCard && createPortal(
+                <>
+                    <div className="mobile-sheet-backdrop" onClick={() => setShowMobileSheet(false)} />
+                    <div className="mobile-sheet" ref={sheetRef}>
+                        <div
+                            className="mobile-sheet-header"
+                            onTouchStart={(e) => {
+                                sheetDragStartY.current = e.touches[0].clientY;
+                                sheetDragDelta.current = 0;
+                                if (sheetRef.current) sheetRef.current.style.transition = 'none';
+                            }}
+                            onTouchMove={(e) => {
+                                const dy = e.touches[0].clientY - sheetDragStartY.current;
+                                if (dy > 0 && sheetRef.current) {
+                                    sheetRef.current.style.transform = `translateY(${dy}px)`;
+                                    sheetDragDelta.current = dy;
+                                }
+                            }}
+                            onTouchEnd={() => {
+                                if (sheetRef.current) sheetRef.current.style.transition = '';
+                                if (sheetDragDelta.current > 120) {
+                                    setShowMobileSheet(false);
+                                }
+                                if (sheetRef.current) sheetRef.current.style.transform = '';
+                                sheetDragDelta.current = 0;
+                            }}
+                        >
+                            <div className="mobile-sheet-handle" />
+                            <button
+                                className="mobile-sheet-close"
+                                onClick={() => setShowMobileSheet(false)}
+                                aria-label={t('close') || 'Close'}
+                            >
+                                &times;
+                            </button>
+                        </div>
+                        <div className="mobile-sheet-body">
+                            <div className="mobile-sheet-image">
+                                <img src={getCardFullImage(selectedCard)} alt={selectedCard.card.name} />
+                                {isOwner && selectedCard.card.prints_search_uri && (
+                                    <button className="card-art-btn" onClick={handleOpenArtPicker} title={t('changeArt')}>
+                                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                            <rect x="3" y="3" width="7" height="7" />
+                                            <rect x="14" y="3" width="7" height="7" />
+                                            <rect x="3" y="14" width="7" height="7" />
+                                            <rect x="14" y="14" width="7" height="7" />
+                                        </svg>
+                                    </button>
+                                )}
+                            </div>
+                            <div className="mobile-sheet-info">
+                                <h3 className="deck-preview-name">{selectedCard.card.name}</h3>
+                                {selectedCard.card.mana_cost && (
+                                    <span className="deck-preview-mana">
+                                        {parseManaCost(selectedCard.card.mana_cost).map((sym, idx) =>
+                                            sym.half ? (
+                                                <span key={idx} className="ms-half">
+                                                    <i className={`ms ${sym.classes}`} aria-hidden="true" />
+                                                </span>
+                                            ) : (
+                                                <i key={idx} className={`ms ${sym.classes}`} aria-hidden="true" />
+                                            )
+                                        )}
+                                    </span>
+                                )}
+                                <p className="deck-preview-type">{selectedCard.card.type_line}</p>
+                                {selectedCard.card.oracle_text && (
+                                    <p className="deck-preview-oracle">{parseOracleText(selectedCard.card.oracle_text, React.createElement)}</p>
+                                )}
+                                {(selectedCard.card.power || selectedCard.card.toughness) && (
+                                    <p className="deck-preview-pt">{selectedCard.card.power}/{selectedCard.card.toughness}</p>
+                                )}
+                                {deck.format && deck.format !== "undefined" && (() => {
+                                    const legality = getCardLegality(selectedCard.card, deck.format);
+                                    return (
+                                        <span className={`legality-chip legality-${legality}`}>
+                                            {getFormatLabel(deck.format)}: {legalityLabel(legality)}
+                                        </span>
+                                    );
+                                })()}
+                            </div>
+                        </div>
                     </div>
                 </>,
                 document.body

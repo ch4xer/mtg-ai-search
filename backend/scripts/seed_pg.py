@@ -125,7 +125,12 @@ def create_schema(conn):
 
 
 def insert_cards(conn, cards: list[dict]):
-    """Insert card rows (without embeddings) in batches."""
+    """Insert card rows (without embeddings) in batches.
+
+    cards.id stores oracle_id (the stable Oracle identifier), not the
+    printing-specific id. Scryfall's oracle_cards bulk has one entry per
+    oracle_id, so upserts are naturally idempotent across printing changes.
+    """
     log(f"Inserting {len(cards)} cards...")
     batch_size = 1000
 
@@ -138,8 +143,11 @@ def insert_cards(conn, cards: list[dict]):
                 raw_colors = card.get("colors")
                 colors = raw_colors if raw_colors is not None else (card.get("color_identity") or [])
                 keywords = card.get("keywords") or []
+                # Overwrite the Scryfall printing id with oracle_id so every
+                # consumer of the stored data reads the same id we key by.
+                card["id"] = card["oracle_id"]
                 values.append((
-                    card["id"],
+                    card["oracle_id"],
                     card.get("name", ""),
                     card.get("lang"),
                     card.get("released_at"),
