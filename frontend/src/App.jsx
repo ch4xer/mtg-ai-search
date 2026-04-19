@@ -1,13 +1,12 @@
 import { useState, useEffect } from "react";
-import { Routes, Route, Navigate } from "react-router-dom";
+import { Routes, Route, Navigate, useLocation } from "react-router-dom";
 import Header from "./components/Header.jsx";
 import Footer from "./components/Footer.jsx";
-import SearchPage from "./pages/SearchPage.jsx";
+import SearchContainer from "./pages/SearchContainer.jsx";
 import LoginPage from "./pages/LoginPage.jsx";
 import DecksPage from "./pages/DecksPage.jsx";
 import DeckDetailPage from "./pages/DeckDetailPage.jsx";
 import AdminPage from "./pages/AdminPage.jsx";
-import DiscoverPage from "./pages/DiscoverPage.jsx";
 import SettingsPage from "./pages/SettingsPage.jsx";
 import { AuthProvider, useAuth } from "./contexts/AuthContext.jsx";
 import { ToastProvider } from "./contexts/ToastContext.jsx";
@@ -56,18 +55,26 @@ function AppContent() {
     });
   };
 
+  const location = useLocation();
+  const isSearchRoute = location.pathname === "/" || location.pathname === "/discover";
+
   return (
     <div className="app">
       <Header theme={theme} onToggleTheme={toggleTheme} />
       <main className="main-content">
+        {/* SearchContainer stays mounted across / and /discover to preserve state */}
+        <div style={{ display: isSearchRoute ? undefined : "none" }}>
+          <SearchContainer imageMode={imageMode} onToggleImageMode={toggleImageMode} />
+        </div>
         <Routes>
-          <Route path="/" element={<SearchPage imageMode={imageMode} onToggleImageMode={toggleImageMode} />} />
-          <Route path="/discover" element={<DiscoverPage imageMode={imageMode} onToggleImageMode={toggleImageMode} />} />
+          <Route path="/" element={null} />
+          <Route path="/discover" element={null} />
           <Route path="/login" element={<LoginPage />} />
           <Route path="/decks" element={<ProtectedRoute><DecksPage /></ProtectedRoute>} />
-          <Route path="/decks/:id" element={<ProtectedRoute><DeckDetailPage imageMode={imageMode} /></ProtectedRoute>} />
+          <Route path="/decks/:id" element={<DeckDetailPage imageMode={imageMode} />} />
           <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
-          <Route path="/admin" element={<AdminRoute><AdminPage /></AdminRoute>} />
+          <Route path="/admin" element={<Navigate to="/admin/dashboard" replace />} />
+          <Route path="/admin/:section" element={<AdminRoute><AdminPage /></AdminRoute>} />
         </Routes>
       </main>
       <Footer />
