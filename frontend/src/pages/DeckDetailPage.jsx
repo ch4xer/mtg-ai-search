@@ -80,6 +80,14 @@ function DeckDetailPage({ imageMode }) {
     const sheetRef = useRef(null);
     const sheetDragStartY = useRef(0);
     const sheetDragDelta = useRef(0);
+    const draggedCardRef = useRef(null);
+    const touchDragRef = useRef(null);
+    const longPressTimerRef = useRef(null);
+
+    const [dragOverBoard, setDragOverBoard] = useState(null);
+    const [touchDragCard, setTouchDragCard] = useState(null); // 卡牌被长按选中待移动
+    const [showMovePanel, setShowMovePanel] = useState(false); // 显示底部移动面板
+    const [contextMenu, setContextMenu] = useState(null); // { x, y, item }
 
     const cancelPendingSelect = () => {
         if (hoverTimerRef.current) {
@@ -329,7 +337,7 @@ function DeckDetailPage({ imageMode }) {
         if (res.ok) {
             const updated = await res.json();
             setDeck((prev) => ({ ...prev, format: updated.format }));
-            showToast(language === 'zh' ? `赛制已切换为「${getFormatLabel(updated.format)}」` : `Format changed to "${getFormatLabel(updated.format)}"`);
+            showToast(language === 'zh' ? `赛制已切换为「${getFormatLabel(updated.format, language)}」` : `Format changed to "${getFormatLabel(updated.format, language)}"`);
         }
     };
 
@@ -373,6 +381,225 @@ function DeckDetailPage({ imageMode }) {
             showToast(t('cardRemoved'));
         }
     };
+
+    // Move card between boards (mainboard <-> sideboard)
+    // quantity: 'all' for drag, 1 for single card move
+    const handleMoveCard = async (cardId, fromBoard, toBoard, quantity = 'all') => {
+        const card = cards.find((c) => c.card_id === cardId && c.board === fromBoard);
+        if (!card || fromBoard === toBoard) return;
+
+        const moveCount = quantity === 'all' ? card.quantity : 1;
+
+        // Check if target board already has this card
+        const targetCard = cards.find((c) => c.card_id === cardId && c.board === toBoard);
+
+        // Update source card quantity (or remove if moving all)
+        if (quantity === 'all') {
+            // Remove from source board
+            const removeRes = await apiFetch(`/api/decks/${id}/cards/${cardId}?board=${fromBoard}`, { method: "DELETE" });
+            if (!removeRes.ok) {
+                showToast(language === 'zh' ? '移动失败' : 'Failed to move card', "error");
+                return;
+            }
+        } else {
+            // Reduce quantity by 1
+            const newSourceQty = card.quantity - moveCount;
+            if (newSourceQty <= 0) {
+                const removeRes = await apiFetch(`/api/decks/${id}/cards/${cardId}?board=${fromBoard}`, { method: "DELETE" });
+                if (!removeRes.ok) {
+                    showToast(language === 'zh' ? '移动失败' : 'Failed to move card', "error");
+                    return;
+                }
+            } else {
+                const updateRes = await apiFetch(`/api/decks/${id}/cards`, {
+                    method: "POST",
+                    body: { card_id: cardId, quantity: -moveCount, board: fromBoard },
+                });
+                if (!updateRes.ok) {
+                    showToast(language === 'zh' ? '移动失败' : 'Failed to move card', "error");
+                    return;
+                }
+            }
+        }
+
+        // Add to target board
+        const addRes = await apiFetch(`/api/decks/${id}/cards`, {
+            method: "POST",
+            body: { card_id: cardId, quantity: moveCount, board: toBoard },
+        });
+        if (!addRes.ok) {
+            showToast(language === 'zh' ? '移动失败' : 'Failed to move card', "error");
+            // Restore source card
+            await apiFetch(`/api/decks/${id}/cards`, {
+                method: "POST",
+                body: { card_id: cardId, quantity: moveCount, board: fromBoard },
+            });
+            return;
+        }
+
+        // Update local state
+        setCards((prev) => {
+            let newState = prev;
+
+            // Update source card
+            if (quantity === 'all' || card.quantity - moveCount <= 0) {
+                newState = newState.filter((c) => !(c.card_id === cardId && c.board === fromBoard));
+            } else {
+                newState = newState.map((c) =>
+                    c.card_id === cardId && c.board === fromBoard
+                        ? { ...c, quantity: c.quantity - moveCount }
+                        : c
+                );
+            }
+
+            // Update target card (add or update)
+            if (targetCard) {
+                newState = newState.map((c) =>
+                    c.card_id === cardId && c.board === toBoard
+                        ? { ...c, quantity: c.quantity + moveCount }
+                        : c
+                );
+            } else {
+                newState = [...newState, {
+                    ...card,
+                    board: toBoard,
+                    quantity: moveCount,
+                }];
+            }
+
+            return newState;
+        });
+
+        // Update selected card if needed
+        if (selectedCard?.card_id === cardId && selectedCard?.board === fromBoard) {
+            if (quantity === 'all' || card.quantity - moveCount <= 0) {
+                setSelectedCard(null);
+            } else {
+                setSelectedCard((prev) => ({ ...prev, quantity: prev.quantity - moveCount }));
+            }
+        }
+
+        const actionText = quantity === 'all'
+            ? (language === 'zh' ? '已全部移动到' : 'Moved all to')
+            : (language === 'zh' ? '已移动1张到' : 'Moved 1 to');
+        showToast(`${actionText}${toBoard === 'sideboard' ? (language === 'zh' ? '备牌' : 'sideboard') : (language === 'zh' ? '主卡组' : 'mainboard')}`);
+    };
+
+    // Drag handlers
+    const handleDragStart = (e, item) => {
+        if (!isOwner) {
+            e.preventDefault();
+            return;
+        }
+        draggedCardRef.current = item;
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/plain', JSON.stringify({ cardId: item.card_id, board: item.board }));
+        // Add dragging class after a small delay to allow the drag image to be captured
+        setTimeout(() => {
+            e.target.classList.add('dragging');
+        }, 0);
+    };
+
+    const handleDragEnd = (e) => {
+        e.target.classList.remove('dragging');
+        draggedCardRef.current = null;
+        setDragOverBoard(null);
+    };
+
+    const handleDragOver = (e, board) => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        setDragOverBoard(board);
+    };
+
+    const handleDragLeave = (e) => {
+        // Only clear if we're leaving the entire drop zone
+        if (!e.currentTarget.contains(e.relatedTarget)) {
+            setDragOverBoard(null);
+        }
+    };
+
+    const handleDrop = (e, toBoard) => {
+        e.preventDefault();
+        setDragOverBoard(null);
+
+        try {
+            const data = JSON.parse(e.dataTransfer.getData('text/plain'));
+            const { cardId, board: fromBoard } = data;
+            handleMoveCard(cardId, fromBoard, toBoard, 'all');
+        } catch {
+            // Invalid drag data
+        }
+    };
+
+    // ── Touch drag handlers for mobile ──
+
+    const handleTouchStart = (e, item) => {
+        if (!isOwner) return;
+        // Long press to show move panel
+        longPressTimerRef.current = setTimeout(() => {
+            setTouchDragCard(item);
+            setShowMovePanel(true);
+            // Haptic feedback if available
+            if (navigator.vibrate) navigator.vibrate(50);
+            // Prevent click event
+            e.preventDefault();
+        }, 400); // 400ms long press
+    };
+
+    const handleTouchMove = (e) => {
+        // Cancel long press if user moves before timer completes
+        if (longPressTimerRef.current) {
+            clearTimeout(longPressTimerRef.current);
+            longPressTimerRef.current = null;
+        }
+    };
+
+    const handleTouchEnd = () => {
+        // Cancel long press timer if touch ends before timer completes
+        if (longPressTimerRef.current) {
+            clearTimeout(longPressTimerRef.current);
+            longPressTimerRef.current = null;
+        }
+    };
+
+    const handleMovePanelClose = () => {
+        setShowMovePanel(false);
+        setTouchDragCard(null);
+    };
+
+    // ── Context menu handlers (right-click) ──
+
+    const handleContextMenu = (e, item) => {
+        if (!isOwner) return;
+        e.preventDefault();
+        e.stopPropagation();
+        setContextMenu({
+            x: e.clientX,
+            y: e.clientY,
+            item,
+        });
+    };
+
+    const handleContextMenuClose = () => {
+        setContextMenu(null);
+    };
+
+    const handleContextMenuMoveOne = (toBoard) => {
+        if (contextMenu?.item) {
+            handleMoveCard(contextMenu.item.card_id, contextMenu.item.board, toBoard, 1);
+        }
+        handleContextMenuClose();
+    };
+
+    // Close context menu on click outside
+    useEffect(() => {
+        const handleClickOutside = () => setContextMenu(null);
+        if (contextMenu) {
+            document.addEventListener('click', handleClickOutside);
+            return () => document.removeEventListener('click', handleClickOutside);
+        }
+    }, [contextMenu]);
 
     const handleExport = async () => {
         setShowExportMenu(false);
@@ -514,11 +741,32 @@ function DeckDetailPage({ imageMode }) {
     const handleExportText = async () => {
         try {
             const res = await fetch(`/api/shared/decks/${id}/export/text`);
-            if (!res.ok) { showToast(((await res.json().catch(() => ({}))).detail) || t('copyFailed'), "error"); return; }
+            if (!res.ok) {
+                const errData = await res.json().catch(() => ({}));
+                showToast(errData.detail || t('copyFailed'), "error");
+                return;
+            }
             const text = await res.text();
-            await navigator.clipboard.writeText(text);
-            showToast(t('decklistCopied'));
-        } catch { showToast(t('copyFailed'), "error"); }
+
+            // Try clipboard API first, fallback to execCommand
+            try {
+                await navigator.clipboard.writeText(text);
+                showToast(t('decklistCopied'));
+            } catch {
+                // Fallback for older browsers or restricted contexts
+                const textarea = document.createElement('textarea');
+                textarea.value = text;
+                textarea.style.position = 'fixed';
+                textarea.style.opacity = '0';
+                document.body.appendChild(textarea);
+                textarea.select();
+                document.execCommand('copy');
+                document.body.removeChild(textarea);
+                showToast(t('decklistCopied'));
+            }
+        } catch {
+            showToast(t('copyFailed'), "error");
+        }
     };
 
     const handleImportSubmit = async () => {
@@ -652,6 +900,11 @@ function DeckDetailPage({ imageMode }) {
     // Lock body scroll while the mobile bottom sheet is open
     useEffect(() => {
         if (!showMobileSheet) return;
+
+        // 仅在移动端宽度（<= 768px）下锁定滚动
+        const isMobile = window.innerWidth <= 768;
+        if (!isMobile) return;
+
         const prev = document.body.style.overflow;
         document.body.style.overflow = 'hidden';
         return () => { document.body.style.overflow = prev; };
@@ -680,9 +933,19 @@ function DeckDetailPage({ imageMode }) {
             {/* Header */}
             <div className="deck-detail-header">
                 {!isOwner ? (
-                    <button className="btn-secondary" onClick={() => navigate("/")}>&larr; {t('backToHome')}</button>
+                    <button className="btn-secondary btn-back" onClick={() => navigate("/")}>
+                        <svg className="btn-back-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M19 12H5M12 19l-7-7 7-7" />
+                        </svg>
+                        <span className="btn-back-text">&larr; {t('backToHome')}</span>
+                    </button>
                 ) : (
-                    <button className="btn-secondary" onClick={() => navigate("/decks")}>&larr; {t('backToDecks')}</button>
+                    <button className="btn-secondary btn-back" onClick={() => navigate("/decks")}>
+                        <svg className="btn-back-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M19 12H5M12 19l-7-7 7-7" />
+                        </svg>
+                        <span className="btn-back-text">&larr; {t('backToDecks')}</span>
+                    </button>
                 )}
                 <div className="deck-detail-title">
                     {isOwner && editing ? (
@@ -697,7 +960,7 @@ function DeckDetailPage({ imageMode }) {
                         >{deck.name}</h2>
                     )}
                     {!isOwner ? (
-                        <span className="deck-format-badge">{getFormatLabel(deck.format || "undefined")}</span>
+                        <span className="deck-format-badge">{getFormatLabel(deck.format || "undefined", language)}</span>
                     ) : (
                         <select
                             className={`deck-format-select format-${deck.format || "undefined"}`}
@@ -705,12 +968,9 @@ function DeckDetailPage({ imageMode }) {
                             onChange={handleFormatChange}
                             title={t('switchFormat')}
                         >
-                            {FORMATS.map((f) => <option key={f.key} value={f.key}>{f.label}</option>)}
+                            {FORMATS.map((f) => <option key={f.key} value={f.key}>{language === 'zh' ? f.labelZh : f.labelEn}</option>)}
                         </select>
                     )}
-                    <span className="deck-detail-count">
-                        {totalCards} {t('cardsCount')}{sideboardCount > 0 && ` (${t('mainboardCards')} ${mainboardCount} / ${t('sideboardCards')} ${sideboardCount})`}
-                    </span>
                 </div>
                 <div className="deck-detail-actions">
                     {isOwner && (
@@ -886,7 +1146,7 @@ function DeckDetailPage({ imageMode }) {
                                         const legality = getCardLegality(selectedCard.card, deck.format);
                                         return (
                                             <span className={`legality-chip legality-${legality}`}>
-                                                {getFormatLabel(deck.format)}: {legalityLabel(legality)}
+                                                {getFormatLabel(deck.format, language)}: {legalityLabel(legality, language)}
                                             </span>
                                         );
                                     })()}
@@ -899,118 +1159,157 @@ function DeckDetailPage({ imageMode }) {
                         )}
                     </aside>
 
-                    {/* Center: CSS columns layout */}
-                    <div className="deck-groups">
-                        {mainboardGroups.length > 0 && (
-                            <>
-                                {sideboardGroups.length > 0 && (
-                                    <div className="deck-board-header">{t('mainboard')} ({mainboardCount})</div>
-                                )}
-                                {mainboardGroups.map((group) => (
-                                    <div key={group.type} className="deck-type-group">
-                                        <div className="deck-type-header">
-                                            {TYPE_MANA_CLASSES[group.type] && (
-                                                <span className="deck-type-icon">
-                                                    <i className={`ms ${TYPE_MANA_CLASSES[group.type]}`} aria-hidden="true" />
-                                                </span>
-                                            )}
-                                            <span className="deck-type-label">{group.label}</span>
-                                            <span className="deck-type-count">{group.count}</span>
-                                        </div>
-                                        <div className="deck-stack-grid">
-                                            {group.items.map((item) => {
-                                                const img = getCardDisplayImage(item);
-                                                const isSelected = selectedCard?.card_id === item.card_id && selectedCard?.board === item.board;
-                                                const illegal = deck.format && deck.format !== "undefined" && !isCardLegal(item.card, deck.format);
-                                                return (
-                                                    <div
-                                                        key={item.card_id}
-                                                        className={`deck-stack-card ${isSelected ? "selected" : ""}`}
-                                                        onMouseEnter={() => schedulePreviewSelect(item)}
-                                                        onMouseLeave={cancelPendingSelect}
-                                                        onClick={() => { setSelectedCard(item); setShowMobileSheet(true); }}
-                                                    >
-                                                        {img ? (
-                                                            <img src={img} alt={item.card.name} className="deck-stack-img" loading="lazy" />
-                                                        ) : (
-                                                            <div className="deck-stack-placeholder">{item.card.name}</div>
-                                                        )}
-                                                        <div className="deck-stack-overlay" />
-                                                        <div className="deck-stack-name">
-                                                            {illegal && <span className="deck-illegal-icon" title={t('cardIllegalInFormat')}>!</span>}
-                                                            {item.card.name}
-                                                        </div>
-                                                        {!isOwner ? (
-                                                            <div className="deck-stack-qty">{item.quantity > 1 && `x${item.quantity}`}</div>
-                                                        ) : (
-                                                            <div className="deck-stack-controls">
-                                                                <button onClick={(e) => { e.stopPropagation(); handleQuantityChange(item.card_id, -1, item.board); }}>-</button>
-                                                                <span>{item.quantity}</span>
-                                                                <button onClick={(e) => { e.stopPropagation(); handleQuantityChange(item.card_id, 1, item.board); }}>+</button>
+                    {/* Center: Mainboard CSS columns layout */}
+                    <div className="deck-mainboard-section">
+                        <div className="deck-board-header">{t('mainboard')} ({mainboardCount})</div>
+                        <div
+                            className={`deck-groups ${dragOverBoard === 'mainboard' ? 'drag-over' : ''}`}
+                            data-drop-hint={language === 'zh' ? '将全部卡牌加入主卡组' : 'Move all to Mainboard'}
+                            onDragOver={(e) => handleDragOver(e, 'mainboard')}
+                            onDragLeave={handleDragLeave}
+                            onDrop={(e) => handleDrop(e, 'mainboard')}
+                        >
+                            {mainboardGroups.length > 0 && (
+                                <>
+                                    {mainboardGroups.map((group) => (
+                                        <div key={group.type} className="deck-type-group">
+                                            <div className="deck-type-header">
+                                                {TYPE_MANA_CLASSES[group.type] && (
+                                                    <span className="deck-type-icon">
+                                                        <i className={`ms ${TYPE_MANA_CLASSES[group.type]}`} aria-hidden="true" />
+                                                    </span>
+                                                )}
+                                                <span className="deck-type-label">{group.label}</span>
+                                                <span className="deck-type-count">{group.count}</span>
+                                            </div>
+                                            <div className="deck-stack-grid">
+                                                {group.items.map((item) => {
+                                                    const img = getCardDisplayImage(item);
+                                                    const isSelected = selectedCard?.card_id === item.card_id && selectedCard?.board === item.board;
+                                                    const illegal = deck.format && deck.format !== "undefined" && !isCardLegal(item.card, deck.format);
+                                                    return (
+                                                        <div
+                                                            key={item.card_id}
+                                                            className={`deck-stack-card ${isSelected ? "selected" : ""}`}
+                                                            draggable={isOwner}
+                                                            onDragStart={(e) => handleDragStart(e, item)}
+                                                            onDragEnd={handleDragEnd}
+                                                            onContextMenu={(e) => handleContextMenu(e, item)}
+                                                            onTouchStart={(e) => handleTouchStart(e, item)}
+                                                            onTouchMove={handleTouchMove}
+                                                            onTouchEnd={handleTouchEnd}
+                                                            onMouseEnter={() => schedulePreviewSelect(item)}
+                                                            onMouseLeave={cancelPendingSelect}
+                                                            onClick={() => { setSelectedCard(item); setShowMobileSheet(true); }}
+                                                        >
+                                                            {img ? (
+                                                                <img src={img} alt={item.card.name} className="deck-stack-img" loading="lazy" />
+                                                            ) : (
+                                                                <div className="deck-stack-placeholder">{item.card.name}</div>
+                                                            )}
+                                                            <div className="deck-stack-overlay" />
+                                                            <div className="deck-stack-name">
+                                                                {illegal && <span className="deck-illegal-icon" title={t('cardIllegalInFormat')}>!</span>}
+                                                                {item.card.name}
                                                             </div>
-                                                        )}
-                                                    </div>
-                                                );
-                                            })}
-                                        </div>
-                                    </div>
-                                ))}
-                            </>
-                        )}
-                        {sideboardGroups.length > 0 && (
-                            <>
-                                <div className="deck-board-header">{t('sideboard')} ({sideboardCount})</div>
-                                {sideboardGroups.map((group) => (
-                                    <div key={`side-${group.type}`} className="deck-type-group">
-                                        <div className="deck-type-header">
-                                            {TYPE_MANA_CLASSES[group.type] && (
-                                                <span className="deck-type-icon">
-                                                    <i className={`ms ${TYPE_MANA_CLASSES[group.type]}`} aria-hidden="true" />
-                                                </span>
-                                            )}
-                                            <span className="deck-type-label">{group.label}</span>
-                                            <span className="deck-type-count">{group.count}</span>
-                                        </div>
-                                        <div className="deck-stack-grid">
-                                            {group.items.map((item) => {
-                                                const img = getCardDisplayImage(item);
-                                                const isSelected = selectedCard?.card_id === item.card_id && selectedCard?.board === item.board;
-                                                const illegal = deck.format && deck.format !== "undefined" && !isCardLegal(item.card, deck.format);
-                                                return (
-                                                    <div
-                                                        key={`side-${item.card_id}`}
-                                                        className={`deck-stack-card ${isSelected ? "selected" : ""}`}
-                                                        onMouseEnter={() => schedulePreviewSelect(item)}
-                                                        onMouseLeave={cancelPendingSelect}
-                                                        onClick={() => { setSelectedCard(item); setShowMobileSheet(true); }}
-                                                    >
-                                                        {img ? (
-                                                            <img src={img} alt={item.card.name} className="deck-stack-img" loading="lazy" />
-                                                        ) : (
-                                                            <div className="deck-stack-placeholder">{item.card.name}</div>
-                                                        )}
-                                                        <div className="deck-stack-overlay" />
-                                                        <div className="deck-stack-name">
-                                                            {illegal && <span className="deck-illegal-icon" title={t('cardIllegalInFormat')}>!</span>}
-                                                            {item.card.name}
+                                                            {!isOwner ? (
+                                                                <div className="deck-stack-qty">{item.quantity > 1 && `x${item.quantity}`}</div>
+                                                            ) : (
+                                                                <div className="deck-stack-controls">
+                                                                    <button onClick={(e) => { e.stopPropagation(); handleQuantityChange(item.card_id, -1, item.board); }}>-</button>
+                                                                    <span>{item.quantity}</span>
+                                                                    <button onClick={(e) => { e.stopPropagation(); handleQuantityChange(item.card_id, 1, item.board); }}>+</button>
+                                                                </div>
+                                                            )}
                                                         </div>
-                                                        {!isOwner ? (
-                                                            <div className="deck-stack-qty">{item.quantity > 1 && `x${item.quantity}`}</div>
-                                                        ) : (
-                                                            <div className="deck-stack-controls">
-                                                                <button onClick={(e) => { e.stopPropagation(); handleQuantityChange(item.card_id, -1, item.board); }}>-</button>
-                                                                <span>{item.quantity}</span>
-                                                                <button onClick={(e) => { e.stopPropagation(); handleQuantityChange(item.card_id, 1, item.board); }}>+</button>
-                                                            </div>
-                                                        )}
-                                                    </div>
-                                                );
-                                            })}
+                                                    );
+                                                })}
+                                            </div>
                                         </div>
-                                    </div>
-                                ))}
-                            </>
-                        )}
+                                    ))}
+                                </>
+                            )}
+                        </div>
+
+                        {/* Sideboard Section - Below mainboard, separate layout */}
+                        <div className="deck-sideboard-section">
+                            <div className="deck-board-header">{t('sideboard')} ({sideboardCount})</div>
+                            {sideboardGroups.length > 0 ? (
+                                <div
+                                    className={`deck-sideboard-groups ${dragOverBoard === 'sideboard' ? 'drag-over' : ''}`}
+                                    data-drop-hint={language === 'zh' ? '将全部卡牌加入备牌' : 'Move all to Sideboard'}
+                                    onDragOver={(e) => handleDragOver(e, 'sideboard')}
+                                    onDragLeave={handleDragLeave}
+                                    onDrop={(e) => handleDrop(e, 'sideboard')}
+                                >
+                                    {sideboardGroups.map((group) => (
+                                        <div key={`side-${group.type}`} className="deck-type-group">
+                                            <div className="deck-type-header">
+                                                {TYPE_MANA_CLASSES[group.type] && (
+                                                    <span className="deck-type-icon">
+                                                        <i className={`ms ${TYPE_MANA_CLASSES[group.type]}`} aria-hidden="true" />
+                                                    </span>
+                                                )}
+                                                <span className="deck-type-label">{group.label}</span>
+                                                <span className="deck-type-count">{group.count}</span>
+                                            </div>
+                                            <div className="deck-stack-grid">
+                                                {group.items.map((item) => {
+                                                    const img = getCardDisplayImage(item);
+                                                    const isSelected = selectedCard?.card_id === item.card_id && selectedCard?.board === item.board;
+                                                    const illegal = deck.format && deck.format !== "undefined" && !isCardLegal(item.card, deck.format);
+                                                    return (
+                                                        <div
+                                                            key={`side-${item.card_id}`}
+                                                            className={`deck-stack-card ${isSelected ? "selected" : ""}`}
+                                                            draggable={isOwner}
+                                                            onDragStart={(e) => handleDragStart(e, item)}
+                                                            onDragEnd={handleDragEnd}
+                                                            onContextMenu={(e) => handleContextMenu(e, item)}
+                                                            onTouchStart={(e) => handleTouchStart(e, item)}
+                                                            onTouchMove={handleTouchMove}
+                                                            onTouchEnd={handleTouchEnd}
+                                                            onMouseEnter={() => schedulePreviewSelect(item)}
+                                                            onMouseLeave={cancelPendingSelect}
+                                                            onClick={() => { setSelectedCard(item); setShowMobileSheet(true); }}
+                                                        >
+                                                            {img ? (
+                                                                <img src={img} alt={item.card.name} className="deck-stack-img" loading="lazy" />
+                                                            ) : (
+                                                                <div className="deck-stack-placeholder">{item.card.name}</div>
+                                                            )}
+                                                            <div className="deck-stack-overlay" />
+                                                            <div className="deck-stack-name">
+                                                                {illegal && <span className="deck-illegal-icon" title={t('cardIllegalInFormat')}>!</span>}
+                                                                {item.card.name}
+                                                            </div>
+                                                            {!isOwner ? (
+                                                                <div className="deck-stack-qty">{item.quantity > 1 && `x${item.quantity}`}</div>
+                                                            ) : (
+                                                                <div className="deck-stack-controls">
+                                                                    <button onClick={(e) => { e.stopPropagation(); handleQuantityChange(item.card_id, -1, item.board); }}>-</button>
+                                                                    <span>{item.quantity}</span>
+                                                                    <button onClick={(e) => { e.stopPropagation(); handleQuantityChange(item.card_id, 1, item.board); }}>+</button>
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                    );
+                                                })}
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            ) : (
+                                <div
+                                    className={`deck-sideboard-empty drag-drop-zone ${dragOverBoard === 'sideboard' ? 'drag-over' : ''}`}
+                                    onDragOver={(e) => handleDragOver(e, 'sideboard')}
+                                    onDragLeave={handleDragLeave}
+                                    onDrop={(e) => handleDrop(e, 'sideboard')}
+                                >
+                                    <p>{language === 'zh' ? '拖拽卡牌到这里添加到备牌' : 'Drag cards here to add to sideboard'}</p>
+                                </div>
+                            )}
+                        </div>
                     </div>
 
                     {/* Right: Deck Analysis */}
@@ -1080,18 +1379,18 @@ function DeckDetailPage({ imageMode }) {
                             </div>
 
                             <div className="analysis-card">
-                                <h3 className="analysis-title">{t('cardTypes')}</h3>
-                                <div className="analysis-bars">
-                                    {groupedCards.map((group) => (
-                                        <div key={group.type} className="analysis-bar-row">
-                                            <span className="analysis-bar-label">{group.label}</span>
-                                            <div className="analysis-bar-track">
+                                <h3 className="analysis-title">{t('manaCurve')}</h3>
+                                <div className="analysis-mana-curve">
+                                    {deckAnalysis.cmcBuckets.map((count, i) => (
+                                        <div key={i} className="mana-curve-col">
+                                            <span className="mana-curve-value">{count || ""}</span>
+                                            <div className="mana-curve-bar-wrapper">
                                                 <div
-                                                    className="analysis-bar-fill type-bar"
-                                                    style={{ width: `${(group.count / totalCards) * 100}%` }}
+                                                    className="mana-curve-bar"
+                                                    style={{ height: `${(count / deckAnalysis.cmcMax) * 100}%` }}
                                                 />
                                             </div>
-                                            <span className="analysis-bar-value">{group.count}</span>
+                                            <span className="mana-curve-label">{i < 7 ? i : "7+"}</span>
                                         </div>
                                     ))}
                                 </div>
@@ -1139,18 +1438,18 @@ function DeckDetailPage({ imageMode }) {
                             </div>
 
                             <div className="analysis-card">
-                                <h3 className="analysis-title">{t('manaCurve')}</h3>
-                                <div className="analysis-mana-curve">
-                                    {deckAnalysis.cmcBuckets.map((count, i) => (
-                                        <div key={i} className="mana-curve-col">
-                                            <span className="mana-curve-value">{count || ""}</span>
-                                            <div className="mana-curve-bar-wrapper">
+                                <h3 className="analysis-title">{t('cardTypes')}</h3>
+                                <div className="analysis-bars">
+                                    {groupedCards.map((group) => (
+                                        <div key={group.type} className="analysis-bar-row">
+                                            <span className="analysis-bar-label">{group.label}</span>
+                                            <div className="analysis-bar-track">
                                                 <div
-                                                    className="mana-curve-bar"
-                                                    style={{ height: `${(count / deckAnalysis.cmcMax) * 100}%` }}
+                                                    className="analysis-bar-fill type-bar"
+                                                    style={{ width: `${(group.count / totalCards) * 100}%` }}
                                                 />
                                             </div>
-                                            <span className="mana-curve-label">{i < 7 ? i : "7+"}</span>
+                                            <span className="analysis-bar-value">{group.count}</span>
                                         </div>
                                     ))}
                                 </div>
@@ -1295,12 +1594,90 @@ function DeckDetailPage({ imageMode }) {
                                     const legality = getCardLegality(selectedCard.card, deck.format);
                                     return (
                                         <span className={`legality-chip legality-${legality}`}>
-                                            {getFormatLabel(deck.format)}: {legalityLabel(legality)}
+                                            {getFormatLabel(deck.format, language)}: {legalityLabel(legality, language)}
                                         </span>
                                     );
                                 })()}
                             </div>
                         </div>
+                    </div>
+                </>,
+                document.body
+            )}
+
+            {/* Context menu (right-click) */}
+            {contextMenu && createPortal(
+                <div
+                    className="context-menu"
+                    style={{ left: contextMenu.x, top: contextMenu.y }}
+                    onClick={(e) => e.stopPropagation()}
+                >
+                    {contextMenu.item.board === 'mainboard' ? (
+                        <div className="context-menu-item" onClick={() => handleContextMenuMoveOne('sideboard')}>
+                            {language === 'zh' ? '发送一张到备牌' : 'Send 1 to Sideboard'}
+                        </div>
+                    ) : (
+                        <div className="context-menu-item" onClick={() => handleContextMenuMoveOne('mainboard')}>
+                            {language === 'zh' ? '发送一张到主卡组' : 'Send 1 to Mainboard'}
+                        </div>
+                    )}
+                </div>,
+                document.body
+            )}
+
+            {/* Touch move panel for mobile */}
+            {showMovePanel && touchDragCard && createPortal(
+                <>
+                    <div className="move-panel-backdrop" onClick={handleMovePanelClose} />
+                    <div className="move-panel">
+                        <div className="move-panel-header">
+                            <div className="move-panel-handle" />
+                            <button className="move-panel-close" onClick={handleMovePanelClose}>&times;</button>
+                        </div>
+                        <div className="move-panel-card-info">
+                            <span className="move-panel-card-name">{touchDragCard.card.name}</span>
+                            <span className="move-panel-card-qty">{touchDragCard.quantity}x</span>
+                        </div>
+                        <div className="move-panel-options">
+                            {touchDragCard.board === 'mainboard' ? (
+                                <>
+                                    <button
+                                        className="move-panel-option active"
+                                        onClick={() => { handleMoveCard(touchDragCard.card_id, 'mainboard', 'sideboard', 'all'); handleMovePanelClose(); }}
+                                    >
+                                        <span className="move-panel-option-icon">📦</span>
+                                        <span className="move-panel-option-label">{language === 'zh' ? '全部移动到备牌' : 'Move all to Sideboard'}</span>
+                                    </button>
+                                    <button
+                                        className="move-panel-option active"
+                                        onClick={() => { handleMoveCard(touchDragCard.card_id, 'mainboard', 'sideboard', 1); handleMovePanelClose(); }}
+                                    >
+                                        <span className="move-panel-option-icon">📤</span>
+                                        <span className="move-panel-option-label">{language === 'zh' ? '移动一张到备牌' : 'Move 1 to Sideboard'}</span>
+                                    </button>
+                                </>
+                            ) : (
+                                <>
+                                    <button
+                                        className="move-panel-option active"
+                                        onClick={() => { handleMoveCard(touchDragCard.card_id, 'sideboard', 'mainboard', 'all'); handleMovePanelClose(); }}
+                                    >
+                                        <span className="move-panel-option-icon">📚</span>
+                                        <span className="move-panel-option-label">{language === 'zh' ? '全部移动到主卡组' : 'Move all to Mainboard'}</span>
+                                    </button>
+                                    <button
+                                        className="move-panel-option active"
+                                        onClick={() => { handleMoveCard(touchDragCard.card_id, 'sideboard', 'mainboard', 1); handleMovePanelClose(); }}
+                                    >
+                                        <span className="move-panel-option-icon">📤</span>
+                                        <span className="move-panel-option-label">{language === 'zh' ? '移动一张到主卡组' : 'Move 1 to Mainboard'}</span>
+                                    </button>
+                                </>
+                            )}
+                        </div>
+                        <button className="move-panel-cancel" onClick={handleMovePanelClose}>
+                            {language === 'zh' ? '取消' : 'Cancel'}
+                        </button>
                     </div>
                 </>,
                 document.body
