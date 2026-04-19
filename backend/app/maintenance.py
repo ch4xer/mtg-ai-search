@@ -4,7 +4,6 @@ import os
 from collections.abc import Callable
 
 import requests
-from openai import OpenAI
 
 from .db import get_pool
 
@@ -19,6 +18,23 @@ def _ability_file() -> str:
         "data",
         "keyword_ability.txt",
     )
+
+
+def _download_ability_file(status_callback: StatusCallback = None) -> str:
+    """总是从官方规则页面重新下载最新的 702 章节，写入本地缓存。"""
+    filepath = _ability_file()
+    _emit_status(status_callback, "正在下载万智牌规则文件...")
+    logger.info("Downloading keyword abilities from Wizards...")
+    try:
+        from scripts.extract_keywords import download_and_extract_keywords
+
+        download_and_extract_keywords(filepath)
+        _emit_status(status_callback, "已下载关键词规则文件")
+        logger.info("Downloaded keyword abilities to %s", filepath)
+        return filepath
+    except Exception as e:
+        logger.exception("Failed to download keyword abilities: %s", e)
+        raise
 
 
 def _emit_status(callback: StatusCallback, message: str) -> None:
@@ -36,103 +52,38 @@ def _make_progress_callback(callback: StatusCallback, prefix: str):
     return _progress
 
 
-_KEYWORD_DESCRIBE_PROMPT = (
-    "You are a Magic: The Gathering rules expert. "
-    "Given a keyword ability name and oracle texts from cards that have this ability, "
-    "write a concise one-sentence description of what this keyword ability does, "
-    "focusing on the core game effect. "
-    "Use simple MTG terms a player would search for.\n\n"
-    "Examples of good descriptions:\n"
-    "- Lifelink: Damage dealt by a source with lifelink causes its controller to gain that much life.\n"
-    "- Flying: This creature can only be blocked by creatures with flying or reach.\n"
-    "- Annihilator: Whenever this creature attacks, defending player sacrifices permanents.\n"
-    "- Deathtouch: Any amount of damage this deals to a creature is enough to destroy it.\n\n"
-    "Return ONLY the description sentence, nothing else."
-)
+def _refresh_abilities_from_rules(conn, status_callback: StatusCallback = None) -> list[str]:
+    """Re-download rules 702 and upsert keyword_abilities.
 
-
-def _describe_new_keyword(client: OpenAI, name: str, oracle_texts: list[str]) -> str | None:
-    """Use DeepSeek to generate a concise description for a new keyword ability."""
-    cards_text = "\n".join(f"{i + 1}. {text}" for i, text in enumerate(oracle_texts))
-    user_message = f"Keyword: {name}\n\nOracle texts from cards with this ability:\n{cards_text}"
-    try:
-        response = client.chat.completions.create(
-            model="deepseek-chat",
-            messages=[
-                {"role": "system", "content": _KEYWORD_DESCRIBE_PROMPT},
-                {"role": "user", "content": user_message},
-            ],
-            temperature=0.1,
-            max_tokens=150,
-        )
-        return response.choices[0].message.content.strip()
-    except Exception as e:
-        logger.error("[keyword-sync] DeepSeek API error for '%s': %s", name, e)
-        return None
-
-
-def _sync_new_keywords(conn, status_callback: StatusCallback = None) -> list[str]:
-    """Detect new keywords from card data, generate descriptions, insert into DB.
-
-    Compares distinct keywords in the cards table against keyword_abilities.
+    Always pulls a fresh copy from Wizards so we never drift behind the
+    published rules. insert_abilities uses ON CONFLICT to update descriptions
+    and null the embedding only when the description actually changed.
+    Returns names of keywords that didn't previously exist in the DB.
     Does NOT generate embeddings — caller should run generate_ability_embeddings().
-    Returns list of newly added keyword names.
     """
-    with conn.cursor() as cur:
-        cur.execute("SELECT DISTINCT unnest(keywords) FROM cards")
-        card_keywords = {row[0] for row in cur.fetchall()}
+    from scripts.seed_pg import insert_abilities
+
+    from .data_loader import parse_keyword_abilities
+
+    filepath = _download_ability_file(status_callback)
+    abilities = parse_keyword_abilities(filepath)
 
     with conn.cursor() as cur:
-        cur.execute("SELECT name FROM keyword_abilities")
-        db_keywords = {row[0].lower() for row in cur.fetchall()}
+        cur.execute("SELECT id FROM keyword_abilities")
+        existing_ids = {row[0] for row in cur.fetchall()}
 
-    new_keywords = sorted(kw for kw in card_keywords if kw.lower() not in db_keywords)
-    if not new_keywords:
-        logger.info("[keyword-sync] No new keywords detected.")
-        return []
+    parsed_ids = {name.lower().replace(" ", "_"): name for name in abilities.keys()}
+    new_names = sorted(name for kid, name in parsed_ids.items() if kid not in existing_ids)
 
-    logger.info("[keyword-sync] Detected %d new keywords: %s", len(new_keywords), new_keywords)
-    _emit_status(status_callback, f"发现 {len(new_keywords)} 个新关键词，正在生成描述...")
+    _emit_status(status_callback, "正在导入关键词数据...")
+    insert_abilities(conn, abilities)
 
-    client = OpenAI(
-        api_key=os.getenv("DEEPSEEK_API_KEY", ""),
-        base_url="https://api.deepseek.com",
-    )
-
-    added = []
-    for kw in new_keywords:
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT oracle_text FROM cards WHERE %s = ANY(keywords) AND oracle_text IS NOT NULL LIMIT 10",
-                (kw,),
-            )
-            rows = cur.fetchall()
-
-        if not rows:
-            logger.warning("[keyword-sync] No cards found for keyword '%s', skipping.", kw)
-            continue
-
-        oracle_texts = [r[0] for r in rows]
-        description = _describe_new_keyword(client, kw, oracle_texts)
-        if not description:
-            continue
-
-        kw_id = kw.lower().replace(" ", "_")
-        with conn.cursor() as cur:
-            cur.execute(
-                """INSERT INTO keyword_abilities (id, name, description)
-                   VALUES (%s, %s, %s)
-                   ON CONFLICT (id) DO UPDATE SET description = EXCLUDED.description, embedding = NULL""",
-                (kw_id, kw, description),
-            )
-        conn.commit()
-        added.append(kw)
-        logger.info("[keyword-sync] Added '%s': %s", kw, description)
-
-    if added:
-        _emit_status(status_callback, f"已添加 {len(added)} 个新关键词")
-
-    return added
+    if new_names:
+        logger.info("[keyword-sync] %d new abilities from rules 702: %s", len(new_names), new_names)
+        _emit_status(status_callback, f"发现 {len(new_names)} 个新关键词")
+    else:
+        logger.info("[keyword-sync] No new abilities in rules 702.")
+    return new_names
 
 
 async def seed_cards_if_empty() -> None:
@@ -149,6 +100,62 @@ async def seed_cards_if_empty() -> None:
     logger.info("No card data found. Running seed.")
     await full_reseed(with_embeddings=True)
     logger.info("Seed complete.")
+
+
+async def seed_abilities_if_empty(status_callback: StatusCallback = None) -> None:
+    """If keyword_abilities is empty, download rules 702 and import."""
+    pool = await get_pool()
+    try:
+        count = await pool.fetchval("SELECT COUNT(*) FROM keyword_abilities")
+    except Exception:
+        count = 0
+
+    if count > 0:
+        logger.info("Database has %d keyword abilities, skipping seed.", count)
+        return
+
+    logger.info("No keyword abilities found. Downloading and importing...")
+    _emit_status(status_callback, "正在初始化关键词数据...")
+
+    def _do_seed() -> None:
+        from scripts.seed_pg import generate_ability_embeddings, get_conn
+
+        conn = get_conn()
+        try:
+            _refresh_abilities_from_rules(conn, status_callback)
+            _emit_status(status_callback, "正在生成关键词 embedding...")
+            generate_ability_embeddings(conn)
+        finally:
+            conn.close()
+
+    await asyncio.to_thread(_do_seed)
+    logger.info("Keyword abilities seed complete.")
+
+
+async def sync_abilities_incremental(status_callback: StatusCallback = None) -> dict:
+    """Re-download rules 702 and add any newly introduced keyword abilities.
+
+    Returns {"added": int, "added_names": list[str]}.
+    """
+    result = {"added": 0, "added_names": []}
+
+    def _do_sync() -> None:
+        from scripts.seed_pg import generate_ability_embeddings, get_conn
+
+        conn = get_conn()
+        try:
+            added = _refresh_abilities_from_rules(conn, status_callback)
+            result["added"] = len(added)
+            result["added_names"] = added
+            # Always run embedding generation: description edits null old embeddings.
+            _emit_status(status_callback, "正在生成关键词 embedding...")
+            generate_ability_embeddings(conn)
+        finally:
+            conn.close()
+
+    await asyncio.to_thread(_do_sync)
+    logger.info("[abilities-sync] Complete. %d added.", result["added"])
+    return result
 
 
 async def backfill_missing_embeddings(status_callback: StatusCallback = None) -> None:
@@ -184,16 +191,15 @@ async def backfill_missing_embeddings(status_callback: StatusCallback = None) ->
 
 
 async def full_reseed(with_embeddings: bool = True, status_callback: StatusCallback = None) -> int:
+    """完全重新导入卡牌数据（不影响关键词数据）。"""
     def _do_reseed() -> None:
         from scripts.seed_pg import (
             create_schema,
-            generate_ability_embeddings,
             generate_card_embeddings,
             get_conn,
-            insert_abilities,
             insert_cards,
         )
-        from .data_loader import download_scryfall_cards, parse_keyword_abilities
+        from .data_loader import download_scryfall_cards
 
         conn = get_conn()
         try:
@@ -202,7 +208,6 @@ async def full_reseed(with_embeddings: bool = True, status_callback: StatusCallb
             logger.info("[reseed] Clearing existing card data...")
             with conn.cursor() as cur:
                 cur.execute("DELETE FROM deck_cards")
-                cur.execute("DELETE FROM keyword_abilities")
                 cur.execute("DELETE FROM cards")
             conn.commit()
 
@@ -213,20 +218,12 @@ async def full_reseed(with_embeddings: bool = True, status_callback: StatusCallb
             _emit_status(status_callback, f"正在导入 {len(valid_cards)} 张卡牌...")
             insert_cards(conn, valid_cards)
 
-            abilities = parse_keyword_abilities(_ability_file())
-            insert_abilities(conn, abilities)
-
-            _emit_status(status_callback, "正在检查 Scryfall 新关键词...")
-            _sync_new_keywords(conn, status_callback)
-
             if with_embeddings:
                 _emit_status(status_callback, "正在生成卡牌 embedding...")
                 generate_card_embeddings(
                     conn,
                     on_progress=_make_progress_callback(status_callback, "正在生成卡牌 embedding"),
                 )
-                _emit_status(status_callback, "正在生成异能 embedding...")
-                generate_ability_embeddings(conn)
             else:
                 logger.info("[reseed] Skipping embedding generation.")
 
@@ -316,12 +313,11 @@ async def incremental_sync(status_callback: StatusCallback = None) -> dict:
     logger.info("[sync] Scryfall data updated (%s -> %s), syncing...", last_sync, remote_updated)
     log_id = await _write_sync_log(pool, "running", message="正在同步...")
 
-    try:
-        count_before = await pool.fetchval("SELECT COUNT(*) FROM cards")
-        stale_before = await pool.fetchval(
-            "SELECT COUNT(*) FROM cards WHERE name_embedding IS NULL"
-        )
+    # cards.id is oracle_id, so the oracle_cards bulk upserts 1:1 by row.
+    # Rows whose oracle text changed get their embeddings nulled and regenerated.
+    stats: dict[str, int] = {"new_cards": 0, "updated_cards": 0}
 
+    try:
         def _do_sync() -> None:
             from scripts.seed_pg import generate_ability_embeddings, generate_card_embeddings, get_conn, insert_cards
 
@@ -336,64 +332,43 @@ async def incremental_sync(status_callback: StatusCallback = None) -> dict:
                     if c.get("layout") not in ("token", "emblem", "art_series")
                 ]
 
+                with conn.cursor() as cur:
+                    cur.execute("SELECT COUNT(*) FROM cards")
+                    count_before = cur.fetchone()[0]
+                    cur.execute("SELECT COUNT(*) FROM cards WHERE name_embedding IS NULL")
+                    stale_before = cur.fetchone()[0]
+
                 _emit_status(status_callback, "正在同步卡牌数据...")
                 insert_cards(conn, valid_cards)
 
-                # Remove stale cards whose id is no longer in oracle_cards.
-                # When Scryfall picks a new preferred printing for a card,
-                # the old id stays in our DB alongside the new one, causing
-                # duplicate names.  Clean them up here.
-                current_ids = [c["id"] for c in valid_cards]
                 with conn.cursor() as cur:
-                    cur.execute("CREATE TEMP TABLE _sync_ids (id TEXT PRIMARY KEY)")
-                    batch_size = 5000
-                    for i in range(0, len(current_ids), batch_size):
-                        batch = [(cid,) for cid in current_ids[i:i + batch_size]]
-                        cur.executemany("INSERT INTO _sync_ids (id) VALUES (%s)", batch)
-                    cur.execute("""
-                        DELETE FROM cards
-                        WHERE id NOT IN (SELECT id FROM _sync_ids)
-                    """)
-                    deleted = cur.rowcount
-                    cur.execute("DROP TABLE _sync_ids")
-                    if deleted:
-                        logger.info("[sync] Removed %d stale card rows.", deleted)
+                    cur.execute("SELECT COUNT(*) FROM cards")
+                    count_after = cur.fetchone()[0]
+                    cur.execute("SELECT COUNT(*) FROM cards WHERE name_embedding IS NULL")
+                    stale_after = cur.fetchone()[0]
                     cur.execute("""
                         UPDATE cards SET is_playtest = TRUE
                         WHERE is_playtest = FALSE AND data->>'set_type' = 'funny'
                     """)
                 conn.commit()
 
-                _emit_status(status_callback, "正在为新卡牌生成 embedding...")
+                stats["new_cards"] = count_after - count_before
+                stats["updated_cards"] = max(0, stale_after - stale_before - stats["new_cards"])
+
+                _emit_status(status_callback, "正在为新/变更卡牌生成 embedding...")
                 generate_card_embeddings(
                     conn,
                     on_progress=_make_progress_callback(status_callback, "正在生成 embedding"),
                 )
 
-                _emit_status(status_callback, "正在检查 Scryfall 新关键词...")
-                added_keywords = _sync_new_keywords(conn, status_callback)
-                if added_keywords:
-                    _emit_status(status_callback, "正在为新关键词生成 embedding...")
-                    generate_ability_embeddings(conn)
+                _emit_status(status_callback, "正在刷新规则 702 关键词...")
+                _refresh_abilities_from_rules(conn, status_callback)
+                _emit_status(status_callback, "正在生成关键词 embedding...")
+                generate_ability_embeddings(conn)
             finally:
                 conn.close()
 
         await asyncio.to_thread(_do_sync)
-
-        count_after = await pool.fetchval("SELECT COUNT(*) FROM cards")
-        stale_after = await pool.fetchval(
-            "SELECT COUNT(*) FROM cards WHERE name_embedding IS NULL"
-        )
-        new_cards = count_after - count_before
-        # Cards that had embeddings before but got them nulled = text was updated
-        updated_cards = max(0, stale_before - stale_after + new_cards)
-        # If stale_after > 0, some embeddings failed, but the data was still updated
-        # A simpler heuristic: updated = stale_before means cards whose text changed
-        # Actually: before sync, stale_before cards had no embedding.
-        # The upsert nulls embeddings for text-changed cards, adding to the stale count.
-        # generate_card_embeddings then fills them all in.
-        # So updated_cards ≈ (stale count right after upsert, before embedding) - stale_before - new_cards
-        # We can't measure that mid-thread, so just report what we can.
 
         await pool.execute(
             """INSERT INTO app_meta (key, value) VALUES ('last_sync_updated_at', $1)
@@ -401,9 +376,11 @@ async def incremental_sync(status_callback: StatusCallback = None) -> dict:
             remote_updated,
         )
 
-        message = f"新增 {new_cards} 张卡牌，数据已更新"
+        new_cards = stats["new_cards"]
+        updated_cards = stats["updated_cards"]
+        message = f"新增 {new_cards} 张，更新 {updated_cards} 张" if (new_cards or updated_cards) else "数据已同步（无变更）"
         await _update_sync_log(pool, log_id, "done", new_cards, updated_cards, message)
-        logger.info("[sync] Complete. %d new cards.", new_cards)
+        logger.info("[sync] Complete. %d new, %d updated.", new_cards, updated_cards)
         return {"new_cards": new_cards, "updated_cards": updated_cards, "skipped": False}
 
     except Exception as e:
