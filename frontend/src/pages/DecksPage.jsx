@@ -92,7 +92,7 @@ function DecksPage() {
             >
               {FORMATS.map((f) => (
                 <option key={f.key} value={f.key}>
-                  {language === 'zh' ? f.label : f.key}
+                  {language === 'zh' ? f.labelZh : f.labelEn}
                 </option>
               ))}
             </select>
@@ -129,12 +129,14 @@ function DecksPage() {
               className="deck-card"
               onClick={() => navigate(`/decks/${deck.id}`)}
             >
-              <h3 className="deck-card-name">{deck.name}</h3>
-              <span
-                className={`format-badge format-${deck.format || "undefined"}`}
-              >
-                {language === 'zh' ? getFormatLabel(deck.format) : deck.format || 'Undefined'}
-              </span>
+              <div className="deck-card-header">
+                <h3 className="deck-card-name">{deck.name}</h3>
+                <span
+                  className={`format-badge format-${deck.format || "undefined"}`}
+                >
+                  {getFormatLabel(deck.format, language)}
+                </span>
+              </div>
               <p className="deck-card-count">{deck.card_count || 0} {language === 'zh' ? '张卡牌' : 'cards'}</p>
               <p className="deck-card-date">
                 {new Date(deck.created_at).toLocaleDateString(language === 'zh' ? "zh-CN" : "en-US")}

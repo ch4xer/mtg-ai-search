@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { useAuth } from "../contexts/AuthContext.jsx";
 import { apiFetch } from "../utils/apiFetch.js";
 import { useToast } from "../contexts/ToastContext.jsx";
+import { useLanguage } from "../contexts/LanguageContext.jsx";
 import { getFormatLabel, getCardLegality, legalityLabel } from "../utils/formats.js";
 import { getImageUri } from "../utils/cardImage.js";
 import { getSetIconClass } from "../utils/keyrune.js";
@@ -18,6 +19,7 @@ function CardItem({ card, imageMode, decks: propDecks }) {
   const [selectedArt, setSelectedArt] = useState(null);
   const [localDecks, setLocalDecks] = useState(null);
   const [loadingDecks, setLoadingDecks] = useState(false);
+  const { language } = useLanguage();
   const menuRef = useRef(null);
   const { user } = useAuth();
   const { showToast } = useToast();
@@ -280,16 +282,16 @@ function CardItem({ card, imageMode, decks: propDecks }) {
                     key={d.id}
                     className="deck-dropdown-item"
                     onClick={() => handleAddToDeck(d.id, d.name)}
-                    title={showLegality ? `${getFormatLabel(d.format)} · ${legalityLabel(legality)}` : getFormatLabel(d.format)}
+                    title={showLegality ? `${getFormatLabel(d.format, language)} · ${legalityLabel(legality, language)}` : getFormatLabel(d.format, language)}
                   >
                     <span className="deck-dropdown-name">{d.name}</span>
                     <span className="deck-dropdown-meta">
                       <span className={`format-badge format-${d.format || "undefined"}`}>
-                        {getFormatLabel(d.format)}
+                        {getFormatLabel(d.format, language)}
                       </span>
                       {showLegality && (
                         <span className={`legality-chip legality-${legality}`}>
-                          {legalityLabel(legality)}
+                          {legalityLabel(legality, language)}
                         </span>
                       )}
                     </span>
