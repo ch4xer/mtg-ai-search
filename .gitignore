@@ -10,3 +10,7 @@ backend/.env
 pgdata/
 .claude/
 .playwright-mcp/
+
+# Bulk data cache
+backend/data/unique_artwork.json
+backend/data/unique_artwork.json.meta

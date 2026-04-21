@@ -42,8 +42,8 @@ def _call_api_batch(batch: list[str]) -> list[list[float]] | None:
     return None
 
 
-def _call_api(texts: list[str]) -> list[list[float]]:
-    """Call SiliconFlow embedding API, handling batching internally. Raises on failure."""
+def encode_query(texts: list[str]) -> list[list[float]]:
+    """Encode queries into embedding vectors."""
     all_embeddings: list[list[float]] = []
     for i in range(0, len(texts), MAX_BATCH_SIZE):
         batch = texts[i : i + MAX_BATCH_SIZE]
@@ -52,16 +52,6 @@ def _call_api(texts: list[str]) -> list[list[float]]:
             raise RuntimeError(f"Failed to embed batch at offset {i}")
         all_embeddings.extend(result)
     return all_embeddings
-
-
-def encode(texts: list[str]) -> list[list[float]]:
-    """Encode documents into embedding vectors."""
-    return _call_api(texts)
-
-
-def encode_query(texts: list[str]) -> list[list[float]]:
-    """Encode queries into embedding vectors."""
-    return _call_api(texts)
 
 
 def encode_batch_safe(texts: list[str]) -> list[list[float]] | None:

@@ -47,8 +47,21 @@ def decode_token(token: str, expected_type: str = "access") -> str:
 
 
 async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> str:
-    """FastAPI dependency that extracts user_id from Bearer token."""
-    return decode_token(credentials.credentials, expected_type="access")
+    """FastAPI dependency that extracts user_id from Bearer token.
+
+    Also verifies the user still exists in the database. If the user was deleted
+    (e.g., after a database reset), returns 401 to force re-login instead of
+    causing foreign key errors later.
+    """
+    user_id = decode_token(credentials.credentials, expected_type="access")
+    from .db import get_user_by_id
+    user = await get_user_by_id(user_id)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User no longer exists, please login again"
+        )
+    return user_id
 
 
 async def require_admin(user_id: str = Depends(get_current_user)) -> str:

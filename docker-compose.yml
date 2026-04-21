@@ -14,6 +14,11 @@ services:
       interval: 5s
       retries: 5
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: "2.0"
 
   mtg-backend:
     build: ./backend
@@ -31,6 +36,11 @@ services:
       ADMIN_PASSWORD: ${ADMIN_PASSWORD}
       RESEND_API_KEY: ${RESEND_API_KEY}
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+          cpus: "2.0"
 
   mtg-frontend:
     build: ./frontend
@@ -39,6 +49,11 @@ services:
     depends_on:
       - mtg-backend
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "1.0"
 
 volumes:
   pgdata:
