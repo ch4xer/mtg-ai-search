@@ -333,29 +333,38 @@ async def admin_sync_logs(_: str = Depends(require_admin)):
 
 
 @admin_router.post("/sync")
-async def admin_trigger_sync(_: str = Depends(require_admin)):
+async def admin_trigger_sync(force: bool = False, skip_embeddings: bool = False, _: str = Depends(require_admin)):
     if _task_state["reseed"]["status"] == TaskStatus.RUNNING:
         raise HTTPException(status_code=409, detail="重新拉取任务正在运行中")
     if _task_state["seed_abilities"]["status"] == TaskStatus.RUNNING:
         raise HTTPException(status_code=409, detail="关键词初始化任务正在运行中")
 
+    if force and skip_embeddings:
+        msg = "开始强制刷新（仅更新数据，不重新生成 embedding）"
+    elif force:
+        msg = "开始强制刷新（更新所有数据）"
+    else:
+        msg = "开始增量同步"
     _set_state("reseed", TaskStatus.RUNNING, "正在检查 Scryfall 更新...")
-    asyncio.create_task(_run_sync())
-    return {"status": "started", "message": "开始增量同步"}
+    asyncio.create_task(_run_sync(force=force, skip_embeddings=skip_embeddings))
+    return {"status": "started", "message": msg}
 
 
-async def _run_sync():
+async def _run_sync(force: bool = False, skip_embeddings: bool = False):
     """Background: run incremental sync."""
     try:
         result = await incremental_sync(
+            force=force,
+            skip_embeddings=skip_embeddings,
             status_callback=lambda message: _set_state("reseed", TaskStatus.RUNNING, message),
         )
         if result["skipped"]:
             _set_state("reseed", TaskStatus.DONE, "Scryfall 数据无变更")
         else:
+            suffix = "（跳过 embedding）" if skip_embeddings else ""
             _set_state(
                 "reseed", TaskStatus.DONE,
-                f"同步完成！新增 {result['new_cards']} 张卡牌",
+                f"同步完成！新增 {result['new_cards']} 张卡牌，更新 {result['new_prints']} 个版本{suffix}",
             )
     except Exception as e:
         logger.exception("[sync] Failed")

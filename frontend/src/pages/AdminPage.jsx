@@ -398,14 +398,6 @@ function DatabaseSection() {
     } catch { showToast("操作失败", "error"); }
   };
 
-  const handleReseed = async () => {
-    if (!confirm("确定要重新拉取卡牌数据吗？这将清除所有现有卡牌数据并重新下载，过程可能需要较长时间。")) return;
-    runAction("/api/admin/reseed", "已开始重新拉取卡牌数据");
-  };
-  const handleReseedOnly = async () => {
-    if (!confirm("确定要仅重新拉取卡牌数据（不更新 embedding）吗？此操作会清除现有卡牌数据。")) return;
-    runAction("/api/admin/reseed-only", "已开始仅拉取卡牌数据");
-  };
   const handleReembed = async () => {
     if (!confirm("确定要重新生成所有 embedding 吗？过程可能需要较长时间。")) return;
     runAction("/api/admin/reembed", "已开始重新生成 embedding");
@@ -416,6 +408,8 @@ function DatabaseSection() {
   };
   const handleSyncAbilities = () => runAction("/api/admin/sync-abilities", "已开始增量更新异能数据库");
   const handleSync = () => runAction("/api/admin/sync", "已开始增量同步");
+  const handleForceSync = () => runAction("/api/admin/sync?force=true", "已开始强制刷新（更新数据 + Embedding）");
+  const handleForceSyncDataOnly = () => runAction("/api/admin/sync?force=true&skip_embeddings=true", "已开始仅更新数据");
 
   const anyRunning = Object.values(taskStatus).some((t) => t.status === "running");
 
@@ -423,22 +417,6 @@ function DatabaseSection() {
     <>
       <h2 className="admin-title">数据库维护</h2>
       <div className="admin-db-actions">
-        <TaskCard
-          title="重新拉取卡牌数据"
-          desc="从 Scryfall 重新下载所有卡牌数据并重新导入数据库，同时重新生成 embedding。此操作会清除现有卡牌数据。"
-          status={taskStatus.reseed}
-          disabled={anyRunning}
-          onRun={handleReseed}
-          btnText="拉取数据 + Embedding"
-        />
-        <TaskCard
-          title="仅拉取卡牌数据"
-          desc="从 Scryfall 重新下载并导入卡牌数据，但不重新生成 embedding。适用于仅需更新卡牌文本或图片数据的场景。"
-          status={taskStatus.reseed}
-          disabled={anyRunning}
-          onRun={handleReseedOnly}
-          btnText="仅拉取数据"
-        />
         <TaskCard
           title="重新生成 Embedding"
           desc="清除所有现有 embedding 并重新生成。卡牌数据本身不会改变。适用于更换了 embedding 模型后使用。"
@@ -469,10 +447,14 @@ function DatabaseSection() {
       <div className="admin-sync-section">
         <div className="admin-sync-header">
           <h3 className="admin-section-title">每日同步记录</h3>
-          <button className="btn-accent" onClick={handleSync} disabled={anyRunning}>手动同步</button>
+          <div className="admin-sync-buttons">
+            <button className="btn-secondary" onClick={handleForceSyncDataOnly} disabled={anyRunning}>仅更新数据</button>
+            <button className="btn-secondary" onClick={handleForceSync} disabled={anyRunning}>强制刷新</button>
+            <button className="btn-accent" onClick={handleSync} disabled={anyRunning}>手动同步</button>
+          </div>
         </div>
         <p className="admin-db-card-desc" style={{ marginBottom: "1rem" }}>
-          系统每天午夜自动检查 Scryfall 更新，同步新卡牌并更新已有卡牌的图片链接。
+          「手动同步」检查 Scryfall 是否有更新，如有则增量同步。「强制刷新」绕过检查，更新所有数据并生成 embedding。「仅更新数据」绕过检查，更新印刷版本数据（flavor_text、图片等），不重新生成 embedding。
         </p>
         {syncLogs.length === 0 ? (
           <p className="admin-empty">暂无同步记录</p>
