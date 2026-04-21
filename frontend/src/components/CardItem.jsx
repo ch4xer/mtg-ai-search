@@ -26,20 +26,22 @@ function CardItem({ card, imageMode, decks: propDecks }) {
 
   const decks = localDecks ?? propDecks ?? [];
 
+  const selectedCardFaces = selectedArt?.card_faces || card.card_faces || [];
+  const doubleFacedLayouts = new Set(["transform", "modal_dfc", "double_faced_token", "reversible_card"]);
   const isDoubleFaced =
-    card.card_faces &&
-    card.card_faces.length === 2 &&
-    card.card_faces[0]?.image_uris &&
-    card.card_faces[1]?.image_uris;
+    selectedCardFaces.length >= 2 &&
+    (doubleFacedLayouts.has(card.layout) ||
+      selectedCardFaces[0]?.image_uris ||
+      selectedCardFaces[1]?.image_uris);
 
   let frontImageUri = "";
   let backImageUri = "";
 
-  if (selectedArt) {
+  if (isDoubleFaced) {
+    frontImageUri = getImageUri(selectedCardFaces[0]?.image_uris, imageMode);
+    backImageUri = getImageUri(selectedCardFaces[1]?.image_uris, imageMode);
+  } else if (selectedArt) {
     frontImageUri = getImageUri(selectedArt.image_uris, imageMode);
-  } else if (isDoubleFaced) {
-    frontImageUri = getImageUri(card.card_faces[0].image_uris, imageMode);
-    backImageUri = getImageUri(card.card_faces[1].image_uris, imageMode);
   } else if (card.image_uris) {
     frontImageUri = getImageUri(card.image_uris, imageMode);
   } else if (card.card_faces && card.card_faces[0]?.image_uris) {
@@ -48,16 +50,17 @@ function CardItem({ card, imageMode, decks: propDecks }) {
 
   const isArtCrop = imageMode === "art_crop";
 
-  const activeFace = isDoubleFaced && flipped && !selectedArt ? card.card_faces[1] : null;
-  const frontFace = card.card_faces?.[0];
+  const activeFace = isDoubleFaced ? selectedCardFaces[flipped ? 1 : 0] : null;
+  const frontFace = selectedCardFaces?.[0];
+  const getDisplayField = (field) => activeFace ? activeFace[field] : (card[field] ?? frontFace?.[field]);
   const displayName = activeFace?.name || card.name || frontFace?.name;
-  const displayManaCost = activeFace?.mana_cost || card.mana_cost || frontFace?.mana_cost;
-  const displayTypeLine = activeFace?.type_line || card.type_line || frontFace?.type_line;
-  const displayOracleText = activeFace?.oracle_text || card.oracle_text || frontFace?.oracle_text;
-  const displayFlavorText = activeFace?.flavor_text || card.flavor_text || frontFace?.flavor_text;
-  const displayPower = activeFace?.power || card.power || frontFace?.power;
-  const displayToughness = activeFace?.toughness || card.toughness || frontFace?.toughness;
-  const displayLoyalty = activeFace?.loyalty || card.loyalty || frontFace?.loyalty;
+  const displayManaCost = getDisplayField("mana_cost");
+  const displayTypeLine = getDisplayField("type_line");
+  const displayOracleText = getDisplayField("oracle_text");
+  const displayFlavorText = getDisplayField("flavor_text");
+  const displayPower = getDisplayField("power");
+  const displayToughness = getDisplayField("toughness");
+  const displayLoyalty = getDisplayField("loyalty");
   const displaySetName = selectedArt?.setName || card.set_name;
   const displaySet = selectedArt?.set || card.set;
   const displayRarity = selectedArt?.rarity || card.rarity;
@@ -79,25 +82,32 @@ function CardItem({ card, imageMode, decks: propDecks }) {
       setShowArtPicker(!showArtPicker);
       return;
     }
-    const searchUri = card.prints_search_uri;
-    if (!searchUri) return;
+    if (!card.id) return;
     setLoadingPrints(true);
     setShowArtPicker(true);
     try {
-      const res = await fetch(searchUri);
+      const res = await apiFetch(`/api/cards/${card.id}/prints`);
       if (!res.ok) return;
       const data = await res.json();
-      const allPrints = (data.data || [])
-        .filter((p) => p.image_uris?.png)
+      const allPrints = (data.prints || [])
         .map((p) => ({
           id: p.id,
-          normal: p.image_uris.normal,
-          image_uris: p.image_uris,
+          normal: p.image_normal || getImageUri(p.card_faces?.[0]?.image_uris, "normal"),
+          image_uris: {
+            small: p.image_small,
+            normal: p.image_normal,
+            large: p.image_large,
+            png: p.image_png,
+            art_crop: p.image_art_crop,
+            border_crop: p.image_border_crop,
+          },
+          card_faces: p.card_faces,
           setName: p.set_name,
-          set: p.set,
+          set: p.set_code,
           rarity: p.rarity,
           artist: p.artist,
-        }));
+        }))
+        .filter((p) => p.normal);
       setPrints(allPrints);
     } catch {
       showToast("获取版本列表失败", "error");
@@ -140,14 +150,17 @@ function CardItem({ card, imageMode, decks: propDecks }) {
   };
 
   const getImageUrlForDeck = () => {
-    if (selectedArt) return selectedArt.normal;
+    if (selectedArt) return selectedArt.normal || getImageUri(selectedArt.card_faces?.[0]?.image_uris, "normal");
     if (card.image_uris?.normal) return card.image_uris.normal;
     if (card.card_faces?.[0]?.image_uris?.normal) return card.card_faces[0].image_uris.normal;
     return null;
   };
 
   const getDisplayUrlForDeck = () => {
-    if (selectedArt) return getImageUri(selectedArt.image_uris, "art_crop");
+    if (selectedArt) {
+      return getImageUri(selectedArt.image_uris, "art_crop")
+        || getImageUri(selectedArt.card_faces?.[0]?.image_uris, "art_crop");
+    }
     return null;
   };
 
@@ -155,6 +168,7 @@ function CardItem({ card, imageMode, decks: propDecks }) {
     setShowDeckMenu(false);
     try {
       const body = { card_id: card.id };
+      if (selectedArt?.id) body.print_id = selectedArt.id;
       const imageUrl = getImageUrlForDeck();
       if (imageUrl) body.image_url = imageUrl;
       const displayUrl = getDisplayUrlForDeck();
@@ -176,21 +190,21 @@ function CardItem({ card, imageMode, decks: propDecks }) {
 
   return (
     <div className={`card-item ${isArtCrop ? "art-crop" : ""}`}>
-      <div className={`card-image-wrapper ${isDoubleFaced && !selectedArt ? "flippable" : ""} ${isArtCrop ? "art-crop" : ""}`}>
-        {isDoubleFaced && !selectedArt ? (
+      <div className={`card-image-wrapper ${isDoubleFaced ? "flippable" : ""} ${isArtCrop ? "art-crop" : ""}`}>
+        {isDoubleFaced ? (
           <div className={`card-flip-container ${flipped ? "flipped" : ""}`}>
             <div className="card-flip-front">
               {frontImageUri && !imgError ? (
                 <img
                   src={frontImageUri}
-                  alt={card.card_faces[0].name}
+                  alt={selectedCardFaces[0]?.name || card.name}
                   className="card-image"
                   loading="lazy"
                   onError={() => setImgError(true)}
                 />
               ) : (
                 <div className="card-image-placeholder">
-                  <span>{card.card_faces[0].name}</span>
+                  <span>{selectedCardFaces[0]?.name || card.name}</span>
                 </div>
               )}
             </div>
@@ -198,13 +212,13 @@ function CardItem({ card, imageMode, decks: propDecks }) {
               {backImageUri ? (
                 <img
                   src={backImageUri}
-                  alt={card.card_faces[1].name}
+                  alt={selectedCardFaces[1]?.name || card.name}
                   className="card-image"
                   loading="lazy"
                 />
               ) : (
                 <div className="card-image-placeholder">
-                  <span>{card.card_faces[1].name}</span>
+                  <span>{selectedCardFaces[1]?.name || card.name}</span>
                 </div>
               )}
             </div>
@@ -222,7 +236,7 @@ function CardItem({ card, imageMode, decks: propDecks }) {
             <span>{card.name}</span>
           </div>
         )}
-        {isDoubleFaced && !selectedArt && (
+        {isDoubleFaced && (
           <button
             className="card-flip-btn"
             onClick={() => setFlipped(!flipped)}
@@ -236,7 +250,7 @@ function CardItem({ card, imageMode, decks: propDecks }) {
             </svg>
           </button>
         )}
-        {card.prints_search_uri && (
+        {card.id && (
           <button
             className="card-art-btn"
             onClick={handleFetchPrints}

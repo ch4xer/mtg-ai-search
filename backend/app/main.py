@@ -9,6 +9,7 @@ from .config import get_allowed_origins, get_rate_limits
 from .db import (
     discover_cards,
     get_all_keywords,
+    get_card_prints_by_oracle_id,
     get_ip_hourly_search_count,
     get_user_by_id,
     get_user_hourly_search_count,
@@ -143,6 +144,13 @@ async def list_keywords():
     """Return all keyword abilities from the database."""
     keywords = await get_all_keywords()
     return {"keywords": keywords}
+
+
+@app.get("/api/cards/{oracle_id}/prints")
+async def get_card_prints(oracle_id: str):
+    """Return all prints (versions) for a card from local database."""
+    prints = await get_card_prints_by_oracle_id(oracle_id)
+    return {"prints": prints}
 
 
 @app.get("/api/health")

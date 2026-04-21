@@ -77,6 +77,7 @@ function DeckDetailPage({ imageMode }) {
 
     const hoverTimerRef = useRef(null);
     const previewLockedRef = useRef(false);
+    const importAbortControllerRef = useRef(null);
     const sheetRef = useRef(null);
     const sheetDragStartY = useRef(0);
     const sheetDragDelta = useRef(0);
@@ -772,22 +773,58 @@ function DeckDetailPage({ imageMode }) {
     const handleImportSubmit = async () => {
         if (!importText.trim()) return;
         setImporting(true);
+        // Create AbortController for this request
+        importAbortControllerRef.current = new AbortController();
         try {
-            const res = await apiFetch(`/api/decks/${id}/import`, { method: "POST", body: { text: importText } });
-            if (!res.ok) { showToast(((await res.json().catch(() => ({}))).detail) || language === 'zh' ? "导入失败" : "Import failed", "error"); return; }
+            const res = await apiFetch(`/api/decks/${id}/import`, {
+                method: "POST",
+                body: { text: importText },
+                signal: importAbortControllerRef.current.signal,
+            });
+            if (!res.ok) {
+                const errData = await res.json().catch(() => ({}));
+                showToast(errData.detail || (language === 'zh' ? "导入失败" : "Import failed"), "error");
+                return;
+            }
             const data = await res.json();
             const addedCount = data.added.reduce((s, c) => s + c.quantity, 0);
             const notFoundCount = data.not_found.length;
-            const msg = language === 'zh'
-                ? `成功导入 ${addedCount} 张卡牌${notFoundCount > 0 ? `，${notFoundCount} 张未找到` : ""}`
-                : `Successfully imported ${addedCount} cards${notFoundCount > 0 ? `, ${notFoundCount} not found` : ""}`;
+            const resolvedCards = data.added.filter(c => c.resolved_from);
+
+            let msg = language === 'zh'
+                ? `成功导入 ${addedCount} 张卡牌`
+                : `Successfully imported ${addedCount} cards`;
+            if (notFoundCount > 0) {
+                msg += language === 'zh' ? `，${notFoundCount} 张未找到` : `, ${notFoundCount} not found`;
+            }
+            if (resolvedCards.length > 0) {
+                const resolvedInfo = resolvedCards.map(c => `"${c.resolved_from}" → "${c.name}"`).join(", ");
+                msg += language === 'zh' ? `（通过 Scryfall 解析：${resolvedInfo}）` : ` (resolved via Scryfall: ${resolvedInfo})`;
+            }
             showToast(msg, notFoundCount > 0 ? "warning" : "success");
+
             if (notFoundCount > 0) setImportNotFound(data.not_found);
             setShowImportModal(false);
             setImportText("");
             await fetchDeck();
-        } catch { showToast(language === 'zh' ? "导入失败" : "Import failed", "error"); }
-        finally { setImporting(false); }
+        } catch (e) {
+            if (e.name === 'AbortError') {
+                showToast(language === 'zh' ? '导入已取消' : 'Import cancelled', "info");
+            } else {
+                showToast(language === 'zh' ? "导入失败" : "Import failed", "error");
+            }
+        } finally {
+            setImporting(false);
+            importAbortControllerRef.current = null;
+        }
+    };
+
+    const handleImportCancel = () => {
+        if (importAbortControllerRef.current) {
+            importAbortControllerRef.current.abort();
+        }
+        setShowImportModal(false);
+        setImportText("");
     };
 
     // ── Helpers ──
@@ -812,25 +849,33 @@ function DeckDetailPage({ imageMode }) {
             setShowArtPicker(!showArtPicker);
             return;
         }
-        const searchUri = selectedCard.card.prints_search_uri;
-        if (!searchUri) return;
+        const oracleId = selectedCard.card_id;
+        if (!oracleId) return;
         setLoadingPrints(true);
         setShowArtPicker(true);
         try {
-            const res = await fetch(searchUri);
+            const res = await apiFetch(`/api/cards/${oracleId}/prints`);
             if (!res.ok) return;
             const data = await res.json();
-            const allPrints = (data.data || [])
-                .filter((p) => p.image_uris?.png)
+            const allPrints = (data.prints || [])
                 .map((p) => ({
                     id: p.id,
-                    normal: p.image_uris.normal,
-                    image_uris: p.image_uris,
+                    normal: p.image_normal || getImageUri(p.card_faces?.[0]?.image_uris, "normal"),
+                    image_uris: {
+                        small: p.image_small,
+                        normal: p.image_normal,
+                        large: p.image_large,
+                        png: p.image_png,
+                        art_crop: p.image_art_crop,
+                        border_crop: p.image_border_crop,
+                    },
+                    card_faces: p.card_faces,
                     setName: p.set_name,
-                    set: p.set,
+                    set: p.set_code,
                     rarity: p.rarity,
                     artist: p.artist,
-                }));
+                }))
+                .filter((p) => p.normal);
             setArtPrints(allPrints);
         } catch {
             showToast(t('fetchVersionsFailed'), "error");
@@ -841,22 +886,23 @@ function DeckDetailPage({ imageMode }) {
 
     const handleSelectArt = async (print) => {
         if (!selectedCard) return;
-        const displayUrl = getImageUri(print.image_uris, "art_crop");
-        const imageUrl = print.normal;
+        const displayUrl = getImageUri(print.image_uris, "art_crop")
+            || getImageUri(print.card_faces?.[0]?.image_uris, "art_crop");
+        const imageUrl = print.normal || getImageUri(print.card_faces?.[0]?.image_uris, "normal");
         try {
             const res = await apiFetch(`/api/decks/${id}/cards/${selectedCard.card_id}`, {
                 method: "PATCH",
-                body: { image_url: imageUrl, display_url: displayUrl, board: selectedCard.board },
+                body: { print_id: print.id, image_url: imageUrl, display_url: displayUrl, board: selectedCard.board },
             });
             if (res.ok) {
                 setCards((prev) =>
                     prev.map((c) =>
                         c.card_id === selectedCard.card_id && c.board === selectedCard.board
-                            ? { ...c, image_url: imageUrl, display_url: displayUrl }
+                            ? { ...c, print_id: print.id, image_url: imageUrl, display_url: displayUrl }
                             : c
                     )
                 );
-                setSelectedCard((prev) => ({ ...prev, image_url: imageUrl, display_url: displayUrl }));
+                setSelectedCard((prev) => ({ ...prev, print_id: print.id, image_url: imageUrl, display_url: displayUrl }));
                 showToast(t('artChanged'));
             } else {
                 showToast(t('artChangeFailed'), "error");
@@ -872,17 +918,17 @@ function DeckDetailPage({ imageMode }) {
         try {
             const res = await apiFetch(`/api/decks/${id}/cards/${selectedCard.card_id}`, {
                 method: "PATCH",
-                body: { image_url: null, display_url: null, board: selectedCard.board },
+                body: { print_id: null, image_url: null, display_url: null, board: selectedCard.board },
             });
             if (res.ok) {
                 setCards((prev) =>
                     prev.map((c) =>
                         c.card_id === selectedCard.card_id && c.board === selectedCard.board
-                            ? { ...c, image_url: null, display_url: null }
+                            ? { ...c, print_id: null, image_url: null, display_url: null }
                             : c
                     )
                 );
-                setSelectedCard((prev) => ({ ...prev, image_url: null, display_url: null }));
+                setSelectedCard((prev) => ({ ...prev, print_id: null, image_url: null, display_url: null }));
                 showToast(t('artResetSuccess'));
             }
         } catch {
@@ -1087,7 +1133,26 @@ function DeckDetailPage({ imageMode }) {
                         <span>{language === 'zh' ? `以下 ${importNotFound.length} 张卡牌未在数据库中找到：` : `The following ${importNotFound.length} cards were not found in the database:`}</span>
                         <button className="import-not-found-close" onClick={() => setImportNotFound([])}>&times;</button>
                     </div>
-                    <ul>{importNotFound.map((name, i) => <li key={i}>{name}</li>)}</ul>
+                    <ul>
+                        {importNotFound.map((name, i) => (
+                            <li key={i}>
+                                <a
+                                    className="import-not-found-link"
+                                    href={`https://scryfall.com/search?q=${encodeURIComponent(name)}`}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    title={language === 'zh' ? '在 Scryfall 中搜索' : 'Search on Scryfall'}
+                                >
+                                    {name}
+                                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                        <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+                                        <polyline points="15 3 21 3 21 9" />
+                                        <line x1="10" y1="14" x2="21" y2="3" />
+                                    </svg>
+                                </a>
+                            </li>
+                        ))}
+                    </ul>
                 </div>
             )}
 
@@ -1105,7 +1170,7 @@ function DeckDetailPage({ imageMode }) {
                             <>
                                 <div className="deck-preview-image" style={{ position: "relative" }}>
                                     <img src={getCardFullImage(selectedCard)} alt={selectedCard.card.name} />
-                                    {isOwner && selectedCard.card.prints_search_uri && (
+                                    {isOwner && selectedCard.card_id && (
                                         <button
                                             className="card-art-btn"
                                             onClick={handleOpenArtPicker}
@@ -1499,17 +1564,30 @@ function DeckDetailPage({ imageMode }) {
                             <div className="art-picker-loading">{t('loadingVersions')}</div>
                         ) : (
                             <div className="art-picker-grid">
-                                {artPrints.map((p) => (
-                                    <div
-                                        key={p.id}
-                                        className={`art-picker-item ${selectedCard?.image_url === p.png ? "selected" : ""}`}
-                                        onClick={() => handleSelectArt(p)}
-                                        title={`${p.setName} - ${p.artist}`}
-                                    >
-                                        <img src={p.normal} alt={p.setName} loading="lazy" />
-                                        <span className="art-picker-label">{p.setName}</span>
-                                    </div>
-                                ))}
+                                {(() => {
+                                    const currentImageUrl = selectedCard?.image_url
+                                        || getImageUri(selectedCard?.card.image_uris, "normal")
+                                        || getImageUri(selectedCard?.card.card_faces?.[0]?.image_uris, "normal");
+                                    return artPrints.map((p) => {
+                                        const isSelected = currentImageUrl === p.normal;
+                                        return (
+                                            <div
+                                                key={p.id}
+                                                className={`art-picker-item ${isSelected ? "selected" : ""}`}
+                                                onClick={() => handleSelectArt(p)}
+                                                title={`${p.setName} - ${p.artist}`}
+                                            >
+                                                <img src={p.normal} alt={p.setName} loading="lazy" />
+                                                <span className="art-picker-label">{p.setName}</span>
+                                                {isSelected && (
+                                                    <span className="art-picker-current-badge">
+                                                        {language === 'zh' ? '当前' : 'Current'}
+                                                    </span>
+                                                )}
+                                            </div>
+                                        );
+                                    });
+                                })()}
                             </div>
                         )}
                     </div>
@@ -1557,7 +1635,7 @@ function DeckDetailPage({ imageMode }) {
                         <div className="mobile-sheet-body">
                             <div className="mobile-sheet-image">
                                 <img src={getCardFullImage(selectedCard)} alt={selectedCard.card.name} />
-                                {isOwner && selectedCard.card.prints_search_uri && (
+                                {isOwner && selectedCard.card_id && (
                                     <button className="card-art-btn" onClick={handleOpenArtPicker} title={t('changeArt')}>
                                         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                                             <rect x="3" y="3" width="7" height="7" />
@@ -1685,11 +1763,11 @@ function DeckDetailPage({ imageMode }) {
 
             {/* Import Modal */}
             {showImportModal && (
-                <div className="modal-overlay" onClick={() => { setShowImportModal(false); setImportText(""); }}>
+                <div className="modal-overlay" onClick={handleImportCancel}>
                     <div className="modal-content import-modal" onClick={(e) => e.stopPropagation()}>
                         <div className="modal-header">
                             <h3>{t('importDecklist')}</h3>
-                            <button className="modal-close" onClick={() => { setShowImportModal(false); setImportText(""); }}>&times;</button>
+                            <button className="modal-close" onClick={handleImportCancel}>&times;</button>
                         </div>
                         <textarea
                             className="import-textarea"
@@ -1700,7 +1778,7 @@ function DeckDetailPage({ imageMode }) {
                             rows={12}
                         />
                         <div className="modal-actions">
-                            <button className="btn-secondary" onClick={() => { setShowImportModal(false); setImportText(""); }}>{t('cancel')}</button>
+                            <button className="btn-secondary" onClick={handleImportCancel}>{t('cancel')}</button>
                             <button className="btn-accent" onClick={handleImportSubmit} disabled={importing || !importText.trim()}>
                                 {importing ? `${language === 'zh' ? '导入中...' : 'Importing...'}` : `${language === 'zh' ? '导入' : 'Import'}`}
                             </button>
