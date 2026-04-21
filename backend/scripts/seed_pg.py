@@ -1,4 +1,4 @@
-"""Seed script: download Scryfall data, populate PostgreSQL + pgvector.
+"""Seed script: download Scryfall unique_artwork data, populate PostgreSQL + pgvector.
 
 Usage:
     1. Start PostgreSQL: docker compose up db -d
@@ -17,7 +17,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env"))
 
-from app.data_loader import download_scryfall_cards, parse_keyword_abilities
+from app.data_loader import (
+    parse_keyword_abilities,
+    stream_cards,
+)
 
 KEYWORD_ABILITY_FILE = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -39,22 +42,16 @@ def get_conn():
 
 
 def create_schema(conn):
-    """Create pgvector extension and tables."""
+    """Create pgvector extension and tables with multi-print support."""
     log("Creating schema...")
     with conn.cursor() as cur:
         cur.execute("CREATE EXTENSION IF NOT EXISTS vector")
+
+        # cards 表：存储卡牌基本信息（以 oracle_id 为主键）
         cur.execute("""
             CREATE TABLE IF NOT EXISTS cards (
                 id                    TEXT PRIMARY KEY,
                 name                  TEXT NOT NULL,
-                lang                  TEXT,
-                released_at           DATE,
-                uri                   TEXT,
-                scryfall_uri          TEXT,
-                layout                TEXT,
-                image_png             TEXT,
-                image_art_crop        TEXT,
-                image_border_crop     TEXT,
                 mana_cost             TEXT,
                 cmc                   REAL,
                 type_line             TEXT,
@@ -62,14 +59,44 @@ def create_schema(conn):
                 power                 TEXT,
                 toughness             TEXT,
                 colors                TEXT[],
+                color_identity        TEXT[],
                 keywords              TEXT[] DEFAULT '{}',
-                is_playtest           BOOLEAN NOT NULL DEFAULT FALSE,
-                data                  JSONB NOT NULL,
+                legalities            JSONB,
+                layout                TEXT,
+                card_faces            JSONB,
                 name_embedding        halfvec(2560),
                 type_line_embedding   halfvec(2560),
                 oracle_text_embedding halfvec(2560)
             )
         """)
+        cur.execute("ALTER TABLE cards ADD COLUMN IF NOT EXISTS card_faces JSONB")
+
+        # card_prints 表：存储印刷版本信息（一个 oracle_id 对应多个版本）
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS card_prints (
+                id              TEXT PRIMARY KEY,
+                card_id         TEXT NOT NULL REFERENCES cards(id) ON DELETE CASCADE,
+                set_code        TEXT NOT NULL,
+                set_name        TEXT NOT NULL,
+                collector_num   TEXT NOT NULL,
+                rarity          TEXT,
+                artist          TEXT,
+                flavor_name     TEXT,
+                flavor_text     TEXT,
+                released_at     DATE,
+                finishes        TEXT[],
+                image_small     TEXT,
+                image_normal    TEXT,
+                image_large     TEXT,
+                image_png       TEXT,
+                image_art_crop  TEXT,
+                image_border_crop TEXT,
+                card_faces      JSONB,
+                UNIQUE(card_id, set_code, collector_num)
+            )
+        """)
+        cur.execute("ALTER TABLE card_prints ADD COLUMN IF NOT EXISTS card_faces JSONB")
+
         cur.execute("""
             CREATE TABLE IF NOT EXISTS keyword_abilities (
                 id          TEXT PRIMARY KEY,
@@ -98,126 +125,319 @@ def create_schema(conn):
                 updated_at           TIMESTAMPTZ DEFAULT now()
             )
         """)
-        # Migration for existing deployments
-        cur.execute(
-            "ALTER TABLE decks ADD COLUMN IF NOT EXISTS format TEXT NOT NULL DEFAULT 'undefined'"
-        )
         cur.execute("""
             CREATE TABLE IF NOT EXISTS deck_cards (
-                id       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                deck_id  UUID NOT NULL REFERENCES decks(id) ON DELETE CASCADE,
-                card_id  TEXT NOT NULL REFERENCES cards(id),
-                quantity INT NOT NULL DEFAULT 1,
-                added_at TIMESTAMPTZ DEFAULT now(),
+                id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                deck_id    UUID NOT NULL REFERENCES decks(id) ON DELETE CASCADE,
+                card_id    TEXT NOT NULL REFERENCES cards(id),
+                print_id   TEXT REFERENCES card_prints(id) ON DELETE SET NULL,
+                quantity   INT NOT NULL DEFAULT 1,
+                image_url  TEXT,
+                display_url TEXT,
+                board      TEXT NOT NULL DEFAULT 'mainboard',
+                added_at   TIMESTAMPTZ DEFAULT now(),
                 UNIQUE(deck_id, card_id)
             )
         """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS app_meta (
+                key   TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS sync_logs (
+                id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                status      TEXT NOT NULL,
+                new_cards   INT DEFAULT 0,
+                updated_cards INT DEFAULT 0,
+                message     TEXT,
+                started_at  TIMESTAMPTZ DEFAULT now(),
+                completed_at TIMESTAMPTZ
+            )
+        """)
+
+        # 索引
         cur.execute("CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_decks_user_id ON decks(user_id)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_deck_cards_deck_id ON deck_cards(deck_id)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_cards_name ON cards(name)")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_cards_released_at ON cards(released_at)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_cards_cmc ON cards(cmc)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_cards_colors ON cards USING GIN(colors)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_cards_keywords ON cards USING GIN(keywords)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_card_prints_card_id ON card_prints(card_id)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_card_prints_set_code ON card_prints(set_code)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_card_prints_lookup ON card_prints(card_id, set_code, collector_num)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_card_prints_flavor_name ON card_prints(flavor_name)")
     conn.commit()
     log("Schema created.")
 
 
-def insert_cards(conn, cards: list[dict]):
-    """Insert card rows (without embeddings) in batches.
+def insert_cards_and_prints(conn, chunk_size: int = 5000, batch_size: int = 1000):
+    """Stream and insert cards/prints in chunks to reduce memory usage.
 
-    cards.id stores oracle_id (the stable Oracle identifier), not the
-    printing-specific id. Scryfall's oracle_cards bulk has one entry per
-    oracle_id, so upserts are naturally idempotent across printing changes.
+    Downloads bulk data to local file once, then streams from it.
+    Ensures cards are inserted before their prints to satisfy foreign key constraints.
     """
-    log(f"Inserting {len(cards)} cards...")
-    batch_size = 1000
+    oracle_groups: dict[str, list[dict]] = {}
+    total_prints = 0
+    total_oracles = 0
+
+    # First pass: collect and insert cards
+    log("Processing cards...")
+    for chunk in stream_cards(chunk_size=chunk_size):
+        valid_prints = [p for p in chunk if p.get("layout") not in ("token", "emblem", "art_series")]
+        total_prints += len(valid_prints)
+
+        # Group by oracle_id
+        for p in valid_prints:
+            oracle_id = p.get("oracle_id")
+            if oracle_id:
+                oracle_groups.setdefault(oracle_id, []).append(p)
+
+        # Periodically flush cards to reduce memory
+        if len(oracle_groups) >= chunk_size * 2:
+            _insert_cards_batch(conn, oracle_groups, batch_size)
+            total_oracles += len(oracle_groups)
+            oracle_groups.clear()
+            log(f"  Inserted {total_oracles} cards so far")
+
+    # Final flush for remaining cards
+    if oracle_groups:
+        _insert_cards_batch(conn, oracle_groups, batch_size)
+        total_oracles += len(oracle_groups)
+        log(f"  Final: {total_oracles} cards total")
+
+    log(f"Cards complete: {total_oracles} unique oracle_ids")
+
+    # Second pass: insert prints (cards now exist for all foreign keys)
+    log("Inserting card prints...")
+    prints_inserted = 0
+    for chunk in stream_cards(chunk_size=chunk_size):
+        valid_prints = [p for p in chunk if p.get("layout") not in ("token", "emblem", "art_series")]
+        _insert_prints_batch(conn, valid_prints, batch_size)
+        prints_inserted += len(valid_prints)
+        if prints_inserted % 10000 == 0:
+            log(f"  Inserted {prints_inserted} prints so far")
+
+    log(f"Prints complete: {prints_inserted} total")
+    log(f"Summary: {total_oracles} cards, {prints_inserted} prints")
+
+
+def _insert_cards_batch(conn, oracle_groups: dict[str, list[dict]], batch_size: int):
+    """Insert cards from oracle_groups dictionary."""
+    cards_values = []
+    for oracle_id, card_prints in oracle_groups.items():
+        first_print = card_prints[0]
+        card_faces = first_print.get("card_faces") or []
+        face_mana_cost = " // ".join(f.get("mana_cost", "") for f in card_faces if f.get("mana_cost"))
+        face_type_line = " // ".join(f.get("type_line", "") for f in card_faces if f.get("type_line"))
+        face_oracle_text = "\n//\n".join(f.get("oracle_text", "") for f in card_faces if f.get("oracle_text"))
+        first_power = next((f.get("power") for f in card_faces if f.get("power")), None)
+        first_toughness = next((f.get("toughness") for f in card_faces if f.get("toughness")), None)
+        legalities = first_print.get("legalities") or {}
+        raw_colors = first_print.get("colors")
+        colors = raw_colors if raw_colors is not None else (first_print.get("color_identity") or [])
+        color_identity = first_print.get("color_identity") or []
+        keywords = first_print.get("keywords") or []
+
+        cards_values.append((
+            oracle_id,
+            first_print.get("name", ""),
+            first_print.get("mana_cost") or face_mana_cost or None,
+            first_print.get("cmc"),
+            first_print.get("type_line") or face_type_line or None,
+            first_print.get("oracle_text") or face_oracle_text or None,
+            first_print.get("power") or first_power,
+            first_print.get("toughness") or first_toughness,
+            colors,
+            color_identity,
+            keywords,
+            json.dumps(legalities),
+            first_print.get("layout"),
+            json.dumps(card_faces) if card_faces else None,
+        ))
 
     with conn.cursor() as cur:
-        for i in range(0, len(cards), batch_size):
-            batch = cards[i:i + batch_size]
-            values = []
-            for card in batch:
-                image_uris = card.get("image_uris") or {}
-                raw_colors = card.get("colors")
-                colors = raw_colors if raw_colors is not None else (card.get("color_identity") or [])
-                keywords = card.get("keywords") or []
-                # Overwrite the Scryfall printing id with oracle_id so every
-                # consumer of the stored data reads the same id we key by.
-                card["id"] = card["oracle_id"]
-                values.append((
-                    card["oracle_id"],
-                    card.get("name", ""),
-                    card.get("lang"),
-                    card.get("released_at"),
-                    card.get("uri"),
-                    card.get("scryfall_uri"),
-                    card.get("layout"),
-                    image_uris.get("png"),
-                    image_uris.get("art_crop"),
-                    image_uris.get("border_crop"),
-                    card.get("mana_cost"),
-                    card.get("cmc"),
-                    card.get("type_line"),
-                    card.get("oracle_text"),
-                    card.get("power"),
-                    card.get("toughness"),
-                    colors,
-                    keywords,
-                    card.get("set_type") == "funny",
-                    json.dumps(card),
-                ))
+        for i in range(0, len(cards_values), batch_size):
+            batch = cards_values[i:i + batch_size]
             cur.executemany(
                 """INSERT INTO cards (
-                    id, name, lang, released_at, uri, scryfall_uri, layout,
-                    image_png, image_art_crop, image_border_crop, mana_cost, cmc, type_line,
-                    oracle_text, power, toughness, colors, keywords, is_playtest, data
-                ) VALUES (
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
-                ) ON CONFLICT (id) DO UPDATE SET
-                    image_png = EXCLUDED.image_png,
-                    image_art_crop = EXCLUDED.image_art_crop,
-                    image_border_crop = EXCLUDED.image_border_crop,
+                    id, name, mana_cost, cmc, type_line, oracle_text,
+                    power, toughness, colors, color_identity, keywords,
+                    legalities, layout, card_faces
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (id) DO UPDATE SET
+                    name = EXCLUDED.name,
                     mana_cost = EXCLUDED.mana_cost,
                     cmc = EXCLUDED.cmc,
+                    type_line = EXCLUDED.type_line,
+                    oracle_text = EXCLUDED.oracle_text,
                     power = EXCLUDED.power,
                     toughness = EXCLUDED.toughness,
                     colors = EXCLUDED.colors,
+                    color_identity = EXCLUDED.color_identity,
                     keywords = EXCLUDED.keywords,
-                    is_playtest = EXCLUDED.is_playtest,
-                    data = EXCLUDED.data,
-                    name = EXCLUDED.name,
-                    type_line = EXCLUDED.type_line,
-                    oracle_text = EXCLUDED.oracle_text,
+                    legalities = EXCLUDED.legalities,
+                    layout = EXCLUDED.layout,
+                    card_faces = EXCLUDED.card_faces,
                     name_embedding = CASE WHEN cards.name IS NOT DISTINCT FROM EXCLUDED.name THEN cards.name_embedding ELSE NULL END,
                     type_line_embedding = CASE WHEN cards.type_line IS NOT DISTINCT FROM EXCLUDED.type_line THEN cards.type_line_embedding ELSE NULL END,
                     oracle_text_embedding = CASE WHEN cards.oracle_text IS NOT DISTINCT FROM EXCLUDED.oracle_text THEN cards.oracle_text_embedding ELSE NULL END
                 """,
-                values,
+                batch,
             )
             conn.commit()
-            log(f"  Inserted cards {i + 1}-{min(i + batch_size, len(cards))}")
 
 
-def insert_abilities(conn, abilities: dict[str, str]):
-    """Insert keyword abilities (without embeddings)."""
-    log(f"Inserting {len(abilities)} keyword abilities...")
+def _insert_prints_batch(conn, prints: list[dict], batch_size: int):
+    """Insert card prints from a list."""
+    prints_values = []
+    for p in prints:
+        oracle_id = p.get("oracle_id")
+        if not oracle_id:
+            continue
+        image_uris = p.get("image_uris") or {}
+        finishes = p.get("finishes") or []
+
+        prints_values.append((
+            p.get("id"),
+            oracle_id,
+            p.get("set"),
+            p.get("set_name"),
+            p.get("collector_number"),
+            p.get("rarity"),
+            p.get("artist"),
+            p.get("flavor_name"),
+            p.get("flavor_text"),
+            p.get("released_at"),
+            finishes,
+            image_uris.get("small"),
+            image_uris.get("normal"),
+            image_uris.get("large"),
+            image_uris.get("png"),
+            image_uris.get("art_crop"),
+            image_uris.get("border_crop"),
+            json.dumps(p.get("card_faces")) if p.get("card_faces") else None,
+        ))
+
     with conn.cursor() as cur:
-        values = [
-            (name.lower().replace(" ", "_"), name, desc)
-            for name, desc in abilities.items()
-        ]
-        cur.executemany(
-            """INSERT INTO keyword_abilities (id, name, description) VALUES (%s, %s, %s)
-               ON CONFLICT (id) DO UPDATE SET
-                   description = EXCLUDED.description,
-                   embedding = CASE WHEN keyword_abilities.description IS NOT DISTINCT FROM EXCLUDED.description
-                                    THEN keyword_abilities.embedding ELSE NULL END""",
-            values,
-        )
-    conn.commit()
-    log("Abilities inserted.")
+        for i in range(0, len(prints_values), batch_size):
+            batch = prints_values[i:i + batch_size]
+            cur.executemany(
+                """INSERT INTO card_prints (
+                    id, card_id, set_code, set_name, collector_num,
+                    rarity, artist, flavor_name, flavor_text, released_at, finishes,
+                    image_small, image_normal, image_large, image_png,
+                    image_art_crop, image_border_crop, card_faces
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (card_id, set_code, collector_num) DO UPDATE SET
+                    rarity = EXCLUDED.rarity,
+                    artist = EXCLUDED.artist,
+                    flavor_name = COALESCE(EXCLUDED.flavor_name, card_prints.flavor_name),
+                    flavor_text = COALESCE(EXCLUDED.flavor_text, card_prints.flavor_text),
+                    finishes = EXCLUDED.finishes,
+                    image_small = EXCLUDED.image_small,
+                    image_normal = EXCLUDED.image_normal,
+                    image_large = EXCLUDED.image_large,
+                    image_png = EXCLUDED.image_png,
+                    image_art_crop = EXCLUDED.image_art_crop,
+                    image_border_crop = EXCLUDED.image_border_crop,
+                    card_faces = EXCLUDED.card_faces
+                """,
+                batch,
+            )
+            conn.commit()
+
+
+def insert_abilities(conn, abilities: dict[str, str], skip_summary: bool = False, on_progress=None):
+    """Insert keyword abilities with DeepSeek-generated summaries.
+
+    Uses incremental checkpointing: each ability is summarized and inserted
+    immediately, so progress is preserved if the process crashes.
+
+    Args:
+        abilities: {name: raw_description} from rules file
+        skip_summary: if True, use raw descriptions directly (for testing)
+        on_progress: callback(done, total) for summarization progress
+    """
+    log(f"Processing {len(abilities)} keyword abilities...")
+    total = len(abilities)
+
+    if skip_summary:
+        # Fast path: insert all at once without summarization
+        log(f"Inserting {total} keyword abilities (no summarization)...")
+        with conn.cursor() as cur:
+            values = [
+                (name.lower().replace(" ", "_"), name, desc)
+                for name, desc in abilities.items()
+            ]
+            cur.executemany(
+                """INSERT INTO keyword_abilities (id, name, description) VALUES (%s, %s, %s)
+                   ON CONFLICT (id) DO UPDATE SET
+                       description = EXCLUDED.description,
+                       embedding = CASE WHEN keyword_abilities.description IS NOT DISTINCT FROM EXCLUDED.description
+                                        THEN keyword_abilities.embedding ELSE NULL END""",
+                values,
+            )
+        conn.commit()
+        log("Abilities inserted.")
+        return
+
+    from app.ability_summarizer import summarize_ability
+
+    log("Generating concise summaries with DeepSeek (checkpointed)...")
+    processed = 0
+    for name, desc in abilities.items():
+        ability_id = name.lower().replace(" ", "_")
+
+        # Check existing state to decide whether to skip summarization
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT description, embedding FROM keyword_abilities WHERE id = %s",
+                (ability_id,),
+            )
+            row = cur.fetchone()
+            if row:
+                existing_desc, existing_emb = row
+                # Skip summarization if:
+                # 1. Has non-NULL embedding (fully processed)
+                # 2. Has description that differs from raw (already summarized)
+                if existing_emb is not None:
+                    processed += 1
+                    if on_progress:
+                        on_progress(processed, total)
+                    continue
+                # If description is already different from raw, it's a summary - skip API call
+                if existing_desc != desc:
+                    processed += 1
+                    if on_progress:
+                        on_progress(processed, total)
+                    continue
+
+        # Generate summary for new or not-yet-summarized ability
+        summary = summarize_ability(name, desc)
+        if summary is None:
+            summary = desc[:200] if len(desc) > 200 else desc
+            log(f"  [{processed + 1}/{total}] {name}: using fallback")
+
+        # Insert immediately (checkpoint)
+        with conn.cursor() as cur:
+            cur.execute(
+                """INSERT INTO keyword_abilities (id, name, description) VALUES (%s, %s, %s)
+                   ON CONFLICT (id) DO UPDATE SET
+                       description = EXCLUDED.description,
+                       embedding = CASE WHEN keyword_abilities.description IS NOT DISTINCT FROM EXCLUDED.description
+                                        THEN keyword_abilities.embedding ELSE NULL END""",
+                (ability_id, name, summary),
+            )
+        conn.commit()
+        processed += 1
+        log(f"  [{processed}/{total}] {name}: {summary[:50]}...")
+        if on_progress:
+            on_progress(processed, total)
+
+    log(f"Abilities processed: {processed}/{total}")
 
 
 def generate_card_embeddings(conn, batch_size: int = 200, max_rounds: int = 10, on_progress=None):
@@ -290,10 +510,13 @@ def generate_card_embeddings(conn, batch_size: int = 200, max_rounds: int = 10, 
         log("All card embeddings complete.")
 
 
-def generate_ability_embeddings(conn, max_rounds: int = 10, on_progress=None):
-    """Generate and store embeddings for keyword abilities with retry.
+def generate_ability_embeddings(conn, batch_size: int = 50, max_rounds: int = 10, on_progress=None):
+    """Generate and store embeddings for keyword abilities with checkpointing.
 
-    on_progress: optional callback(done, total) called on completion.
+    Processes in batches and commits after each batch, so progress is preserved
+    if the process crashes.
+
+    on_progress: optional callback(done, total) called after each batch.
     """
     from app.embedding import encode_batch_safe
 
@@ -308,31 +531,44 @@ def generate_ability_embeddings(conn, max_rounds: int = 10, on_progress=None):
 
         total = len(rows)
         log(f"Generating ability embeddings (round {round_num}/{max_rounds}): {total} remaining...")
-        texts = [f"{r[1]}: {r[2]}" for r in rows]
-        vecs = encode_batch_safe(texts)
+        processed_this_round = 0
 
-        if vecs is None:
-            log(f"  Round {round_num} failed, retrying in 10s...")
-            time.sleep(10)
-            continue
+        for i in range(0, total, batch_size):
+            batch = rows[i:i + batch_size]
+            texts = [f"{r[1]}: {r[2]}" for r in batch]
+            vecs = encode_batch_safe(texts)
 
-        with conn.cursor() as cur:
-            for i, row in enumerate(rows):
-                cur.execute(
-                    "UPDATE keyword_abilities SET embedding = %s::halfvec WHERE id = %s",
-                    (str(vecs[i]), row[0]),
-                )
-        conn.commit()
-        log(f"  Embedded {total} abilities.")
-        if on_progress:
-            on_progress(total, total)
-        return
+            if vecs is None:
+                log(f"  Batch {i//batch_size + 1} failed, skipping...")
+                continue
+
+            with conn.cursor() as cur:
+                for j, row in enumerate(batch):
+                    cur.execute(
+                        "UPDATE keyword_abilities SET embedding = %s::halfvec WHERE id = %s",
+                        (str(vecs[j]), row[0]),
+                    )
+            conn.commit()
+            processed_this_round += len(batch)
+            done = i + len(batch)
+            log(f"  [{done}/{total}] Embedded {len(batch)} abilities")
+            if on_progress:
+                on_progress(done, total)
+
+        if processed_this_round == total:
+            log("All ability embeddings complete.")
+            return
+
+        log(f"Round {round_num} done. {total - processed_this_round} abilities failed, retrying...")
+        time.sleep(10)
 
     with conn.cursor() as cur:
         cur.execute("SELECT COUNT(*) FROM keyword_abilities WHERE embedding IS NULL")
         remaining = cur.fetchone()[0]
     if remaining > 0:
         log(f"WARNING: {remaining} abilities still missing embeddings after {max_rounds} rounds.")
+    else:
+        log("All ability embeddings complete.")
 
 
 def create_vector_indexes(conn):
@@ -341,20 +577,22 @@ def create_vector_indexes(conn):
 
 
 def main():
+    """Run seed process.
+
+    Downloads bulk data to local file once, then streams and processes in chunks.
+    """
     t_start = time.time()
 
     conn = get_conn()
     try:
         create_schema(conn)
 
-        # Download and insert cards
-        raw_cards = download_scryfall_cards()
-        valid_cards = [c for c in raw_cards if c.get("layout") not in ("token", "emblem", "art_series")]
-        insert_cards(conn, valid_cards)
+        # Download and insert unique artwork cards
+        insert_cards_and_prints(conn)
 
-        # Parse and insert abilities
+        # Parse and insert abilities (with DeepSeek summarization)
         abilities = parse_keyword_abilities(KEYWORD_ABILITY_FILE)
-        insert_abilities(conn, abilities)
+        insert_abilities(conn, abilities, on_progress=lambda done, total: log(f"  Summarized {done}/{total} abilities"))
 
         # Generate embeddings
         generate_card_embeddings(conn)
@@ -366,7 +604,7 @@ def main():
     finally:
         conn.close()
 
-    log(f"\nMigration complete! Total time: {time.time() - t_start:.0f}s")
+    log(f"\nSeed complete! Total time: {time.time() - t_start:.0f}s")
 
 
 if __name__ == "__main__":

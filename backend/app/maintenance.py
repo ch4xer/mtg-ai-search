@@ -53,10 +53,12 @@ def _make_progress_callback(callback: StatusCallback, prefix: str):
 
 
 def _refresh_abilities_from_rules(conn, status_callback: StatusCallback = None) -> list[str]:
-    """Re-download rules 702 and upsert keyword_abilities.
+    """Re-download rules 702, summarize with DeepSeek, and upsert keyword_abilities.
 
     Always pulls a fresh copy from Wizards so we never drift behind the
-    published rules. insert_abilities uses ON CONFLICT to update descriptions
+    published rules. Then uses DeepSeek to generate concise one-sentence
+    descriptions for better embedding matching.
+    insert_abilities uses ON CONFLICT to update descriptions
     and null the embedding only when the description actually changed.
     Returns names of keywords that didn't previously exist in the DB.
     Does NOT generate embeddings — caller should run generate_ability_embeddings().
@@ -75,8 +77,12 @@ def _refresh_abilities_from_rules(conn, status_callback: StatusCallback = None) 
     parsed_ids = {name.lower().replace(" ", "_"): name for name in abilities.keys()}
     new_names = sorted(name for kid, name in parsed_ids.items() if kid not in existing_ids)
 
-    _emit_status(status_callback, "正在导入关键词数据...")
-    insert_abilities(conn, abilities)
+    _emit_status(status_callback, "正在生成关键词摘要...")
+    insert_abilities(
+        conn,
+        abilities,
+        on_progress=_make_progress_callback(status_callback, "正在生成摘要"),
+    )
 
     if new_names:
         logger.info("[keyword-sync] %d new abilities from rules 702: %s", len(new_names), new_names)
@@ -191,15 +197,14 @@ async def backfill_missing_embeddings(status_callback: StatusCallback = None) ->
 
 
 async def full_reseed(with_embeddings: bool = True, status_callback: StatusCallback = None) -> int:
-    """完全重新导入卡牌数据（不影响关键词数据）。"""
+    """完全重新导入卡牌数据（不影响关键词数据）。使用 unique_artwork 支持多版本。"""
     def _do_reseed() -> None:
         from scripts.seed_pg import (
             create_schema,
             generate_card_embeddings,
             get_conn,
-            insert_cards,
+            insert_cards_and_prints,
         )
-        from .data_loader import download_scryfall_cards
 
         conn = get_conn()
         try:
@@ -208,15 +213,12 @@ async def full_reseed(with_embeddings: bool = True, status_callback: StatusCallb
             logger.info("[reseed] Clearing existing card data...")
             with conn.cursor() as cur:
                 cur.execute("DELETE FROM deck_cards")
+                cur.execute("DELETE FROM card_prints")
                 cur.execute("DELETE FROM cards")
             conn.commit()
 
-            _emit_status(status_callback, "正在下载 Scryfall 数据...")
-            raw_cards = download_scryfall_cards()
-            valid_cards = [c for c in raw_cards if c.get("layout") not in ("token", "emblem", "art_series")]
-
-            _emit_status(status_callback, f"正在导入 {len(valid_cards)} 张卡牌...")
-            insert_cards(conn, valid_cards)
+            _emit_status(status_callback, "正在下载并导入 Scryfall 数据...")
+            insert_cards_and_prints(conn)
 
             if with_embeddings:
                 _emit_status(status_callback, "正在生成卡牌 embedding...")
@@ -226,14 +228,6 @@ async def full_reseed(with_embeddings: bool = True, status_callback: StatusCallb
                 )
             else:
                 logger.info("[reseed] Skipping embedding generation.")
-
-            with conn.cursor() as cur:
-                cur.execute("""
-                    ALTER TABLE cards ADD COLUMN IF NOT EXISTS is_playtest BOOLEAN NOT NULL DEFAULT FALSE;
-                    UPDATE cards SET is_playtest = (data->>'set_type' = 'funny')
-                    WHERE is_playtest = FALSE AND data->>'set_type' = 'funny';
-                """)
-            conn.commit()
         finally:
             conn.close()
 
@@ -276,95 +270,97 @@ async def regenerate_embeddings(status_callback: StatusCallback = None) -> None:
 
 
 def _get_scryfall_bulk_updated_at() -> str | None:
-    """Fetch the updated_at timestamp of the oracle_cards bulk data from Scryfall."""
+    """Fetch the updated_at timestamp of the unique_artwork bulk data from Scryfall."""
     try:
         resp = requests.get("https://api.scryfall.com/bulk-data", timeout=15)
         resp.raise_for_status()
         for entry in resp.json()["data"]:
-            if entry["type"] == "oracle_cards":
+            if entry["type"] == "unique_artwork":
                 return entry["updated_at"]
     except Exception as e:
         logger.warning("[sync] Failed to check Scryfall bulk data: %s", e)
     return None
 
 
-async def incremental_sync(status_callback: StatusCallback = None) -> dict:
-    """Download Scryfall data, upsert cards, and generate embeddings for new/changed cards.
+async def incremental_sync(status_callback: StatusCallback = None, force: bool = False, skip_embeddings: bool = False) -> dict:
+    """Download Scryfall unique_artwork data, upsert cards and prints.
 
-    Returns {"new_cards": int, "updated_cards": int, "skipped": bool}.
+    If force=True, skip the timestamp check and always sync.
+    If skip_embeddings=True, don't regenerate embeddings (only update card data).
+
+    Returns {"new_cards": int, "updated_cards": int, "new_prints": int, "skipped": bool}.
     """
     pool = await get_pool()
 
-    # Check if Scryfall data has been updated since our last sync
-    remote_updated = _get_scryfall_bulk_updated_at()
-    if not remote_updated:
-        logger.warning("[sync] Could not determine Scryfall update time, skipping.")
-        await _write_sync_log(pool, "skipped", message="无法获取 Scryfall 更新时间")
-        return {"new_cards": 0, "updated_cards": 0, "skipped": True}
+    # Check if Scryfall data has been updated since our last sync (skip if force)
+    if not force:
+        remote_updated = _get_scryfall_bulk_updated_at()
+        if not remote_updated:
+            logger.warning("[sync] Could not determine Scryfall update time, skipping.")
+            await _write_sync_log(pool, "skipped", message="无法获取 Scryfall 更新时间")
+            return {"new_cards": 0, "updated_cards": 0, "new_prints": 0, "skipped": True}
 
-    last_sync = await pool.fetchval(
-        "SELECT value FROM app_meta WHERE key = 'last_sync_updated_at'"
-    )
-    if last_sync == remote_updated:
-        logger.info("[sync] Scryfall data unchanged (updated_at=%s), skipping.", remote_updated)
-        await _write_sync_log(pool, "skipped", message="Scryfall 数据无变更")
-        return {"new_cards": 0, "updated_cards": 0, "skipped": True}
+        last_sync = await pool.fetchval(
+            "SELECT value FROM app_meta WHERE key = 'last_sync_updated_at'"
+        )
+        if last_sync == remote_updated:
+            logger.info("[sync] Scryfall data unchanged (updated_at=%s), skipping.", remote_updated)
+            await _write_sync_log(pool, "skipped", message="Scryfall 数据无变更")
+            return {"new_cards": 0, "updated_cards": 0, "new_prints": 0, "skipped": True}
 
-    logger.info("[sync] Scryfall data updated (%s -> %s), syncing...", last_sync, remote_updated)
+        logger.info("[sync] Scryfall data updated (%s -> %s), syncing...", last_sync, remote_updated)
+    else:
+        logger.info("[sync] Force sync requested, skipping timestamp check.")
+        remote_updated = _get_scryfall_bulk_updated_at() or "unknown"
+
     log_id = await _write_sync_log(pool, "running", message="正在同步...")
 
-    # cards.id is oracle_id, so the oracle_cards bulk upserts 1:1 by row.
-    # Rows whose oracle text changed get their embeddings nulled and regenerated.
-    stats: dict[str, int] = {"new_cards": 0, "updated_cards": 0}
+    stats: dict[str, int] = {"new_cards": 0, "updated_cards": 0, "new_prints": 0}
 
     try:
         def _do_sync() -> None:
-            from scripts.seed_pg import generate_ability_embeddings, generate_card_embeddings, get_conn, insert_cards
-
-            from .data_loader import download_scryfall_cards
+            from scripts.seed_pg import generate_ability_embeddings, generate_card_embeddings, get_conn, insert_cards_and_prints
 
             conn = get_conn()
             try:
-                _emit_status(status_callback, "正在下载 Scryfall 数据...")
-                raw_cards = download_scryfall_cards()
-                valid_cards = [
-                    c for c in raw_cards
-                    if c.get("layout") not in ("token", "emblem", "art_series")
-                ]
-
                 with conn.cursor() as cur:
                     cur.execute("SELECT COUNT(*) FROM cards")
-                    count_before = cur.fetchone()[0]
+                    cards_before = cur.fetchone()[0]
+                    cur.execute("SELECT COUNT(*) FROM card_prints")
+                    prints_before = cur.fetchone()[0]
                     cur.execute("SELECT COUNT(*) FROM cards WHERE name_embedding IS NULL")
                     stale_before = cur.fetchone()[0]
 
-                _emit_status(status_callback, "正在同步卡牌数据...")
-                insert_cards(conn, valid_cards)
+                _emit_status(status_callback, "正在下载并同步卡牌数据...")
+                insert_cards_and_prints(conn)
 
                 with conn.cursor() as cur:
                     cur.execute("SELECT COUNT(*) FROM cards")
-                    count_after = cur.fetchone()[0]
+                    cards_after = cur.fetchone()[0]
+                    cur.execute("SELECT COUNT(*) FROM card_prints")
+                    prints_after = cur.fetchone()[0]
                     cur.execute("SELECT COUNT(*) FROM cards WHERE name_embedding IS NULL")
                     stale_after = cur.fetchone()[0]
-                    cur.execute("""
-                        UPDATE cards SET is_playtest = TRUE
-                        WHERE is_playtest = FALSE AND data->>'set_type' = 'funny'
-                    """)
                 conn.commit()
 
-                stats["new_cards"] = count_after - count_before
+                stats["new_cards"] = cards_after - cards_before
+                stats["new_prints"] = prints_after - prints_before
                 stats["updated_cards"] = max(0, stale_after - stale_before - stats["new_cards"])
 
-                _emit_status(status_callback, "正在为新/变更卡牌生成 embedding...")
-                generate_card_embeddings(
-                    conn,
-                    on_progress=_make_progress_callback(status_callback, "正在生成 embedding"),
-                )
+                if skip_embeddings:
+                    logger.info("[sync] Skipping embedding generation.")
+                    _emit_status(status_callback, "数据已更新（跳过 embedding）")
+                else:
+                    _emit_status(status_callback, "正在为新/变更卡牌生成 embedding...")
+                    generate_card_embeddings(
+                        conn,
+                        on_progress=_make_progress_callback(status_callback, "正在生成 embedding"),
+                    )
 
-                _emit_status(status_callback, "正在刷新规则 702 关键词...")
-                _refresh_abilities_from_rules(conn, status_callback)
-                _emit_status(status_callback, "正在生成关键词 embedding...")
-                generate_ability_embeddings(conn)
+                    _emit_status(status_callback, "正在刷新规则 702 关键词...")
+                    _refresh_abilities_from_rules(conn, status_callback)
+                    _emit_status(status_callback, "正在生成关键词 embedding...")
+                    generate_ability_embeddings(conn)
             finally:
                 conn.close()
 
@@ -378,10 +374,11 @@ async def incremental_sync(status_callback: StatusCallback = None) -> dict:
 
         new_cards = stats["new_cards"]
         updated_cards = stats["updated_cards"]
-        message = f"新增 {new_cards} 张，更新 {updated_cards} 张" if (new_cards or updated_cards) else "数据已同步（无变更）"
+        new_prints = stats["new_prints"]
+        message = f"新增 {new_cards} 张卡牌，{new_prints} 个版本，更新 {updated_cards} 张" if (new_cards or updated_cards or new_prints) else "数据已同步（无变更）"
         await _update_sync_log(pool, log_id, "done", new_cards, updated_cards, message)
-        logger.info("[sync] Complete. %d new, %d updated.", new_cards, updated_cards)
-        return {"new_cards": new_cards, "updated_cards": updated_cards, "skipped": False}
+        logger.info("[sync] Complete. %d new cards, %d new prints, %d updated.", new_cards, new_prints, updated_cards)
+        return {"new_cards": new_cards, "updated_cards": updated_cards, "new_prints": new_prints, "skipped": False}
 
     except Exception as e:
         logger.exception("[sync] Failed")

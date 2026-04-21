@@ -26,6 +26,8 @@ from .db import (
     create_deck,
     delete_deck,
     get_cards_by_names,
+    get_card_by_oracle_id,
+    get_card_print_by_set_cn,
     get_deck,
     get_deck_card_images,
     get_deck_cards,
@@ -44,10 +46,10 @@ logger = logging.getLogger(__name__)
 deck_router = APIRouter(prefix="/api/decks", tags=["decks"])
 shared_deck_router = APIRouter(prefix="/api/shared/decks", tags=["shared-decks"])
 # Match "<qty> <name>" optionally followed by "(SET) collector_number" and
-# trailing *F*/*E*/etc. markers (Arena/MTGO export format). Printing info is
-# parsed for compatibility but ignored — cards.id is oracle_id, not printing.
+# trailing *F*/*E*/etc. markers (Arena/MTGO export format).
+# Set code and collector_number are captured for printing-specific lookups.
 DECKLIST_ENTRY_RE = re.compile(
-    r"^(\d+)\s+(.+?)(?:\s+\([A-Za-z0-9]{2,6}\)\s+\S+)?(?:\s+\*\w+\*)*\s*$"
+    r"^(\d+)\s+(.+?)(?:\s+\(([A-Za-z0-9]{2,6})\)\s+(\S+))?(?:\s+\*\w+\*)*\s*$"
 )
 
 
@@ -85,15 +87,21 @@ class UpdateDeckRequest(BaseModel):
 class AddCardRequest(BaseModel):
     card_id: str
     quantity: int = 1
+    print_id: str | None = None
     image_url: str | None = None
     display_url: str | None = None
     board: str = "mainboard"
 
 
 class UpdateCardImageRequest(BaseModel):
+    print_id: str | None = None
     image_url: str | None = None
     display_url: str | None = None
     board: str | None = None
+
+
+class ImportDeckRequest(BaseModel):
+    text: str
 
 
 def _require_deck_name(name: str) -> str:
@@ -178,7 +186,7 @@ async def add_card(deck_id: str, req: AddCardRequest, user_id: str = Depends(get
     _require_nonzero_quantity(req.quantity)
     update_image = "image_url" in req.model_fields_set or "display_url" in req.model_fields_set
     return await add_card_to_deck(
-        deck_id, req.card_id, req.quantity, req.image_url, req.display_url, update_image, req.board
+        deck_id, req.card_id, req.quantity, req.image_url, req.display_url, update_image, req.board, req.print_id
     )
 
 
@@ -194,7 +202,7 @@ async def update_card_image(
     Passing null values resets the override to the default card image.
     """
     await _verify_deck_ownership(deck_id, user_id)
-    updated = await update_deck_card_image(deck_id, card_id, req.image_url, req.display_url, req.board)
+    updated = await update_deck_card_image(deck_id, card_id, req.image_url, req.display_url, req.board, req.print_id)
     if not updated:
         raise HTTPException(status_code=404, detail="Card not in deck")
     return updated
@@ -213,8 +221,20 @@ async def remove_card(
 # ── Deck Import / Export (text) ────────────────────────────────────────
 
 
-def _parse_decklist(text: str) -> list[tuple[int, str, str]]:
-    """Parse a decklist text into [(quantity, card_name, board), ...].
+def _extract_front_face_name(name: str) -> str:
+    """Extract front face name for double-faced cards.
+
+    Handles both 'Name A / Name B' and 'Name A // Name B' formats.
+    """
+    name = name.strip()
+    for sep in [" // ", " / "]:
+        if sep in name:
+            return name.split(sep)[0].strip()
+    return name
+
+
+def _parse_decklist(text: str) -> list[tuple[int, str, str, str | None, str | None]]:
+    """Parse a decklist text into [(quantity, card_name, board, set_code, collector_number), ...].
 
     Accepted line formats:
     - '<qty> <name> (<SET>) <collector_number> [*F*|*E*|...]' — Arena/MTGO
@@ -227,8 +247,13 @@ def _parse_decklist(text: str) -> list[tuple[int, str, str]]:
     - Cards default to 'mainboard'.
     - A line containing 'SIDEBOARD' (case-insensitive) switches to 'sideboard'.
     - An empty line after sideboard cards switches back to 'mainboard'.
+
+    Double-faced cards:
+    - 'Name A / Name B' or 'Name A // Name B' → use 'Name A' for lookup
+
+    Set code and collector number are captured for printing-specific lookups.
     """
-    entries: list[tuple[int, str, str]] = []
+    entries: list[tuple[int, str, str, str | None, str | None]] = []
     board = "mainboard"
     has_sideboard_cards = False
     for raw_line in text.splitlines():
@@ -245,9 +270,12 @@ def _parse_decklist(text: str) -> list[tuple[int, str, str]]:
             continue
         m = DECKLIST_ENTRY_RE.match(line)
         if m:
-            entries.append((int(m.group(1)), m.group(2).strip(), board))
+            name = _extract_front_face_name(m.group(2))
+            set_code = m.group(3)  # None if not specified
+            collector_num = m.group(4)  # None if not specified
+            entries.append((int(m.group(1)), name, board, set_code, collector_num))
         else:
-            entries.append((1, line, board))
+            entries.append((1, _extract_front_face_name(line), board, None, None))
         if board == "sideboard":
             has_sideboard_cards = True
     return entries
@@ -297,28 +325,63 @@ async def analyze_deck_endpoint(deck_id: str, user_id: str = Depends(get_current
     return await update_deck_analysis(deck_id, analysis)
 
 
-class ImportDeckRequest(BaseModel):
-    text: str
-
-
 @deck_router.post("/{deck_id}/import")
 async def import_deck(deck_id: str, req: ImportDeckRequest, user_id: str = Depends(get_current_user)):
+    """Import cards from decklist text using local database only.
+
+    All lookups are done against the local cards and card_prints tables,
+    including flavor_name aliases and set-specific print versions.
+    No Scryfall API calls are made, avoiding rate limit issues.
+    """
     await _verify_deck_ownership(deck_id, user_id)
 
     entries = _parse_decklist(req.text)
     if not entries:
         raise HTTPException(status_code=400, detail="No cards found in text")
 
-    unique_names = list({name for _, name, _ in entries})
+    unique_names = list({name for _, name, _, _, _ in entries})
     name_to_id = await get_cards_by_names(unique_names)
 
     added = []
     not_found = []
-    for qty, name, board in entries:
+
+    for qty, name, board, set_code, collector_num in entries:
         card_id = name_to_id.get(name.lower())
+        image_url = None
+        display_url = None
+        print_id = None
+        resolved_name = None
+
+        # If card found and has set code, try to get specific print
+        if card_id and set_code:
+            print_info = await get_card_print_by_set_cn(card_id, set_code, collector_num or "")
+            if print_info:
+                print_id = print_info["id"]
+                image_url = print_info.get("image_large") or print_info.get("image_png")
+                display_url = print_info.get("image_art_crop")
+
+        # If card not found by name, try direct oracle_id lookup
+        # (handles cases where name_to_id might miss flavor names)
+        if not card_id:
+            # Try to get card by oracle_id directly (in case user provided oracle_id as name)
+            card_info = await get_card_by_oracle_id(name)
+            if card_info:
+                card_id = card_info["id"]
+                resolved_name = card_info["name"]
+
         if card_id:
-            await add_card_to_deck(deck_id, card_id, qty, board=board)
-            added.append({"name": name, "quantity": qty, "board": board})
+            await add_card_to_deck(
+                deck_id, card_id, qty,
+                image_url=image_url, display_url=display_url,
+                update_image=bool(image_url), board=board,
+                print_id=print_id,
+            )
+            result = {"name": resolved_name or name, "quantity": qty, "board": board}
+            if set_code:
+                result["set"] = set_code
+            if resolved_name and resolved_name.lower() != name.lower():
+                result["resolved_from"] = name
+            added.append(result)
         else:
             not_found.append(name)
 

@@ -58,6 +58,27 @@ def _decode_card_data(value):
     return json.loads(value) if isinstance(value, str) else value
 
 
+def _image_uris_from_row(row) -> dict | None:
+    if not row["image_normal"]:
+        return None
+    return {
+        "small": row["image_small"],
+        "normal": row["image_normal"],
+        "large": row["image_large"],
+        "png": row["image_png"],
+        "art_crop": row["image_art_crop"],
+        "border_crop": row["image_border_crop"],
+    }
+
+
+def _card_faces_from_row(row) -> list[dict] | None:
+    if "print_card_faces" in row.keys() and row["print_card_faces"]:
+        return _decode_card_data(row["print_card_faces"])
+    if "card_faces" in row.keys() and row["card_faces"]:
+        return _decode_card_data(row["card_faces"])
+    return None
+
+
 def _serialize_user_row(row) -> dict:
     result = {
         "id": str(row["id"]),
@@ -160,8 +181,9 @@ async def filter_cards(filters: dict) -> list[str]:
                 clauses.append(f"CAST(NULLIF({col}, '*') AS real) {op} ${idx}::real")
                 params.append(float(val))
             elif key == "released_at":
+                # released_at is in card_prints table
+                clauses.append(f"EXISTS (SELECT 1 FROM card_prints cp WHERE cp.card_id = cards.id AND cp.released_at {op} ${idx}::date)")
                 from datetime import date as date_type
-                clauses.append(f"{col} {op} ${idx}::date")
                 params.append(date_type.fromisoformat(val))
             elif key == "mana_cost":
                 clauses.append(f"{col} {op} ${idx}")
@@ -171,7 +193,6 @@ async def filter_cards(filters: dict) -> list[str]:
     if not clauses:
         return []
 
-    clauses.append("NOT is_playtest")
     where = " AND ".join(clauses)
     query = f"SELECT id FROM cards WHERE {where}"
     logger.info("filter_cards SQL: %s params: %s", query, params)
@@ -196,7 +217,7 @@ async def vector_search_cards(
         query = f"""
             SELECT id, {column} <=> $1::halfvec AS distance
             FROM cards
-            WHERE id = ANY($2) AND {column} IS NOT NULL AND NOT is_playtest
+            WHERE id = ANY($2) AND {column} IS NOT NULL
             ORDER BY distance
             LIMIT $3
         """
@@ -205,7 +226,7 @@ async def vector_search_cards(
         query = f"""
             SELECT id, {column} <=> $1::halfvec AS distance
             FROM cards
-            WHERE {column} IS NOT NULL AND NOT is_playtest
+            WHERE {column} IS NOT NULL
             ORDER BY distance
             LIMIT $2
         """
@@ -248,11 +269,62 @@ async def get_cards_by_ids(card_ids: list[str]) -> list[dict]:
         return []
 
     pool = await get_pool()
-    rows = await pool.fetch("SELECT id, data FROM cards WHERE id = ANY($1)", card_ids)
+    rows = await pool.fetch(
+        """SELECT c.id, c.name, c.mana_cost, c.cmc, c.type_line, c.oracle_text,
+                  c.power, c.toughness, c.colors, c.color_identity, c.keywords,
+                  c.legalities, c.layout, c.card_faces,
+                  dp.image_small, dp.image_normal, dp.image_large, dp.image_png,
+                  dp.image_art_crop, dp.image_border_crop, dp.rarity, dp.set_code, dp.set_name,
+                  dp.flavor_text, dp.artist, dp.card_faces AS print_card_faces
+           FROM cards c
+           LEFT JOIN LATERAL (
+               SELECT image_small, image_normal, image_large, image_png,
+                      image_art_crop, image_border_crop, rarity, set_code, set_name,
+                      flavor_text, artist, card_faces
+               FROM card_prints
+               WHERE card_id = c.id
+               ORDER BY released_at DESC NULLS LAST
+               LIMIT 1
+           ) dp ON TRUE
+           WHERE c.id = ANY($1)""",
+        card_ids,
+    )
 
-    card_map = {row["id"]: _decode_card_data(row["data"]) for row in rows}
+    card_map = {}
+    for row in rows:
+        card_map[row["id"]] = {
+            "id": row["id"],
+            "name": row["name"],
+            "mana_cost": row["mana_cost"],
+            "cmc": row["cmc"],
+            "type_line": row["type_line"],
+            "oracle_text": row["oracle_text"],
+            "power": row["power"],
+            "toughness": row["toughness"],
+            "colors": row["colors"] or [],
+            "color_identity": row["color_identity"] or [],
+            "keywords": row["keywords"] or [],
+            "legalities": json.loads(row["legalities"]) if isinstance(row["legalities"], str) else row["legalities"],
+            "layout": row["layout"],
+            "card_faces": _card_faces_from_row(row),
+            "image_uris": _image_uris_from_row(row),
+            "rarity": row["rarity"],
+            "set": row["set_code"],
+            "set_name": row["set_name"],
+            "flavor_text": row["flavor_text"],
+            "artist": row["artist"],
+        }
 
     return [card_map[cid] for cid in card_ids if cid in card_map]
+
+
+async def get_cards_by_oracle_ids(oracle_ids: list[str]) -> dict[str, str]:
+    """Look up multiple cards by oracle_ids. Returns {oracle_id: card_id}."""
+    if not oracle_ids:
+        return {}
+    pool = await get_pool()
+    rows = await pool.fetch("SELECT id FROM cards WHERE id = ANY($1)", oracle_ids)
+    return {row["id"]: row["id"] for row in rows}
 
 
 async def get_all_keywords() -> list[str]:
@@ -266,26 +338,62 @@ async def text_match_cards(query: str, limit: int = 20) -> list[dict]:
     """Search cards by whole-word match on name, oracle_text, or type_line.
 
     Returns full card data for matches, deduplicated by name (keeps the
-    newest printing), prioritising name matches first.
+    newest printing via latest released_at from card_prints), prioritising
+    name matches first.
     """
     pool = await get_pool()
     escaped = re.sub(r'([\\.*+?^${}()|[\]])', r'\\\1', query)
     pattern = r'\m' + escaped + r'\M'
     rows = await pool.fetch(
-        """SELECT data FROM (
-             SELECT DISTINCT ON (name) data,
-                    CASE WHEN name ~* $1 THEN 0 ELSE 1 END AS sort_key
-             FROM cards
-             WHERE name ~* $1
-                OR data->>'oracle_text' ~* $1
-                OR data->>'type_line' ~* $1
-             ORDER BY name, data->>'released_at' DESC
-           ) sub
-           ORDER BY sort_key, sub.data->>'name'
+        """SELECT c.id, c.name, c.mana_cost, c.cmc, c.type_line, c.oracle_text,
+                  c.power, c.toughness, c.colors, c.color_identity, c.keywords,
+                  c.legalities, c.layout, c.card_faces,
+                  CASE WHEN c.name ~* $1 THEN 0 ELSE 1 END AS sort_key,
+                  dp.image_small, dp.image_normal, dp.image_large, dp.image_png,
+                  dp.image_art_crop, dp.image_border_crop, dp.rarity, dp.set_code, dp.set_name,
+                  dp.flavor_text, dp.artist, dp.card_faces AS print_card_faces
+           FROM cards c
+           LEFT JOIN LATERAL (
+               SELECT image_small, image_normal, image_large, image_png,
+                      image_art_crop, image_border_crop, rarity, set_code, set_name,
+                      flavor_text, artist, card_faces
+               FROM card_prints
+               WHERE card_id = c.id
+               ORDER BY released_at DESC NULLS LAST
+               LIMIT 1
+           ) dp ON TRUE
+           WHERE c.name ~* $1
+              OR c.oracle_text ~* $1
+              OR c.type_line ~* $1
+           ORDER BY sort_key, c.name
            LIMIT $2""",
         pattern, limit,
     )
-    return [_decode_card_data(row["data"]) for row in rows]
+    return [
+        {
+            "id": r["id"],
+            "name": r["name"],
+            "mana_cost": r["mana_cost"],
+            "cmc": r["cmc"],
+            "type_line": r["type_line"],
+            "oracle_text": r["oracle_text"],
+            "power": r["power"],
+            "toughness": r["toughness"],
+            "colors": r["colors"] or [],
+            "color_identity": r["color_identity"] or [],
+            "keywords": r["keywords"] or [],
+            "legalities": json.loads(r["legalities"]) if isinstance(r["legalities"], str) else r["legalities"],
+            "layout": r["layout"],
+            "card_faces": _card_faces_from_row(r),
+            "image_uris": _image_uris_from_row(r),
+            "rarity": r["rarity"],
+            "set": r["set_code"],
+            "set_name": r["set_name"],
+            "flavor_text": r["flavor_text"],
+            "artist": r["artist"],
+        }
+        for r in rows
+    ]
 
 
 # ── User functions ──────────────────────────────────────────────────────
@@ -410,12 +518,6 @@ async def get_user_by_id(user_id: str) -> dict | None:
     if not row:
         return None
     return _serialize_user_row(row)
-
-
-async def list_all_users() -> list[dict]:
-    pool = await get_pool()
-    rows = await pool.fetch("SELECT id, username, role, email, email_verified, created_at, last_active_at FROM users ORDER BY created_at")
-    return [_serialize_user_row(row) for row in rows]
 
 
 async def search_users(
@@ -588,9 +690,29 @@ async def delete_deck(deck_id: str):
 async def get_deck_cards(deck_id: str) -> list[dict]:
     pool = await get_pool()
     rows = await pool.fetch(
-        """SELECT dc.card_id, dc.quantity, dc.added_at, dc.image_url, dc.display_url, dc.board, c.data
+        """SELECT dc.card_id, dc.print_id, dc.quantity, dc.added_at, dc.image_url, dc.display_url, dc.board,
+                  c.name, c.mana_cost, c.cmc, c.type_line, c.oracle_text,
+                  c.power, c.toughness, c.colors, c.color_identity, c.keywords,
+                  c.legalities, c.layout, c.card_faces,
+                  COALESCE(cp.image_small, dp.image_small) AS image_small,
+                  COALESCE(cp.image_normal, dp.image_normal) AS image_normal,
+                  COALESCE(cp.image_large, dp.image_large) AS image_large,
+                  COALESCE(cp.image_png, dp.image_png) AS image_png,
+                  COALESCE(cp.image_art_crop, dp.image_art_crop) AS image_art_crop,
+                  COALESCE(cp.image_border_crop, dp.image_border_crop) AS image_border_crop,
+                  COALESCE(cp.card_faces, dp.card_faces) AS print_card_faces
            FROM deck_cards dc
            JOIN cards c ON c.id = dc.card_id
+           -- Get specific print if print_id is set
+           LEFT JOIN card_prints cp ON cp.id = dc.print_id
+           -- Get default (first) print if no print_id
+           LEFT JOIN LATERAL (
+               SELECT image_small, image_normal, image_large, image_png, image_art_crop, image_border_crop, card_faces
+               FROM card_prints
+               WHERE card_id = dc.card_id
+               ORDER BY released_at DESC NULLS LAST
+               LIMIT 1
+           ) dp ON dc.print_id IS NULL
            WHERE dc.deck_id = $1::uuid
            ORDER BY dc.added_at DESC""",
         deck_id,
@@ -598,7 +720,24 @@ async def get_deck_cards(deck_id: str) -> list[dict]:
     return [
         {
             "card_id": r["card_id"],
-            "card": _decode_card_data(r["data"]),
+            "print_id": r["print_id"],
+            "card": {
+                "id": r["card_id"],
+                "name": r["name"],
+                "mana_cost": r["mana_cost"],
+                "cmc": r["cmc"],
+                "type_line": r["type_line"],
+                "oracle_text": r["oracle_text"],
+                "power": r["power"],
+                "toughness": r["toughness"],
+                "colors": r["colors"] or [],
+                "color_identity": r["color_identity"] or [],
+                "keywords": r["keywords"] or [],
+                "legalities": json.loads(r["legalities"]) if isinstance(r["legalities"], str) else r["legalities"],
+                "layout": r["layout"],
+                "card_faces": _card_faces_from_row(r),
+                "image_uris": _image_uris_from_row(r),
+            },
             "quantity": r["quantity"],
             "image_url": r["image_url"],
             "display_url": r["display_url"],
@@ -613,29 +752,32 @@ async def add_card_to_deck(
     deck_id: str, card_id: str, quantity: int = 1,
     image_url: str | None = None, display_url: str | None = None,
     update_image: bool = False, board: str = "mainboard",
+    print_id: str | None = None,
 ) -> dict:
     pool = await get_pool()
     if update_image:
         row = await pool.fetchrow(
-            """INSERT INTO deck_cards (deck_id, card_id, quantity, image_url, display_url, board)
-               VALUES ($1::uuid, $2, $3, $4, $5, $6)
+            """INSERT INTO deck_cards (deck_id, card_id, quantity, image_url, display_url, board, print_id)
+               VALUES ($1::uuid, $2, $3, $4, $5, $6, $7)
                ON CONFLICT (deck_id, card_id, board)
                DO UPDATE SET quantity = deck_cards.quantity + EXCLUDED.quantity,
                              image_url = $4,
-                             display_url = $5
+                             display_url = $5,
+                             print_id = COALESCE($7, deck_cards.print_id)
                RETURNING card_id, quantity, board""",
-            deck_id, card_id, quantity, image_url, display_url, board,
+            deck_id, card_id, quantity, image_url, display_url, board, print_id,
         )
     else:
         row = await pool.fetchrow(
-            """INSERT INTO deck_cards (deck_id, card_id, quantity, image_url, display_url, board)
-               VALUES ($1::uuid, $2, $3, $4, $5, $6)
+            """INSERT INTO deck_cards (deck_id, card_id, quantity, image_url, display_url, board, print_id)
+               VALUES ($1::uuid, $2, $3, $4, $5, $6, $7)
                ON CONFLICT (deck_id, card_id, board)
                DO UPDATE SET quantity = deck_cards.quantity + EXCLUDED.quantity,
                              image_url = COALESCE(EXCLUDED.image_url, deck_cards.image_url),
-                             display_url = COALESCE(EXCLUDED.display_url, deck_cards.display_url)
+                             display_url = COALESCE(EXCLUDED.display_url, deck_cards.display_url),
+                             print_id = COALESCE($7, deck_cards.print_id)
                RETURNING card_id, quantity, board""",
-            deck_id, card_id, quantity, image_url, display_url, board,
+            deck_id, card_id, quantity, image_url, display_url, board, print_id,
         )
     return {"card_id": row["card_id"], "quantity": row["quantity"], "board": row["board"]}
 
@@ -660,6 +802,7 @@ async def update_deck_card_image(
     image_url: str | None,
     display_url: str | None,
     board: str | None = None,
+    print_id: str | None = None,
 ) -> dict | None:
     """Update the image override for a deck card without touching quantity.
 
@@ -670,18 +813,18 @@ async def update_deck_card_image(
     if board:
         row = await pool.fetchrow(
             """UPDATE deck_cards
-               SET image_url = $3, display_url = $4
+               SET image_url = $3, display_url = $4, print_id = $6
                WHERE deck_id = $1::uuid AND card_id = $2 AND board = $5
-               RETURNING card_id, quantity, image_url, display_url, board""",
-            deck_id, card_id, image_url, display_url, board,
+               RETURNING card_id, quantity, image_url, display_url, board, print_id""",
+            deck_id, card_id, image_url, display_url, board, print_id,
         )
     else:
         row = await pool.fetchrow(
             """UPDATE deck_cards
-               SET image_url = $3, display_url = $4
+               SET image_url = $3, display_url = $4, print_id = $5
                WHERE deck_id = $1::uuid AND card_id = $2
-               RETURNING card_id, quantity, image_url, display_url, board""",
-            deck_id, card_id, image_url, display_url,
+               RETURNING card_id, quantity, image_url, display_url, board, print_id""",
+            deck_id, card_id, image_url, display_url, print_id,
         )
     if not row:
         return None
@@ -690,6 +833,7 @@ async def update_deck_card_image(
         "quantity": row["quantity"],
         "image_url": row["image_url"],
         "display_url": row["display_url"],
+        "print_id": row["print_id"],
         "board": row["board"],
     }
 
@@ -698,11 +842,14 @@ async def get_cards_by_names(names: list[str]) -> dict[str, str]:
     """Look up card IDs by exact name (case-insensitive). Returns {name_lower: card_id}.
 
     Also matches double-faced cards by front face name (before ' // ').
+    Also matches flavor_name from card_prints table.
     """
     if not names:
         return {}
     pool = await get_pool()
     lowered = [n.lower() for n in names]
+
+    # Query cards table for name matches
     rows = await pool.fetch(
         """SELECT id, name FROM cards
            WHERE LOWER(name) = ANY($1)
@@ -713,11 +860,23 @@ async def get_cards_by_names(names: list[str]) -> dict[str, str]:
     for row in rows:
         full = row["name"].lower()
         front = full.split(" // ")[0]
-        # Map both full name and front face name to the card id
         if full not in result:
             result[full] = row["id"]
         if front not in result:
             result[front] = row["id"]
+
+    # Query card_prints for flavor_name matches
+    flavor_rows = await pool.fetch(
+        """SELECT DISTINCT card_id, flavor_name FROM card_prints
+           WHERE flavor_name IS NOT NULL
+             AND LOWER(flavor_name) = ANY($1)""",
+        lowered,
+    )
+    for row in flavor_rows:
+        flavor = row["flavor_name"].lower()
+        if flavor not in result:
+            result[flavor] = row["card_id"]
+
     return result
 
 
@@ -729,10 +888,10 @@ async def get_deck_cards_for_analysis(deck_id: str) -> list[dict]:
     """
     pool = await get_pool()
     rows = await pool.fetch(
-        """SELECT split_part(c.name, ' // ', 1)               AS name,
-                  COALESCE(c.data->>'type_line', '')          AS type_line,
-                  COALESCE(c.data->>'mana_cost', '')          AS mana_cost,
-                  COALESCE(c.data->>'oracle_text', '')        AS oracle_text,
+        """SELECT split_part(c.name, ' // ', 1) AS name,
+                  COALESCE(c.type_line, '') AS type_line,
+                  COALESCE(c.mana_cost, '') AS mana_cost,
+                  COALESCE(c.oracle_text, '') AS oracle_text,
                   dc.quantity,
                   dc.board
            FROM deck_cards dc
@@ -808,10 +967,6 @@ async def discover_cards(
     params: list = []
     idx = 1
 
-    # Exclude playtest cards by default
-    if not include_playtest:
-        clauses.append("NOT is_playtest")
-
     # Keyword search — each space-separated token must appear somewhere
     if q.strip():
         for token in q.strip().split():
@@ -841,16 +996,13 @@ async def discover_cards(
             params.append(f"%{st}%")
             idx += 1
 
-    # Rarity filter
+    # Rarity filter (from card_prints via join)
     if rarities:
-        clauses.append(f"data->>'rarity' = ANY(${idx}::text[])")
+        clauses.append(f"cp.rarity = ANY(${idx}::text[])")
         params.append(rarities)
         idx += 1
 
     # Keyword abilities filter — card must have all selected keywords
-    # Use case-insensitive matching because keyword_abilities names (from
-    # rules text, e.g. "Double Strike") may differ in casing from Scryfall
-    # card data (e.g. "Double strike").
     if keywords:
         for kw in keywords:
             clauses.append(f"EXISTS (SELECT 1 FROM unnest(keywords) AS k WHERE k ILIKE ${idx})")
@@ -890,41 +1042,129 @@ async def discover_cards(
     where = " AND ".join(clauses) if clauses else "TRUE"
 
     # ── Total count (deduplicated by name) ──
-    total = await pool.fetchval(
-        f"SELECT COUNT(*) FROM (SELECT DISTINCT ON (name) id FROM cards WHERE {where} ORDER BY name, data->>'released_at' DESC) sub",
-        *params,
-    )
+    need_rarity_join = rarities is not None
+    if need_rarity_join:
+        total = await pool.fetchval(
+            f"SELECT COUNT(*) FROM (SELECT DISTINCT ON (c.name) c.id FROM cards c LEFT JOIN card_prints cp ON cp.card_id = c.id WHERE {where} ORDER BY c.name) sub",
+            *params,
+        )
+    else:
+        total = await pool.fetchval(
+            f"SELECT COUNT(*) FROM (SELECT DISTINCT ON (name) id FROM cards WHERE {where} ORDER BY name) sub",
+            *params,
+        )
 
-    # ── Paginated results (deduplicated by name, newest printing) ──
+    # ── Paginated results (deduplicated by name) ──
     offset = (page - 1) * page_size
     limit_idx = idx
     offset_idx = idx + 1
-    rows = await pool.fetch(
-        f"""SELECT data FROM (
-              SELECT DISTINCT ON (name) data
-              FROM cards WHERE {where}
-              ORDER BY name, data->>'released_at' DESC
-            ) sub
-            ORDER BY sub.data->>'name'
-            LIMIT ${limit_idx} OFFSET ${offset_idx}""",
-        *params, page_size, offset,
-    )
-    cards = [_decode_card_data(row["data"]) for row in rows]
+    if need_rarity_join:
+        rows = await pool.fetch(
+            f"""SELECT c.id, c.name, c.mana_cost, c.cmc, c.type_line, c.oracle_text,
+                       c.power, c.toughness, c.colors, c.color_identity, c.keywords,
+                       c.legalities, c.layout, c.card_faces,
+                       dp.image_small, dp.image_normal, dp.image_large, dp.image_png,
+                       dp.image_art_crop, dp.image_border_crop, dp.rarity, dp.set_code, dp.set_name,
+                       dp.flavor_text, dp.artist, dp.card_faces AS print_card_faces
+                FROM (
+                  SELECT DISTINCT ON (c.name) c.id, c.name
+                  FROM cards c LEFT JOIN card_prints cp ON cp.card_id = c.id
+                  WHERE {where}
+                  ORDER BY c.name
+                ) sub
+                JOIN cards c ON c.id = sub.id
+                LEFT JOIN LATERAL (
+                    SELECT image_small, image_normal, image_large, image_png,
+                           image_art_crop, image_border_crop, rarity, set_code, set_name,
+                           flavor_text, artist, card_faces
+                    FROM card_prints
+                    WHERE card_id = c.id
+                    ORDER BY released_at DESC NULLS LAST
+                    LIMIT 1
+                ) dp ON TRUE
+                ORDER BY c.name
+                LIMIT ${limit_idx} OFFSET ${offset_idx}""",
+            *params, page_size, offset,
+        )
+    else:
+        rows = await pool.fetch(
+            f"""SELECT c.id, c.name, c.mana_cost, c.cmc, c.type_line, c.oracle_text,
+                       c.power, c.toughness, c.colors, c.color_identity, c.keywords,
+                       c.legalities, c.layout, c.card_faces,
+                       dp.image_small, dp.image_normal, dp.image_large, dp.image_png,
+                       dp.image_art_crop, dp.image_border_crop, dp.rarity, dp.set_code, dp.set_name,
+                       dp.flavor_text, dp.artist, dp.card_faces AS print_card_faces
+                FROM (
+                  SELECT DISTINCT ON (name) id, name
+                  FROM cards WHERE {where}
+                  ORDER BY name
+                ) sub
+                JOIN cards c ON c.id = sub.id
+                LEFT JOIN LATERAL (
+                    SELECT image_small, image_normal, image_large, image_png,
+                           image_art_crop, image_border_crop, rarity, set_code, set_name,
+                           flavor_text, artist, card_faces
+                    FROM card_prints
+                    WHERE card_id = c.id
+                    ORDER BY released_at DESC NULLS LAST
+                    LIMIT 1
+                ) dp ON TRUE
+                ORDER BY c.name
+                LIMIT ${limit_idx} OFFSET ${offset_idx}""",
+            *params, page_size, offset,
+        )
+    cards = [
+        {
+            "id": r["id"],
+            "name": r["name"],
+            "mana_cost": r["mana_cost"],
+            "cmc": r["cmc"],
+            "type_line": r["type_line"],
+            "oracle_text": r["oracle_text"],
+            "power": r["power"],
+            "toughness": r["toughness"],
+            "colors": r["colors"] or [],
+            "color_identity": r["color_identity"] or [],
+            "keywords": r["keywords"] or [],
+            "legalities": json.loads(r["legalities"]) if isinstance(r["legalities"], str) else r["legalities"],
+            "layout": r["layout"],
+            "card_faces": _card_faces_from_row(r),
+            "image_uris": _image_uris_from_row(r),
+            "rarity": r["rarity"],
+            "set": r["set_code"],
+            "set_name": r["set_name"],
+            "flavor_text": r["flavor_text"],
+            "artist": r["artist"],
+        }
+        for r in rows
+    ]
 
     # ── Facet counts (computed from the fully-filtered set) ──
 
     # Colors
-    color_rows = await pool.fetch(
-        f"SELECT c AS val, COUNT(*) AS cnt FROM cards, unnest(colors) AS c WHERE {where} GROUP BY c ORDER BY cnt DESC",
-        *params,
-    )
+    if need_rarity_join:
+        color_rows = await pool.fetch(
+            f"SELECT c AS val, COUNT(*) AS cnt FROM cards c LEFT JOIN card_prints cp ON cp.card_id = c.id, unnest(colors) AS c WHERE {where} GROUP BY c ORDER BY cnt DESC",
+            *params,
+        )
+    else:
+        color_rows = await pool.fetch(
+            f"SELECT c AS val, COUNT(*) AS cnt FROM cards, unnest(colors) AS c WHERE {where} GROUP BY c ORDER BY cnt DESC",
+            *params,
+        )
     color_facets = {r["val"]: int(r["cnt"]) for r in color_rows}
 
-    # Rarity
-    rarity_rows = await pool.fetch(
-        f"SELECT data->>'rarity' AS val, COUNT(*) AS cnt FROM cards WHERE {where} AND data->>'rarity' IS NOT NULL GROUP BY val ORDER BY cnt DESC",
-        *params,
-    )
+    # Rarity (from card_prints)
+    if need_rarity_join:
+        rarity_rows = await pool.fetch(
+            f"SELECT cp.rarity AS val, COUNT(*) AS cnt FROM cards c LEFT JOIN card_prints cp ON cp.card_id = c.id WHERE {where} AND cp.rarity IS NOT NULL GROUP BY val ORDER BY cnt DESC",
+            *params,
+        )
+    else:
+        rarity_rows = await pool.fetch(
+            f"SELECT cp.rarity AS val, COUNT(*) AS cnt FROM cards c LEFT JOIN card_prints cp ON cp.card_id = c.id WHERE {where} AND cp.rarity IS NOT NULL GROUP BY val ORDER BY cnt DESC",
+            *params,
+        )
     rarity_facets = {r["val"]: int(r["cnt"]) for r in rarity_rows}
 
     # Types — count each main type via FILTER
@@ -932,47 +1172,85 @@ async def discover_cards(
         f"COUNT(*) FILTER (WHERE type_line ILIKE '%%{t}%%') AS \"{t}\""
         for t in _MAIN_TYPES
     )
-    type_row = await pool.fetchrow(
-        f"SELECT {type_cases} FROM cards WHERE {where}",
-        *params,
-    )
+    if need_rarity_join:
+        type_row = await pool.fetchrow(
+            f"SELECT {type_cases} FROM cards c LEFT JOIN card_prints cp ON cp.card_id = c.id WHERE {where}",
+            *params,
+        )
+    else:
+        type_row = await pool.fetchrow(
+            f"SELECT {type_cases} FROM cards WHERE {where}",
+            *params,
+        )
     type_facets = {t: int(type_row[t]) for t in _MAIN_TYPES if type_row[t]}
 
     # Keywords (top 30)
-    kw_rows = await pool.fetch(
-        f"SELECT k AS val, COUNT(*) AS cnt FROM cards, unnest(keywords) AS k WHERE {where} GROUP BY k ORDER BY cnt DESC LIMIT 30",
-        *params,
-    )
+    if need_rarity_join:
+        kw_rows = await pool.fetch(
+            f"SELECT k AS val, COUNT(*) AS cnt FROM cards c LEFT JOIN card_prints cp ON cp.card_id = c.id, unnest(keywords) AS k WHERE {where} GROUP BY k ORDER BY cnt DESC LIMIT 30",
+            *params,
+        )
+    else:
+        kw_rows = await pool.fetch(
+            f"SELECT k AS val, COUNT(*) AS cnt FROM cards, unnest(keywords) AS k WHERE {where} GROUP BY k ORDER BY cnt DESC LIMIT 30",
+            *params,
+        )
     keyword_facets = [{"name": r["val"], "count": int(r["cnt"])} for r in kw_rows]
 
     # Subtypes — extract words after the em dash (top 40)
-    subtype_rows = await pool.fetch(
-        f"""SELECT s AS val, COUNT(*) AS cnt
-            FROM (
-                SELECT unnest(string_to_array(
-                    trim(split_part(type_line, '\u2014', 2)), ' '
-                )) AS s
-                FROM cards
-                WHERE {where} AND type_line LIKE '%%\u2014%%'
-            ) sub
-            WHERE s != ''
-            GROUP BY s ORDER BY cnt DESC LIMIT 40""",
-        *params,
-    )
+    if need_rarity_join:
+        subtype_rows = await pool.fetch(
+            f"""SELECT s AS val, COUNT(*) AS cnt
+                FROM (
+                    SELECT unnest(string_to_array(
+                        trim(split_part(type_line, '\u2014', 2)), ' '
+                    )) AS s
+                    FROM cards c LEFT JOIN card_prints cp ON cp.card_id = c.id
+                    WHERE {where} AND type_line LIKE '%%\u2014%%'
+                ) sub
+                WHERE s != ''
+                GROUP BY s ORDER BY cnt DESC LIMIT 40""",
+            *params,
+        )
+    else:
+        subtype_rows = await pool.fetch(
+            f"""SELECT s AS val, COUNT(*) AS cnt
+                FROM (
+                    SELECT unnest(string_to_array(
+                        trim(split_part(type_line, '\u2014', 2)), ' '
+                    )) AS s
+                    FROM cards
+                    WHERE {where} AND type_line LIKE '%%\u2014%%'
+                ) sub
+                WHERE s != ''
+                GROUP BY s ORDER BY cnt DESC LIMIT 40""",
+            *params,
+        )
     subtype_facets = [{"name": r["val"], "count": int(r["cnt"])} for r in subtype_rows]
 
     # CMC / power / toughness ranges
-    # Use regex to only cast values that are pure numbers (int or decimal)
-    range_row = await pool.fetchrow(
-        f"""SELECT
-                MIN(cmc) AS cmc_min, MAX(cmc) AS cmc_max,
-                MIN(CAST(power AS real)) FILTER (WHERE power ~ '^[0-9]+\\.?[0-9]*$') AS power_min,
-                MAX(CAST(power AS real)) FILTER (WHERE power ~ '^[0-9]+\\.?[0-9]*$') AS power_max,
-                MIN(CAST(toughness AS real)) FILTER (WHERE toughness ~ '^[0-9]+\\.?[0-9]*$') AS toughness_min,
-                MAX(CAST(toughness AS real)) FILTER (WHERE toughness ~ '^[0-9]+\\.?[0-9]*$') AS toughness_max
-            FROM cards WHERE {where}""",
-        *params,
-    )
+    if need_rarity_join:
+        range_row = await pool.fetchrow(
+            f"""SELECT
+                    MIN(cmc) AS cmc_min, MAX(cmc) AS cmc_max,
+                    MIN(CAST(power AS real)) FILTER (WHERE power ~ '^[0-9]+\\.?[0-9]*$') AS power_min,
+                    MAX(CAST(power AS real)) FILTER (WHERE power ~ '^[0-9]+\\.?[0-9]*$') AS power_max,
+                    MIN(CAST(toughness AS real)) FILTER (WHERE toughness ~ '^[0-9]+\\.?[0-9]*$') AS toughness_min,
+                    MAX(CAST(toughness AS real)) FILTER (WHERE toughness ~ '^[0-9]+\\.?[0-9]*$') AS toughness_max
+                FROM cards c LEFT JOIN card_prints cp ON cp.card_id = c.id WHERE {where}""",
+            *params,
+        )
+    else:
+        range_row = await pool.fetchrow(
+            f"""SELECT
+                    MIN(cmc) AS cmc_min, MAX(cmc) AS cmc_max,
+                    MIN(CAST(power AS real)) FILTER (WHERE power ~ '^[0-9]+\\.?[0-9]*$') AS power_min,
+                    MAX(CAST(power AS real)) FILTER (WHERE power ~ '^[0-9]+\\.?[0-9]*$') AS power_max,
+                    MIN(CAST(toughness AS real)) FILTER (WHERE toughness ~ '^[0-9]+\\.?[0-9]*$') AS toughness_min,
+                    MAX(CAST(toughness AS real)) FILTER (WHERE toughness ~ '^[0-9]+\\.?[0-9]*$') AS toughness_max
+                FROM cards WHERE {where}""",
+            *params,
+        )
 
     return {
         "results": cards,
@@ -1014,52 +1292,6 @@ async def log_search(user_id: str | None, query: str, tokens_prompt: int, tokens
     )
 
 
-async def get_user_search_stats() -> list[dict]:
-    """Get per-user search counts and token usage for total, 7 days, and 3 hours."""
-    pool = await get_pool()
-    rows = await pool.fetch("""
-        SELECT
-            u.id,
-            u.username,
-            u.role,
-            u.email,
-            u.email_verified,
-            u.created_at,
-            u.last_active_at,
-            COALESCE(s.total_searches, 0)       AS total_searches,
-            COALESCE(s.searches_7d, 0)           AS searches_7d,
-            COALESCE(s.searches_3h, 0)           AS searches_3h,
-            COALESCE(s.total_tokens, 0)          AS total_tokens,
-            COALESCE(s.tokens_7d, 0)             AS tokens_7d,
-            COALESCE(s.tokens_3h, 0)             AS tokens_3h
-        FROM users u
-        LEFT JOIN LATERAL (
-            SELECT
-                COUNT(*)                                                                  AS total_searches,
-                COUNT(*) FILTER (WHERE sl.created_at >= now() - interval '7 days')        AS searches_7d,
-                COUNT(*) FILTER (WHERE sl.created_at >= now() - interval '3 hours')       AS searches_3h,
-                SUM(sl.tokens_prompt + sl.tokens_completion)                              AS total_tokens,
-                SUM(sl.tokens_prompt + sl.tokens_completion) FILTER (WHERE sl.created_at >= now() - interval '7 days')  AS tokens_7d,
-                SUM(sl.tokens_prompt + sl.tokens_completion) FILTER (WHERE sl.created_at >= now() - interval '3 hours') AS tokens_3h
-            FROM search_logs sl
-            WHERE sl.user_id = u.id
-        ) s ON TRUE
-        ORDER BY u.created_at
-    """)
-    return [
-        {
-            **_serialize_user_row(r),
-            "total_searches": int(r["total_searches"]),
-            "searches_7d": int(r["searches_7d"]),
-            "searches_3h": int(r["searches_3h"]),
-            "total_tokens": int(r["total_tokens"]),
-            "tokens_7d": int(r["tokens_7d"]),
-            "tokens_3h": int(r["tokens_3h"]),
-        }
-        for r in rows
-    ]
-
-
 async def get_user_hourly_search_count(user_id: str) -> int:
     """Count AI searches in the last hour for a given user."""
     pool = await get_pool()
@@ -1085,15 +1317,115 @@ async def get_deck_card_images(deck_id: str) -> list[dict]:
     rows = await pool.fetch(
         """SELECT dc.quantity, c.name,
                   COALESCE(dc.image_url,
-                           c.image_png,
-                           c.data->'image_uris'->>'png',
-                           c.data->'card_faces'->0->'image_uris'->>'png') AS png_url,
-                  c.data->'card_faces'->1->'image_uris'->>'png' AS back_png_url,
-                  c.data->'card_faces'->1->>'name' AS back_name
+                           cp.image_png,
+                           cp.image_large) AS png_url
            FROM deck_cards dc
            JOIN cards c ON c.id = dc.card_id
+           LEFT JOIN card_prints cp ON cp.id = dc.print_id
            WHERE dc.deck_id = $1::uuid
            ORDER BY dc.added_at""",
         deck_id,
     )
     return [dict(r) for r in rows]
+
+
+async def get_card_print_by_set_cn(card_id: str, set_code: str, collector_num: str) -> dict | None:
+    """Query a specific print by set code and collector number."""
+    pool = await get_pool()
+    row = await pool.fetchrow(
+        """SELECT id, card_id, set_code, set_name, collector_num, rarity, artist,
+                  flavor_name, released_at, finishes,
+                  image_small, image_normal, image_large, image_png,
+                  image_art_crop, image_border_crop, card_faces
+           FROM card_prints
+           WHERE card_id = $1 AND set_code = $2 AND collector_num = $3""",
+        card_id, set_code.lower(), collector_num,
+    )
+    if not row:
+        return None
+    return {
+        "id": row["id"],
+        "card_id": row["card_id"],
+        "set_code": row["set_code"],
+        "set_name": row["set_name"],
+        "collector_num": row["collector_num"],
+        "rarity": row["rarity"],
+        "artist": row["artist"],
+        "flavor_name": row["flavor_name"],
+        "released_at": row["released_at"].isoformat() if row["released_at"] else None,
+        "finishes": row["finishes"] or [],
+        "image_small": row["image_small"],
+        "image_normal": row["image_normal"],
+        "image_large": row["image_large"],
+        "image_png": row["image_png"],
+        "image_art_crop": row["image_art_crop"],
+        "image_border_crop": row["image_border_crop"],
+        "card_faces": _decode_card_data(row["card_faces"]) if row["card_faces"] else None,
+    }
+
+
+async def get_card_prints_by_oracle_id(oracle_id: str) -> list[dict]:
+    """Get all prints for a card by oracle_id."""
+    pool = await get_pool()
+    rows = await pool.fetch(
+        """SELECT id, card_id, set_code, set_name, collector_num, rarity, artist,
+                  flavor_name, released_at, finishes,
+                  image_small, image_normal, image_large, image_png,
+                  image_art_crop, image_border_crop, card_faces
+           FROM card_prints
+           WHERE card_id = $1
+           ORDER BY released_at DESC""",
+        oracle_id,
+    )
+    return [
+        {
+            "id": r["id"],
+            "card_id": r["card_id"],
+            "set_code": r["set_code"],
+            "set_name": r["set_name"],
+            "collector_num": r["collector_num"],
+            "rarity": r["rarity"],
+            "artist": r["artist"],
+            "flavor_name": r["flavor_name"],
+            "released_at": r["released_at"].isoformat() if r["released_at"] else None,
+            "finishes": r["finishes"] or [],
+            "image_small": r["image_small"],
+            "image_normal": r["image_normal"],
+            "image_large": r["image_large"],
+            "image_png": r["image_png"],
+            "image_art_crop": r["image_art_crop"],
+            "image_border_crop": r["image_border_crop"],
+            "card_faces": _decode_card_data(r["card_faces"]) if r["card_faces"] else None,
+        }
+        for r in rows
+    ]
+
+
+async def get_card_by_oracle_id(oracle_id: str) -> dict | None:
+    """Get full card data by oracle_id."""
+    pool = await get_pool()
+    row = await pool.fetchrow(
+        """SELECT id, name, mana_cost, cmc, type_line, oracle_text,
+                  power, toughness, colors, color_identity, keywords,
+                  legalities, layout, card_faces
+           FROM cards WHERE id = $1""",
+        oracle_id,
+    )
+    if not row:
+        return None
+    return {
+        "id": row["id"],
+        "name": row["name"],
+        "mana_cost": row["mana_cost"],
+        "cmc": row["cmc"],
+        "type_line": row["type_line"],
+        "oracle_text": row["oracle_text"],
+        "power": row["power"],
+        "toughness": row["toughness"],
+        "colors": row["colors"] or [],
+        "color_identity": row["color_identity"] or [],
+        "keywords": row["keywords"] or [],
+        "legalities": json.loads(row["legalities"]) if isinstance(row["legalities"], str) else row["legalities"],
+        "layout": row["layout"],
+        "card_faces": _decode_card_data(row["card_faces"]) if row["card_faces"] else None,
+    }

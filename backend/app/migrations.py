@@ -89,8 +89,8 @@ CREATE INDEX IF NOT EXISTS idx_search_logs_ip_address ON search_logs(ip_address)
 # Migrations for the cards table (added after it has been seeded).
 _CARDS_DDL = """
 ALTER TABLE cards ADD COLUMN IF NOT EXISTS is_playtest BOOLEAN NOT NULL DEFAULT FALSE;
-UPDATE cards SET is_playtest = (data->>'set_type' = 'funny')
-WHERE is_playtest = FALSE AND data->>'set_type' = 'funny';
+ALTER TABLE cards ADD COLUMN IF NOT EXISTS card_faces JSONB;
+ALTER TABLE card_prints ADD COLUMN IF NOT EXISTS card_faces JSONB;
 """
 
 # Tables that depend on cards(id) existing. Run after seeding.
@@ -153,85 +153,3 @@ async def run_post_seed(pool: asyncpg.Pool) -> None:
         await conn.execute(_POST_SEED_DDL)
     logger.info("Post-seed migrations applied.")
 
-
-_ORACLE_ID_MIGRATION = """
-UPDATE cards SET data = jsonb_set(data, '{id}', data->'oracle_id')
-WHERE data->>'id' <> data->>'oracle_id';
-
-ALTER TABLE cards ADD COLUMN IF NOT EXISTS new_id TEXT;
-UPDATE cards SET new_id = data->>'oracle_id' WHERE new_id IS NULL;
-
-ALTER TABLE deck_cards DROP CONSTRAINT IF EXISTS deck_cards_deck_id_card_id_board_key;
-ALTER TABLE deck_cards DROP CONSTRAINT IF EXISTS deck_cards_card_id_fkey;
-
-UPDATE deck_cards dc SET card_id = c.new_id
-FROM cards c
-WHERE dc.card_id = c.id AND c.new_id IS NOT NULL AND dc.card_id <> c.new_id;
-
-DELETE FROM deck_cards WHERE id IN (
-    SELECT id FROM (
-        SELECT id, ROW_NUMBER() OVER (
-            PARTITION BY deck_id, card_id, board
-            ORDER BY quantity DESC, added_at
-        ) AS rn FROM deck_cards
-    ) sub WHERE rn > 1
-);
-
-DELETE FROM cards WHERE id IN (
-    SELECT id FROM (
-        SELECT id, ROW_NUMBER() OVER (
-            PARTITION BY new_id
-            ORDER BY released_at DESC NULLS LAST, id
-        ) AS rn FROM cards WHERE new_id IS NOT NULL
-    ) sub WHERE rn > 1
-);
-
-ALTER TABLE cards DROP CONSTRAINT IF EXISTS cards_pkey;
-ALTER TABLE cards DROP COLUMN id;
-ALTER TABLE cards RENAME COLUMN new_id TO id;
-ALTER TABLE cards ALTER COLUMN id SET NOT NULL;
-ALTER TABLE cards ADD PRIMARY KEY (id);
-
-ALTER TABLE deck_cards
-    ADD CONSTRAINT deck_cards_card_id_fkey
-    FOREIGN KEY (card_id) REFERENCES cards(id);
-ALTER TABLE deck_cards
-    ADD CONSTRAINT deck_cards_deck_id_card_id_board_key
-    UNIQUE (deck_id, card_id, board);
-
-INSERT INTO app_meta (key, value) VALUES ('oracle_id_migration', 'done')
-ON CONFLICT (key) DO UPDATE SET value = 'done';
-"""
-
-
-async def migrate_to_oracle_id(pool: asyncpg.Pool) -> None:
-    """Rewrite cards.id from printing-level UUIDs to Scryfall oracle_id.
-
-    One-time, idempotent. Skipped once the flag is set in app_meta. Merges any
-    deck_cards duplicates created by the rewrite (sum quantities), and keeps
-    the newest printing per oracle_id.
-    """
-    done = await pool.fetchval(
-        "SELECT value FROM app_meta WHERE key = 'oracle_id_migration'"
-    )
-    if done == "done":
-        return
-
-    mismatch = await pool.fetchval(
-        "SELECT COUNT(*) FROM cards WHERE id <> data->>'oracle_id'"
-    )
-    total = await pool.fetchval("SELECT COUNT(*) FROM cards")
-
-    if total == 0 or mismatch == 0:
-        await pool.execute(
-            "INSERT INTO app_meta (key, value) VALUES ('oracle_id_migration', 'done') "
-            "ON CONFLICT (key) DO UPDATE SET value = 'done'"
-        )
-        logger.info("oracle_id migration: nothing to rewrite, marked done.")
-        return
-
-    logger.info("oracle_id migration: rewriting %d/%d cards to oracle_id.", mismatch, total)
-    async with pool.acquire() as conn:
-        async with conn.transaction():
-            await conn.execute(_ORACLE_ID_MIGRATION)
-    logger.info("oracle_id migration complete.")
