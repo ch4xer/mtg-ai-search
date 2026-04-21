@@ -180,6 +180,7 @@ body {
   background-color: var(--bg-primary);
   color: var(--text-primary);
   min-height: 100vh;
+  overflow-x: hidden;
   transition: background-color 0.3s ease, color 0.3s ease;
 }
 
@@ -777,6 +778,7 @@ body {
 }
 
 .art-picker-item {
+  position: relative;
   cursor: pointer;
   border: 2px solid transparent;
   border-radius: 8px;
@@ -791,6 +793,20 @@ body {
 .art-picker-item.selected {
   border-color: var(--accent);
   box-shadow: 0 0 8px var(--accent-tint-glow);
+}
+
+.art-picker-current-badge {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 0.65rem;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
 }
 
 .art-picker-item img {
@@ -1500,6 +1516,9 @@ body {
   border-radius: 8px;
   cursor: pointer;
   transition: all 0.2s;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
 }
 
 .btn-accent:hover:not(:disabled) {
@@ -1512,6 +1531,24 @@ body {
   cursor: not-allowed;
 }
 
+.btn-icon {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
+
+.btn-label {
+  display: inline;
+}
+
+.btn-label-mobile {
+  display: none;
+}
+
+.btn-icon-only {
+  padding: 0.5rem;
+}
+
 .btn-secondary {
   padding: 0.5rem 1rem;
   font-family: "Crimson Text", Georgia, serif;
@@ -1522,6 +1559,9 @@ body {
   border-radius: 8px;
   cursor: pointer;
   transition: all 0.2s;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
 }
 
 .btn-secondary:hover {
@@ -1550,6 +1590,7 @@ body {
   display: flex;
   gap: 0.5rem;
   align-items: center;
+  flex-wrap: wrap;
 }
 
 .new-deck-form input {
@@ -1561,11 +1602,18 @@ body {
   border: 2px solid var(--border-subtle);
   border-radius: 8px;
   outline: none;
-  width: 200px;
+  flex: 1;
+  min-width: 120px;
+  max-width: 200px;
 }
 
 .new-deck-form input:focus {
   border-color: var(--accent);
+}
+
+.new-deck-form .deck-format-select {
+  flex-shrink: 0;
+  min-width: 0;
 }
 
 .deck-grid {
@@ -1613,6 +1661,68 @@ body {
 .deck-card-date {
   font-size: 0.8rem;
   color: var(--text-muted);
+}
+
+/* Mobile: icon-only buttons for deck creation */
+@media (max-width: 768px) {
+  .decks-header {
+    flex-wrap: nowrap;
+    overflow: hidden;
+  }
+
+  .decks-header h2 {
+    font-size: 1.2rem;
+    flex-shrink: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .decks-header .btn-accent:not(.btn-icon-only) {
+    padding: 0.5rem;
+  }
+
+  .decks-header .btn-accent:not(.btn-icon-only) .btn-label {
+    display: none;
+  }
+
+  .new-deck-form {
+    flex-wrap: nowrap;
+    gap: 0.4rem;
+  }
+
+  .new-deck-form input {
+    flex: 1;
+    min-width: 80px;
+    max-width: none;
+    font-size: 0.9rem;
+    padding: 0.4rem 0.6rem;
+  }
+
+  .new-deck-form .deck-format-select {
+    max-width: 90px;
+    font-size: 0.8rem;
+    padding: 0.35rem 0.4rem;
+  }
+
+  .btn-label {
+    display: none;
+  }
+
+  .btn-label-mobile {
+    display: none;
+  }
+
+  .btn-icon-only {
+    padding: 0.5rem;
+    flex-shrink: 0;
+  }
+
+  .btn-accent,
+  .btn-secondary {
+    padding: 0.5rem;
+    flex-shrink: 0;
+  }
 }
 
 /* ===== Deck Detail ===== */
@@ -1784,10 +1894,11 @@ body {
   top: calc(var(--header-height) + 1rem);
   width: 280px;
   min-width: 280px;
+  max-height: calc(100vh - var(--header-height) - 2rem);
+  overflow-y: auto;
   background: var(--bg-card);
   border: 1px solid var(--border-subtle);
   border-radius: 10px;
-  overflow: hidden;
   box-shadow: 0 2px 8px var(--shadow);
 }
 
@@ -3015,10 +3126,33 @@ body {
 
 .import-not-found li {
   background: var(--bg-secondary);
-  padding: 0.2rem 0.6rem;
   border-radius: 4px;
   font-size: 0.85rem;
+}
+
+.import-not-found-link {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.2rem 0.6rem;
   color: var(--text-primary);
+  text-decoration: none;
+  transition: color 0.2s ease, background 0.2s ease;
+  border-radius: 4px;
+}
+
+.import-not-found-link:hover {
+  color: var(--accent);
+  background: var(--bg-tertiary, rgba(255, 255, 255, 0.05));
+}
+
+.import-not-found-link svg {
+  flex-shrink: 0;
+  opacity: 0.6;
+}
+
+.import-not-found-link:hover svg {
+  opacity: 1;
 }
 
 .deck-qty-badge {
@@ -3571,6 +3705,11 @@ body {
   justify-content: space-between;
   align-items: center;
   margin-bottom: 0.5rem;
+}
+
+.admin-sync-buttons {
+  display: flex;
+  gap: 0.75rem;
 }
 
 .admin-search-bar {

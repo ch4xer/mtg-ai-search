@@ -72,7 +72,11 @@ function DecksPage() {
         <h2>{t('myDecks')}</h2>
         {!showInput ? (
           <button className="btn-accent" onClick={() => setShowInput(true)}>
-            + {language === 'zh' ? '新建卡组' : 'New Deck'}
+            <svg className="btn-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="12" y1="5" x2="12" y2="19" />
+              <line x1="5" y1="12" x2="19" y2="12" />
+            </svg>
+            <span className="btn-label">{language === 'zh' ? '新建卡组' : 'New Deck'}</span>
           </button>
         ) : (
           <form onSubmit={handleCreate} className="new-deck-form">
@@ -101,7 +105,10 @@ function DecksPage() {
               className="btn-accent"
               disabled={creating || !newDeckName.trim()}
             >
-              {t('createDeck')}
+              <svg className="btn-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="20 6 9 17 4 12" />
+              </svg>
+              <span className="btn-label">{t('createDeck')}</span>
             </button>
             <button
               type="button"
@@ -112,7 +119,11 @@ function DecksPage() {
                 setNewDeckFormat("undefined");
               }}
             >
-              {language === 'zh' ? '取消' : 'Cancel'}
+              <svg className="btn-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <line x1="18" y1="6" x2="6" y2="18" />
+                <line x1="6" y1="6" x2="18" y2="18" />
+              </svg>
+              <span className="btn-label">{language === 'zh' ? '取消' : 'Cancel'}</span>
             </button>
           </form>
         )}
