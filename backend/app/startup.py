@@ -14,7 +14,7 @@ from .maintenance import (
     seed_abilities_if_empty,
     seed_cards_if_empty,
 )
-from .migrations import migrate_to_oracle_id, run_cards_migrations, run_post_seed, run_pre_seed
+from .migrations import run_cards_migrations, run_post_seed, run_pre_seed
 
 logger = logging.getLogger(__name__)
 
@@ -113,7 +113,6 @@ async def lifespan(_: FastAPI):
     await seed_abilities_if_empty()
     await run_cards_migrations(pool)
     await run_post_seed(pool)
-    await migrate_to_oracle_id(pool)
     await _load_persisted_settings(pool)
     await backfill_missing_embeddings()
 
