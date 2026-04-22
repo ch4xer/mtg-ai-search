@@ -38,6 +38,7 @@ async def discover_cards(
         subtypes=subtypes,
         toughness_min=toughness_min,
         toughness_max=toughness_max,
+        include_playtest=include_playtest,
     )
 
     total = await _count_discovery_results(pool, filter_spec.where, filter_spec.params, filter_spec.need_rarity_join)

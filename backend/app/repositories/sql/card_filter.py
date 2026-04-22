@@ -40,7 +40,7 @@ async def filter_cards(filters: dict) -> list[str]:
     if not clauses:
         return []
 
-    where = " AND ".join(clauses)
+    where = " AND ".join(["NOT COALESCE(is_unofficial, FALSE)", *clauses])
     query = f"SELECT id FROM cards WHERE {where}"
     logger.info("filter_cards SQL: %s params: %s", query, params)
 

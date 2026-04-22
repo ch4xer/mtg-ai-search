@@ -19,7 +19,7 @@ async def vector_search_cards(
         query = f"""
             SELECT id, {column} <=> $1::halfvec AS distance
             FROM cards
-            WHERE id = ANY($2) AND {column} IS NOT NULL
+            WHERE id = ANY($2) AND {column} IS NOT NULL AND NOT COALESCE(is_unofficial, FALSE)
             ORDER BY distance
             LIMIT $3
         """
@@ -28,7 +28,7 @@ async def vector_search_cards(
         query = f"""
             SELECT id, {column} <=> $1::halfvec AS distance
             FROM cards
-            WHERE {column} IS NOT NULL
+            WHERE {column} IS NOT NULL AND NOT COALESCE(is_unofficial, FALSE)
             ORDER BY distance
             LIMIT $2
         """
@@ -57,7 +57,8 @@ async def effect_vector_search_cards(
                 ce.source,
                 ce.embedding <=> $1::halfvec AS distance
             FROM card_effects ce
-            WHERE ce.card_id = ANY($2) AND ce.embedding IS NOT NULL
+            JOIN cards c ON c.id = ce.card_id
+            WHERE ce.card_id = ANY($2) AND ce.embedding IS NOT NULL AND NOT COALESCE(c.is_unofficial, FALSE)
             ORDER BY distance
             LIMIT $3
             """,
@@ -77,7 +78,8 @@ async def effect_vector_search_cards(
                 ce.source,
                 ce.embedding <=> $1::halfvec AS distance
             FROM card_effects ce
-            WHERE ce.embedding IS NOT NULL
+            JOIN cards c ON c.id = ce.card_id
+            WHERE ce.embedding IS NOT NULL AND NOT COALESCE(c.is_unofficial, FALSE)
             ORDER BY distance
             LIMIT $2
             """,

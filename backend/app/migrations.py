@@ -87,6 +87,7 @@ CREATE TABLE IF NOT EXISTS card_effects (
     UNIQUE(card_id, face_index, chunk_index)
 );
 CREATE INDEX IF NOT EXISTS idx_card_effects_card_id ON card_effects(card_id);
+CREATE INDEX IF NOT EXISTS idx_cards_is_unofficial ON cards(is_unofficial);
 
 CREATE TABLE IF NOT EXISTS deck_cards (
     id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),

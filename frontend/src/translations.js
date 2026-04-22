@@ -37,7 +37,7 @@ export const translations = {
     toughness: "Toughness",
     abilities: "Abilities",
     addAbility: "Add...",
-    playtest: "Playtest",
+    playtest: "Unofficial",
     clearAll: "Clear All",
 
     // Rarity options
@@ -232,7 +232,7 @@ export const translations = {
     toughness: "防御",
     abilities: "能力",
     addAbility: "添加...",
-    playtest: "测试卡",
+    playtest: "非正式/测试卡",
     clearAll: "清除全部",
 
     // Rarity options

@@ -24,10 +24,14 @@ def build_discovery_filter(
     subtypes: list[str] | None = None,
     toughness_min: float | None = None,
     toughness_max: float | None = None,
+    include_playtest: bool = False,
 ) -> DiscoveryFilter:
     clauses: list[str] = []
     params: list = []
     idx = 1
+
+    if not include_playtest:
+        clauses.append("NOT COALESCE(is_unofficial, FALSE)")
 
     if q.strip():
         for token in q.strip().split():
@@ -96,4 +100,3 @@ def build_discovery_filter(
         next_param_index=idx,
         need_rarity_join=rarities is not None,
     )
-

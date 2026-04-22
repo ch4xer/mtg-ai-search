@@ -13,9 +13,12 @@ async def text_match_cards(query: str, limit: int = 20) -> list[dict]:
                   CASE WHEN c.name ~* $1 THEN 0 ELSE 1 END AS sort_key
            FROM cards c
            {DEFAULT_PRINT_JOIN}
-           WHERE c.name ~* $1
-              OR c.oracle_text ~* $1
-              OR c.type_line ~* $1
+           WHERE NOT COALESCE(c.is_unofficial, FALSE)
+             AND (
+                 c.name ~* $1
+                 OR c.oracle_text ~* $1
+                 OR c.type_line ~* $1
+             )
            ORDER BY sort_key, c.name
            LIMIT $2""",
         pattern,

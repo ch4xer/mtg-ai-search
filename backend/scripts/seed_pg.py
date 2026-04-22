@@ -21,6 +21,7 @@ from app.data_loader import (
     parse_keyword_abilities,
     stream_cards,
 )
+from app.card_sets import is_playtest_print, is_unofficial_print
 from app.effect_chunks import build_card_effect_chunks
 
 KEYWORD_ABILITY_FILE = os.path.join(
@@ -68,6 +69,8 @@ def create_schema(conn):
                 image_set_code        TEXT,
                 image_set_name        TEXT,
                 image_collector_number TEXT,
+                is_unofficial         BOOLEAN NOT NULL DEFAULT FALSE,
+                is_playtest           BOOLEAN NOT NULL DEFAULT FALSE,
                 name_embedding        halfvec(2560),
                 type_line_embedding   halfvec(2560),
                 oracle_text_embedding halfvec(2560)
@@ -98,6 +101,10 @@ def create_schema(conn):
                 image_set_code  TEXT,
                 image_set_name  TEXT,
                 image_collector_number TEXT,
+                set_type        TEXT,
+                security_stamp  TEXT,
+                border_color    TEXT,
+                games           TEXT[],
                 UNIQUE(card_id, set_code, collector_num)
             )
         """)
@@ -203,6 +210,7 @@ def create_schema(conn):
         cur.execute("CREATE INDEX IF NOT EXISTS idx_cards_cmc ON cards(cmc)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_cards_colors ON cards USING GIN(colors)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_cards_keywords ON cards USING GIN(keywords)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_cards_is_unofficial ON cards(is_unofficial)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_card_effects_card_id ON card_effects(card_id)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_card_prints_card_id ON card_prints(card_id)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_card_prints_set_code ON card_prints(set_code)")
@@ -290,6 +298,8 @@ def _insert_cards_batch(conn, oracle_groups: dict[str, list[dict]], batch_size: 
         colors = raw_colors if raw_colors is not None else (first_print.get("color_identity") or [])
         color_identity = first_print.get("color_identity") or []
         keywords = first_print.get("keywords") or []
+        is_unofficial = bool(card_prints) and all(is_unofficial_print(p) for p in card_prints)
+        is_playtest = bool(card_prints) and all(is_playtest_print(p) for p in card_prints)
 
         cards_values.append((
             oracle_id,
@@ -309,6 +319,8 @@ def _insert_cards_batch(conn, oracle_groups: dict[str, list[dict]], batch_size: 
             first_print.get("set"),
             first_print.get("set_name"),
             first_print.get("collector_number"),
+            is_unofficial,
+            is_playtest,
         ))
 
     with conn.cursor() as cur:
@@ -319,8 +331,9 @@ def _insert_cards_batch(conn, oracle_groups: dict[str, list[dict]], batch_size: 
                     id, name, mana_cost, cmc, type_line, oracle_text,
                     power, toughness, colors, color_identity, keywords,
                     legalities, layout, card_faces,
-                    image_set_code, image_set_name, image_collector_number
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    image_set_code, image_set_name, image_collector_number,
+                    is_unofficial, is_playtest
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (id) DO UPDATE SET
                     name = EXCLUDED.name,
                     mana_cost = EXCLUDED.mana_cost,
@@ -338,6 +351,8 @@ def _insert_cards_batch(conn, oracle_groups: dict[str, list[dict]], batch_size: 
                     image_set_code = EXCLUDED.image_set_code,
                     image_set_name = EXCLUDED.image_set_name,
                     image_collector_number = EXCLUDED.image_collector_number,
+                    is_unofficial = EXCLUDED.is_unofficial,
+                    is_playtest = EXCLUDED.is_playtest,
                     name_embedding = CASE WHEN cards.name IS NOT DISTINCT FROM EXCLUDED.name THEN cards.name_embedding ELSE NULL END,
                     type_line_embedding = CASE WHEN cards.type_line IS NOT DISTINCT FROM EXCLUDED.type_line THEN cards.type_line_embedding ELSE NULL END,
                     oracle_text_embedding = CASE WHEN cards.oracle_text IS NOT DISTINCT FROM EXCLUDED.oracle_text THEN cards.oracle_text_embedding ELSE NULL END
@@ -443,6 +458,10 @@ def _insert_prints_batch(conn, prints: list[dict], batch_size: int):
             p.get("set"),
             p.get("set_name"),
             p.get("collector_number"),
+            p.get("set_type"),
+            p.get("security_stamp"),
+            p.get("border_color"),
+            p.get("games") or [],
         ))
 
     with conn.cursor() as cur:
@@ -454,8 +473,9 @@ def _insert_prints_batch(conn, prints: list[dict], batch_size: int):
                     rarity, artist, flavor_name, flavor_text, released_at, finishes,
                     image_small, image_normal, image_large, image_png,
                     image_art_crop, image_border_crop, card_faces,
-                    image_set_code, image_set_name, image_collector_number
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    image_set_code, image_set_name, image_collector_number,
+                    set_type, security_stamp, border_color, games
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (card_id, set_code, collector_num) DO UPDATE SET
                     rarity = EXCLUDED.rarity,
                     artist = EXCLUDED.artist,
@@ -471,7 +491,11 @@ def _insert_prints_batch(conn, prints: list[dict], batch_size: int):
                     card_faces = EXCLUDED.card_faces,
                     image_set_code = EXCLUDED.image_set_code,
                     image_set_name = EXCLUDED.image_set_name,
-                    image_collector_number = EXCLUDED.image_collector_number
+                    image_collector_number = EXCLUDED.image_collector_number,
+                    set_type = EXCLUDED.set_type,
+                    security_stamp = EXCLUDED.security_stamp,
+                    border_color = EXCLUDED.border_color,
+                    games = EXCLUDED.games
                 """,
                 batch,
             )
