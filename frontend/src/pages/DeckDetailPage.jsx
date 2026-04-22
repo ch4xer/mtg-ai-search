@@ -1,49 +1,43 @@
-import React, { useState, useEffect, useMemo, useRef } from "react";
-import { createPortal } from "react-dom";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { apiFetch } from "../utils/apiFetch.js";
 import { useAuth } from "../contexts/AuthContext.jsx";
 import { useToast } from "../contexts/ToastContext.jsx";
 import { useLanguage } from "../contexts/LanguageContext.jsx";
-import { FORMATS, getFormatLabel, getCardLegality, isCardLegal, legalityLabel } from "../utils/formats.js";
+import { FORMATS, getFormatLabel } from "../utils/formats.js";
 import { getImageUri } from "../utils/cardImage.js";
-import { parseManaCost, parseOracleText } from "../utils/manaSymbols.js";
-
-/* ── Type classification ── */
-
-const TYPE_ORDER = [
-    "Planeswalker", "Creature", "Sorcery", "Instant",
-    "Artifact", "Enchantment", "Land", "Other",
-];
-
-function classifyCard(card) {
-    const tl = card.type_line || "";
-    for (const t of TYPE_ORDER) {
-        if (t !== "Other" && tl.includes(t)) return t;
-    }
-    return "Other";
-}
-
-const TYPE_LABELS_EN = {
-    Creature: "Creature", Planeswalker: "Planeswalker", Instant: "Instant", Sorcery: "Sorcery",
-    Enchantment: "Enchantment", Artifact: "Artifact", Land: "Land", Other: "Other",
-};
-
-const TYPE_LABELS_ZH = {
-    Creature: "生物", Planeswalker: "旅法师", Instant: "瞬间", Sorcery: "法术",
-    Enchantment: "结界", Artifact: "神器", Land: "地", Other: "其他",
-};
-
-const TYPE_MANA_CLASSES = {
-    Creature: "ms-creature",
-    Planeswalker: "ms-planeswalker",
-    Instant: "ms-instant",
-    Sorcery: "ms-sorcery",
-    Enchantment: "ms-enchantment",
-    Artifact: "ms-artifact",
-    Land: "ms-land",
-    Other: null,
-};
+import {
+    buildDeckAnalysis,
+    DOUBLE_FACED_LAYOUTS,
+    getQuantityIncreaseGuards,
+    getPreviewData,
+    splitDeckBoards,
+    validateDeck,
+} from "../features/decks/deckModel.js";
+import {
+    addDeckCard,
+    analyzeDeck,
+    deleteDeck,
+    fetchDeckImagesDownload,
+    fetchDeckImagesStream,
+    fetchDeckPdfDownload,
+    fetchDeckPdfStream,
+    fetchDeckTextExport,
+    fetchSharedDeck,
+    fetchSharedDeckCards,
+    importDecklist,
+    patchDeckCard,
+    removeDeckCard,
+    updateDeck,
+} from "../api/decks.js";
+import { fetchCardPrints, normalizePrints } from "../api/cards.js";
+import DeckAnalysisPanel from "../features/decks/components/DeckAnalysisPanel.jsx";
+import DeckBoard from "../features/decks/components/DeckBoard.jsx";
+import DeckContextMenu from "../features/decks/components/DeckContextMenu.jsx";
+import DeckPreviewPanel from "../features/decks/components/DeckPreviewPanel.jsx";
+import ArtPickerModal from "../features/decks/components/ArtPickerModal.jsx";
+import ImportDeckModal from "../features/decks/components/ImportDeckModal.jsx";
+import MobileDeckSheet from "../features/decks/components/MobileDeckSheet.jsx";
+import MovePanel from "../features/decks/components/MovePanel.jsx";
 
 
 /* ── Main Component ── */
@@ -68,6 +62,7 @@ function DeckDetailPage({ imageMode }) {
     const [importText, setImportText] = useState("");
     const [importNotFound, setImportNotFound] = useState([]);
     const [selectedCard, setSelectedCard] = useState(null);
+    const [previewFlipped, setPreviewFlipped] = useState(false);
     const [showMobileSheet, setShowMobileSheet] = useState(false);
     const [showExportMenu, setShowExportMenu] = useState(false);
     const [showArtPicker, setShowArtPicker] = useState(false);
@@ -78,11 +73,7 @@ function DeckDetailPage({ imageMode }) {
     const hoverTimerRef = useRef(null);
     const previewLockedRef = useRef(false);
     const importAbortControllerRef = useRef(null);
-    const sheetRef = useRef(null);
-    const sheetDragStartY = useRef(0);
-    const sheetDragDelta = useRef(0);
     const draggedCardRef = useRef(null);
-    const touchDragRef = useRef(null);
     const longPressTimerRef = useRef(null);
 
     const [dragOverBoard, setDragOverBoard] = useState(null);
@@ -105,15 +96,13 @@ function DeckDetailPage({ imageMode }) {
 
     useEffect(() => cancelPendingSelect, []);
 
-    const TYPE_LABELS = language === 'zh' ? TYPE_LABELS_ZH : TYPE_LABELS_EN;
-
     // ── Data fetching ──
 
     const fetchDeck = async () => {
         try {
             const [deckRes, cardsRes] = await Promise.all([
-                fetch(`/api/shared/decks/${id}`),
-                fetch(`/api/shared/decks/${id}/cards`),
+                fetchSharedDeck(id),
+                fetchSharedDeckCards(id),
             ]);
             if (deckRes.status === 404) {
                 showToast(t('deckNotFound'), "error");
@@ -146,161 +135,21 @@ function DeckDetailPage({ imageMode }) {
         return () => document.removeEventListener('click', handleClickOutside);
     }, [showExportMenu]);
 
-    // ── Group cards by board, then by type ──
+    // ── Derived deck data ──
 
-    // Color sort order: W → U → B → R → G, multi-color after, colorless last
-    const COLOR_ORDER = { W: 0, U: 1, B: 2, R: 3, G: 4 };
-    const getColorSortIndex = (card) => {
-        const colors = card.color_identity || card.colors || [];
-        if (colors.length === 0) return 100; // colorless
-        if (colors.length === 1) {
-            return COLOR_ORDER[colors[0]] ?? 50;
-        }
-        // Multi-color: use the smallest index among its colors
-        const minIdx = Math.min(...colors.map((c) => COLOR_ORDER[c] ?? 50));
-        return 50 + minIdx; // Multi-color comes after single colors
-    };
+    const { mainCards, sideCards, mainboardGroups, sideboardGroups } = useMemo(
+        () => splitDeckBoards(cards, language),
+        [cards, language]
+    );
 
-    // Check if card has uncertain CMC (contains X in mana cost)
-    const hasUncertainCmc = (card) => {
-        const manaCost = card.mana_cost || "";
-        // Check for X, Y, Z variables in mana cost
-        return /\{[XYZ]\}/i.test(manaCost);
-    };
+    const analysisCards = mainCards;
 
-    const { mainboardGroups, sideboardGroups } = useMemo(() => {
-        const buildGroups = (boardCards) => {
-            const groups = {};
-            for (const item of boardCards) {
-                const type = classifyCard(item.card);
-                if (!groups[type]) groups[type] = [];
-                groups[type].push(item);
-            }
-            // Sort each group by CMC (ascending), then by color, uncertain CMC at end
-            for (const type in groups) {
-                groups[type].sort((a, b) => {
-                    const uncertainA = hasUncertainCmc(a.card);
-                    const uncertainB = hasUncertainCmc(b.card);
-                    const cmcA = a.card.cmc ?? 0;
-                    const cmcB = b.card.cmc ?? 0;
-                    // Both uncertain CMC: sort by color then name
-                    if (uncertainA && uncertainB) {
-                        const colorA = getColorSortIndex(a.card);
-                        const colorB = getColorSortIndex(b.card);
-                        if (colorA !== colorB) return colorA - colorB;
-                        return (a.card.name || "").localeCompare(b.card.name || "");
-                    }
-                    // Uncertain CMC goes last
-                    if (uncertainA) return 1;
-                    if (uncertainB) return -1;
-                    // Same CMC: sort by color then name
-                    if (cmcA === cmcB) {
-                        const colorA = getColorSortIndex(a.card);
-                        const colorB = getColorSortIndex(b.card);
-                        if (colorA !== colorB) return colorA - colorB;
-                        return (a.card.name || "").localeCompare(b.card.name || "");
-                    }
-                    return cmcA - cmcB;
-                });
-            }
-            const ordered = [];
-            for (const type of TYPE_ORDER) {
-                if (groups[type]) {
-                    const count = groups[type].reduce((s, c) => s + c.quantity, 0);
-                    ordered.push({ type, label: TYPE_LABELS[type], count, items: groups[type] });
-                }
-            }
-            return ordered;
-        };
-        const mainCards = cards.filter((c) => c.board !== "sideboard");
-        const sideCards = cards.filter((c) => c.board === "sideboard");
-        return { mainboardGroups: buildGroups(mainCards), sideboardGroups: buildGroups(sideCards) };
-    }, [cards, language]);
-
-    // Combined for analysis (kept for compatibility)
-    const groupedCards = useMemo(() => {
-        const groups = {};
-        for (const item of cards) {
-            const type = classifyCard(item.card);
-            if (!groups[type]) groups[type] = [];
-            groups[type].push(item);
-        }
-        for (const type in groups) {
-            groups[type].sort((a, b) => {
-                const uncertainA = hasUncertainCmc(a.card);
-                const uncertainB = hasUncertainCmc(b.card);
-                const cmcA = a.card.cmc ?? 0;
-                const cmcB = b.card.cmc ?? 0;
-                if (uncertainA && uncertainB) {
-                    const colorA = getColorSortIndex(a.card);
-                    const colorB = getColorSortIndex(b.card);
-                    if (colorA !== colorB) return colorA - colorB;
-                    return (a.card.name || "").localeCompare(b.card.name || "");
-                }
-                if (uncertainA) return 1;
-                if (uncertainB) return -1;
-                if (cmcA === cmcB) {
-                    const colorA = getColorSortIndex(a.card);
-                    const colorB = getColorSortIndex(b.card);
-                    if (colorA !== colorB) return colorA - colorB;
-                    return (a.card.name || "").localeCompare(b.card.name || "");
-                }
-                return cmcA - cmcB;
-            });
-        }
-        const ordered = [];
-        for (const type of TYPE_ORDER) {
-            if (groups[type]) {
-                const count = groups[type].reduce((s, c) => s + c.quantity, 0);
-                ordered.push({ type, label: TYPE_LABELS[type], count, items: groups[type] });
-            }
-        }
-        return ordered;
-    }, [cards, language]);
+    // Mainboard groups for analysis
+    const groupedCards = mainboardGroups;
 
     // ── Deck analysis ──
 
-    const deckAnalysis = useMemo(() => {
-        if (cards.length === 0) return null;
-
-        // Color distribution
-        const colorCounts = { W: 0, U: 0, B: 0, R: 0, G: 0 };
-        const colorLabelsEn = { W: "White", U: "Blue", B: "Black", R: "Red", G: "Green" };
-        const colorLabelsZh = { W: "白", U: "蓝", B: "黑", R: "红", G: "绿" };
-        const colorLabels = language === 'zh' ? colorLabelsZh : colorLabelsEn;
-        for (const item of cards) {
-            const ci = item.card.color_identity || item.card.colors || [];
-            for (const c of ci) {
-                if (colorCounts[c] !== undefined) colorCounts[c] += item.quantity;
-            }
-        }
-
-        // Mana curve (CMC 0–7+)
-        const cmcBuckets = [0, 0, 0, 0, 0, 0, 0, 0]; // indices 0-7, index 7 = "7+"
-        for (const item of cards) {
-            const cmc = Math.floor(item.card.cmc ?? 0);
-            const tl = item.card.type_line || "";
-            if (tl.includes("Land")) continue;
-            const idx = Math.min(cmc, 7);
-            cmcBuckets[idx] += item.quantity;
-        }
-        const cmcMax = Math.max(...cmcBuckets, 1);
-
-        // Rarity distribution
-        const rarityOrder = ["common", "uncommon", "rare", "mythic"];
-        const rarityLabelsEn = { common: "Common", uncommon: "Uncommon", rare: "Rare", mythic: "Mythic" };
-        const rarityLabelsZh = { common: "普通", uncommon: "非普通", rare: "稀有", mythic: "秘稀" };
-        const rarityLabels = language === 'zh' ? rarityLabelsZh : rarityLabelsEn;
-        const rarityCounts = {};
-        for (const item of cards) {
-            const r = item.card.rarity || "common";
-            rarityCounts[r] = (rarityCounts[r] || 0) + item.quantity;
-        }
-
-        const totalColorCards = Object.values(colorCounts).reduce((s, v) => s + v, 0) || 1;
-
-        return { colorCounts, colorLabels, totalColorCards, cmcBuckets, cmcMax, rarityCounts, rarityLabels, rarityOrder };
-    }, [cards, language]);
+    const deckAnalysis = useMemo(() => buildDeckAnalysis(analysisCards, language), [analysisCards, language]);
 
     // Auto-select first card
     useEffect(() => {
@@ -316,10 +165,7 @@ function DeckDetailPage({ imageMode }) {
             setEditing(false);
             return;
         }
-        const res = await apiFetch(`/api/decks/${id}`, {
-            method: "PUT",
-            body: { name: editName.trim() },
-        });
+        const res = await updateDeck(id, { name: editName.trim() });
         if (res.ok) {
             const updated = await res.json();
             setDeck((prev) => ({ ...prev, name: updated.name }));
@@ -331,10 +177,7 @@ function DeckDetailPage({ imageMode }) {
     const handleFormatChange = async (e) => {
         const newFormat = e.target.value;
         if (newFormat === deck.format) return;
-        const res = await apiFetch(`/api/decks/${id}`, {
-            method: "PUT",
-            body: { name: deck.name, format: newFormat },
-        });
+        const res = await updateDeck(id, { name: deck.name, format: newFormat });
         if (res.ok) {
             const updated = await res.json();
             setDeck((prev) => ({ ...prev, format: updated.format }));
@@ -344,7 +187,7 @@ function DeckDetailPage({ imageMode }) {
 
     const handleDelete = async () => {
         if (!confirm(language === 'zh' ? "确定要删除这个卡组吗？" : "Are you sure you want to delete this deck?")) return;
-        const res = await apiFetch(`/api/decks/${id}`, { method: "DELETE" });
+        const res = await deleteDeck(id);
         if (res.ok) {
             showToast(t('deckDeleted'));
             navigate("/decks");
@@ -359,10 +202,14 @@ function DeckDetailPage({ imageMode }) {
             await handleRemoveCard(cardId, board);
             return;
         }
-        const res = await apiFetch(`/api/decks/${id}/cards`, {
-            method: "POST",
-            body: { card_id: cardId, quantity: delta, board },
-        });
+        if (delta > 0) {
+            const guard = getQuantityIncreaseGuards(cards, deck?.format, language)[`${cardId}:${board}`];
+            if (guard?.canIncrease === false) {
+                showToast(guard.reason, "error");
+                return;
+            }
+        }
+        const res = await addDeckCard(id, { card_id: cardId, quantity: delta, board });
         if (res.ok) {
             setCards((prev) =>
                 prev.map((c) => (c.card_id === cardId && c.board === board ? { ...c, quantity: newQty } : c))
@@ -374,8 +221,7 @@ function DeckDetailPage({ imageMode }) {
     };
 
     const handleRemoveCard = async (cardId, board) => {
-        const boardParam = board ? `?board=${board}` : "";
-        const res = await apiFetch(`/api/decks/${id}/cards/${cardId}${boardParam}`, { method: "DELETE" });
+        const res = await removeDeckCard(id, cardId, board);
         if (res.ok) {
             setCards((prev) => prev.filter((c) => !(c.card_id === cardId && c.board === board)));
             if (selectedCard?.card_id === cardId && selectedCard?.board === board) setSelectedCard(null);
@@ -397,7 +243,7 @@ function DeckDetailPage({ imageMode }) {
         // Update source card quantity (or remove if moving all)
         if (quantity === 'all') {
             // Remove from source board
-            const removeRes = await apiFetch(`/api/decks/${id}/cards/${cardId}?board=${fromBoard}`, { method: "DELETE" });
+            const removeRes = await removeDeckCard(id, cardId, fromBoard);
             if (!removeRes.ok) {
                 showToast(language === 'zh' ? '移动失败' : 'Failed to move card', "error");
                 return;
@@ -406,16 +252,13 @@ function DeckDetailPage({ imageMode }) {
             // Reduce quantity by 1
             const newSourceQty = card.quantity - moveCount;
             if (newSourceQty <= 0) {
-                const removeRes = await apiFetch(`/api/decks/${id}/cards/${cardId}?board=${fromBoard}`, { method: "DELETE" });
+                const removeRes = await removeDeckCard(id, cardId, fromBoard);
                 if (!removeRes.ok) {
                     showToast(language === 'zh' ? '移动失败' : 'Failed to move card', "error");
                     return;
                 }
             } else {
-                const updateRes = await apiFetch(`/api/decks/${id}/cards`, {
-                    method: "POST",
-                    body: { card_id: cardId, quantity: -moveCount, board: fromBoard },
-                });
+                const updateRes = await addDeckCard(id, { card_id: cardId, quantity: -moveCount, board: fromBoard });
                 if (!updateRes.ok) {
                     showToast(language === 'zh' ? '移动失败' : 'Failed to move card', "error");
                     return;
@@ -424,17 +267,11 @@ function DeckDetailPage({ imageMode }) {
         }
 
         // Add to target board
-        const addRes = await apiFetch(`/api/decks/${id}/cards`, {
-            method: "POST",
-            body: { card_id: cardId, quantity: moveCount, board: toBoard },
-        });
+        const addRes = await addDeckCard(id, { card_id: cardId, quantity: moveCount, board: toBoard });
         if (!addRes.ok) {
             showToast(language === 'zh' ? '移动失败' : 'Failed to move card', "error");
             // Restore source card
-            await apiFetch(`/api/decks/${id}/cards`, {
-                method: "POST",
-                body: { card_id: cardId, quantity: moveCount, board: fromBoard },
-            });
+            await addDeckCard(id, { card_id: cardId, quantity: moveCount, board: fromBoard });
             return;
         }
 
@@ -607,7 +444,7 @@ function DeckDetailPage({ imageMode }) {
         setExporting(true);
         setExportProgress({ phase: "download", current: 0, total: 0 });
         try {
-            const res = await fetch(`/api/shared/decks/${id}/export/stream`);
+            const res = await fetchDeckPdfStream(id);
             if (!res.ok) {
                 const err = await res.json().catch(() => ({}));
                 showToast(err.detail || t('exportFailed'), "error");
@@ -632,7 +469,7 @@ function DeckDetailPage({ imageMode }) {
                 }
             }
             if (exportId) {
-                const pdfRes = await fetch(`/api/shared/decks/${id}/export/download/${exportId}`);
+                const pdfRes = await fetchDeckPdfDownload(id, exportId);
                 if (!pdfRes.ok) { showToast(language === 'zh' ? "下载 PDF 失败" : "Failed to download PDF", "error"); return; }
                 const blob = await pdfRes.blob();
                 const url = URL.createObjectURL(blob);
@@ -652,7 +489,7 @@ function DeckDetailPage({ imageMode }) {
         setExportingImages(true);
         setExportImagesProgress({ phase: "download", current: 0, total: 0 });
         try {
-            const res = await fetch(`/api/shared/decks/${id}/export/images/stream`);
+            const res = await fetchDeckImagesStream(id);
             if (!res.ok) {
                 const err = await res.json().catch(() => ({}));
                 showToast(err.detail || t('exportFailed'), "error");
@@ -677,7 +514,7 @@ function DeckDetailPage({ imageMode }) {
                 }
             }
             if (exportId) {
-                const zipRes = await fetch(`/api/shared/decks/${id}/export/images/download/${exportId}`);
+                const zipRes = await fetchDeckImagesDownload(id, exportId);
                 if (!zipRes.ok) { showToast(language === 'zh' ? "下载 ZIP 失败" : "Failed to download ZIP", "error"); return; }
                 const blob = await zipRes.blob();
                 const url = URL.createObjectURL(blob);
@@ -700,10 +537,7 @@ function DeckDetailPage({ imageMode }) {
         }
         setAnalyzing(true);
         try {
-            const res = await apiFetch(`/api/decks/${id}/analyze`, {
-                method: "POST",
-                body: {},
-            });
+            const res = await analyzeDeck(id);
             if (!res.ok) {
                 const detail = (await res.json().catch(() => ({}))).detail;
                 showToast(detail || t('analysisFailed'), "error");
@@ -741,7 +575,7 @@ function DeckDetailPage({ imageMode }) {
 
     const handleExportText = async () => {
         try {
-            const res = await fetch(`/api/shared/decks/${id}/export/text`);
+            const res = await fetchDeckTextExport(id);
             if (!res.ok) {
                 const errData = await res.json().catch(() => ({}));
                 showToast(errData.detail || t('copyFailed'), "error");
@@ -776,11 +610,7 @@ function DeckDetailPage({ imageMode }) {
         // Create AbortController for this request
         importAbortControllerRef.current = new AbortController();
         try {
-            const res = await apiFetch(`/api/decks/${id}/import`, {
-                method: "POST",
-                body: { text: importText },
-                signal: importAbortControllerRef.current.signal,
-            });
+            const res = await importDecklist(id, importText, importAbortControllerRef.current.signal);
             if (!res.ok) {
                 const errData = await res.json().catch(() => ({}));
                 showToast(errData.detail || (language === 'zh' ? "导入失败" : "Import failed"), "error");
@@ -827,20 +657,6 @@ function DeckDetailPage({ imageMode }) {
         setImportText("");
     };
 
-    // ── Helpers ──
-
-    const getCardDisplayImage = (item) => {
-        return item.display_url
-            || getImageUri(item.card.image_uris, "art_crop")
-            || getImageUri(item.card.card_faces?.[0]?.image_uris, "art_crop");
-    };
-
-    const getCardFullImage = (item) => {
-        return item.image_url
-            || getImageUri(item.card.image_uris, "png")
-            || getImageUri(item.card.card_faces?.[0]?.image_uris, "png");
-    };
-
     // ── Art picker handlers ──
 
     const handleOpenArtPicker = async () => {
@@ -854,29 +670,10 @@ function DeckDetailPage({ imageMode }) {
         setLoadingPrints(true);
         setShowArtPicker(true);
         try {
-            const res = await apiFetch(`/api/cards/${oracleId}/prints`);
+            const res = await fetchCardPrints(oracleId);
             if (!res.ok) return;
             const data = await res.json();
-            const allPrints = (data.prints || [])
-                .map((p) => ({
-                    id: p.id,
-                    normal: p.image_normal || getImageUri(p.card_faces?.[0]?.image_uris, "normal"),
-                    image_uris: {
-                        small: p.image_small,
-                        normal: p.image_normal,
-                        large: p.image_large,
-                        png: p.image_png,
-                        art_crop: p.image_art_crop,
-                        border_crop: p.image_border_crop,
-                    },
-                    card_faces: p.card_faces,
-                    setName: p.set_name,
-                    set: p.set_code,
-                    rarity: p.rarity,
-                    artist: p.artist,
-                }))
-                .filter((p) => p.normal);
-            setArtPrints(allPrints);
+            setArtPrints(normalizePrints(data));
         } catch {
             showToast(t('fetchVersionsFailed'), "error");
         } finally {
@@ -890,19 +687,28 @@ function DeckDetailPage({ imageMode }) {
             || getImageUri(print.card_faces?.[0]?.image_uris, "art_crop");
         const imageUrl = print.normal || getImageUri(print.card_faces?.[0]?.image_uris, "normal");
         try {
-            const res = await apiFetch(`/api/decks/${id}/cards/${selectedCard.card_id}`, {
-                method: "PATCH",
-                body: { print_id: print.id, image_url: imageUrl, display_url: displayUrl, board: selectedCard.board },
-            });
+            const res = await patchDeckCard(id, selectedCard.card_id, { print_id: print.id, image_url: imageUrl, display_url: displayUrl, board: selectedCard.board });
             if (res.ok) {
                 setCards((prev) =>
                     prev.map((c) =>
                         c.card_id === selectedCard.card_id && c.board === selectedCard.board
-                            ? { ...c, print_id: print.id, image_url: imageUrl, display_url: displayUrl }
+                            ? {
+                                ...c,
+                                print_id: print.id,
+                                image_url: imageUrl,
+                                display_url: displayUrl,
+                                card: { ...c.card, rarity: print.rarity || c.card.rarity, card_faces: print.card_faces || c.card.card_faces },
+                            }
                             : c
                     )
                 );
-                setSelectedCard((prev) => ({ ...prev, print_id: print.id, image_url: imageUrl, display_url: displayUrl }));
+                setSelectedCard((prev) => ({
+                    ...prev,
+                    print_id: print.id,
+                    image_url: imageUrl,
+                    display_url: displayUrl,
+                    card: { ...prev.card, rarity: print.rarity || prev.card.rarity, card_faces: print.card_faces || prev.card.card_faces },
+                }));
                 showToast(t('artChanged'));
             } else {
                 showToast(t('artChangeFailed'), "error");
@@ -916,10 +722,7 @@ function DeckDetailPage({ imageMode }) {
     const handleResetArt = async () => {
         if (!selectedCard) return;
         try {
-            const res = await apiFetch(`/api/decks/${id}/cards/${selectedCard.card_id}`, {
-                method: "PATCH",
-                body: { print_id: null, image_url: null, display_url: null, board: selectedCard.board },
-            });
+            const res = await patchDeckCard(id, selectedCard.card_id, { print_id: null, image_url: null, display_url: null, board: selectedCard.board });
             if (res.ok) {
                 setCards((prev) =>
                     prev.map((c) =>
@@ -941,7 +744,46 @@ function DeckDetailPage({ imageMode }) {
     useEffect(() => {
         setShowArtPicker(false);
         setArtPrints([]);
-    }, [selectedCard?.card_id, selectedCard?.board]);
+        setPreviewFlipped(false);
+    }, [selectedCard?.card_id, selectedCard?.board, selectedCard?.print_id]);
+
+    useEffect(() => {
+        if (!selectedCard?.card_id) return;
+        if (selectedCard.card.card_faces?.length >= 2) return;
+        if (!DOUBLE_FACED_LAYOUTS.has(selectedCard.card.layout)) return;
+
+        let cancelled = false;
+        const hydrateFaces = async () => {
+            try {
+                const res = await fetchCardPrints(selectedCard.card_id);
+                if (!res.ok) return;
+                const data = await res.json();
+                const prints = data.prints || [];
+                const selectedPrint = prints.find((p) => p.id === selectedCard.print_id && p.card_faces?.length >= 2);
+                const fallbackPrint = prints.find((p) => p.card_faces?.length >= 2);
+                const faces = (selectedPrint || fallbackPrint)?.card_faces;
+                if (cancelled || !faces?.length) return;
+
+                setCards((prev) =>
+                    prev.map((c) =>
+                        c.card_id === selectedCard.card_id && c.board === selectedCard.board
+                            ? { ...c, card: { ...c.card, card_faces: faces } }
+                            : c
+                    )
+                );
+                setSelectedCard((prev) => (
+                    prev && prev.card_id === selectedCard.card_id && prev.board === selectedCard.board
+                        ? { ...prev, card: { ...prev.card, card_faces: faces } }
+                        : prev
+                ));
+            } catch {
+                // Ignore; the preview will keep using the card data already loaded.
+            }
+        };
+
+        hydrateFaces();
+        return () => { cancelled = true; };
+    }, [selectedCard?.card_id, selectedCard?.board, selectedCard?.print_id, selectedCard?.card?.card_faces, selectedCard?.card?.layout]);
 
     // Lock body scroll while the mobile bottom sheet is open
     useEffect(() => {
@@ -970,9 +812,11 @@ function DeckDetailPage({ imageMode }) {
     }
     if (!deck) return null;
 
-    const mainboardCount = cards.filter((c) => c.board !== "sideboard").reduce((sum, c) => sum + c.quantity, 0);
-    const sideboardCount = cards.filter((c) => c.board === "sideboard").reduce((sum, c) => sum + c.quantity, 0);
-    const totalCards = mainboardCount + sideboardCount;
+    const mainboardCount = mainCards.reduce((sum, card) => sum + card.quantity, 0);
+    const sideboardCount = sideCards.reduce((sum, card) => sum + card.quantity, 0);
+    const selectedPreview = getPreviewData(selectedCard, previewFlipped);
+    const deckValidation = validateDeck(cards, deck.format, language);
+    const quantityIncreaseGuards = getQuantityIncreaseGuards(cards, deck.format, language);
 
     return (
         <div className="deck-detail">
@@ -1160,631 +1004,116 @@ function DeckDetailPage({ imageMode }) {
                 <div className="no-results"><p>{t('deckEmpty')}</p></div>
             ) : (
                 <div className="deck-body">
-                    {/* Left: Card detail panel */}
-                    <aside
-                        className="deck-preview-panel"
+                    <DeckPreviewPanel
+                        selectedCard={selectedCard}
+                        selectedPreview={selectedPreview}
+                        deck={deck}
+                        language={language}
+                        isOwner={isOwner}
+                        previewFlipped={previewFlipped}
+                        onFlip={() => setPreviewFlipped((v) => !v)}
+                        onOpenArtPicker={handleOpenArtPicker}
                         onMouseEnter={() => { previewLockedRef.current = true; cancelPendingSelect(); }}
                         onMouseLeave={() => { previewLockedRef.current = false; }}
-                    >
-                        {selectedCard ? (
-                            <>
-                                <div className="deck-preview-image" style={{ position: "relative" }}>
-                                    <img src={getCardFullImage(selectedCard)} alt={selectedCard.card.name} />
-                                    {isOwner && selectedCard.card_id && (
-                                        <button
-                                            className="card-art-btn"
-                                            onClick={handleOpenArtPicker}
-                                            title={t('changeArt')}
-                                        >
-                                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                                <rect x="3" y="3" width="7" height="7" />
-                                                <rect x="14" y="3" width="7" height="7" />
-                                                <rect x="3" y="14" width="7" height="7" />
-                                                <rect x="14" y="14" width="7" height="7" />
-                                            </svg>
-                                        </button>
-                                    )}
-                                </div>
-                                <div className="deck-preview-info">
-                                    <h3 className="deck-preview-name">{selectedCard.card.name}</h3>
-                                    {selectedCard.card.mana_cost && (
-                                        <span className="deck-preview-mana">
-                                            {parseManaCost(selectedCard.card.mana_cost).map((sym, idx) =>
-                                                sym.half ? (
-                                                    <span key={idx} className="ms-half">
-                                                        <i className={`ms ${sym.classes}`} aria-hidden="true" />
-                                                    </span>
-                                                ) : (
-                                                    <i key={idx} className={`ms ${sym.classes}`} aria-hidden="true" />
-                                                )
-                                            )}
-                                        </span>
-                                    )}
-                                    <p className="deck-preview-type">{selectedCard.card.type_line}</p>
-                                    {selectedCard.card.oracle_text && (
-                                        <p className="deck-preview-oracle">{parseOracleText(selectedCard.card.oracle_text, React.createElement)}</p>
-                                    )}
-                                    {(selectedCard.card.power || selectedCard.card.toughness) && (
-                                        <p className="deck-preview-pt">{selectedCard.card.power}/{selectedCard.card.toughness}</p>
-                                    )}
-                                    {deck.format && deck.format !== "undefined" && (() => {
-                                        const legality = getCardLegality(selectedCard.card, deck.format);
-                                        return (
-                                            <span className={`legality-chip legality-${legality}`}>
-                                                {getFormatLabel(deck.format, language)}: {legalityLabel(legality, language)}
-                                            </span>
-                                        );
-                                    })()}
-                                </div>
-                            </>
-                        ) : (
-                            <div className="deck-preview-empty">
-                                <p>{t('clickCardDetails')}</p>
-                            </div>
-                        )}
-                    </aside>
+                        t={t}
+                    />
 
-                    {/* Center: Mainboard CSS columns layout */}
-                    <div className="deck-mainboard-section">
-                        <div className="deck-board-header">{t('mainboard')} ({mainboardCount})</div>
-                        <div
-                            className={`deck-groups ${dragOverBoard === 'mainboard' ? 'drag-over' : ''}`}
-                            data-drop-hint={language === 'zh' ? '将全部卡牌加入主卡组' : 'Move all to Mainboard'}
-                            onDragOver={(e) => handleDragOver(e, 'mainboard')}
-                            onDragLeave={handleDragLeave}
-                            onDrop={(e) => handleDrop(e, 'mainboard')}
-                        >
-                            {mainboardGroups.length > 0 && (
-                                <>
-                                    {mainboardGroups.map((group) => (
-                                        <div key={group.type} className="deck-type-group">
-                                            <div className="deck-type-header">
-                                                {TYPE_MANA_CLASSES[group.type] && (
-                                                    <span className="deck-type-icon">
-                                                        <i className={`ms ${TYPE_MANA_CLASSES[group.type]}`} aria-hidden="true" />
-                                                    </span>
-                                                )}
-                                                <span className="deck-type-label">{group.label}</span>
-                                                <span className="deck-type-count">{group.count}</span>
-                                            </div>
-                                            <div className="deck-stack-grid">
-                                                {group.items.map((item) => {
-                                                    const img = getCardDisplayImage(item);
-                                                    const isSelected = selectedCard?.card_id === item.card_id && selectedCard?.board === item.board;
-                                                    const illegal = deck.format && deck.format !== "undefined" && !isCardLegal(item.card, deck.format);
-                                                    return (
-                                                        <div
-                                                            key={item.card_id}
-                                                            className={`deck-stack-card ${isSelected ? "selected" : ""}`}
-                                                            draggable={isOwner}
-                                                            onDragStart={(e) => handleDragStart(e, item)}
-                                                            onDragEnd={handleDragEnd}
-                                                            onContextMenu={(e) => handleContextMenu(e, item)}
-                                                            onTouchStart={(e) => handleTouchStart(e, item)}
-                                                            onTouchMove={handleTouchMove}
-                                                            onTouchEnd={handleTouchEnd}
-                                                            onMouseEnter={() => schedulePreviewSelect(item)}
-                                                            onMouseLeave={cancelPendingSelect}
-                                                            onClick={() => { setSelectedCard(item); setShowMobileSheet(true); }}
-                                                        >
-                                                            {img ? (
-                                                                <img src={img} alt={item.card.name} className="deck-stack-img" loading="lazy" />
-                                                            ) : (
-                                                                <div className="deck-stack-placeholder">{item.card.name}</div>
-                                                            )}
-                                                            <div className="deck-stack-overlay" />
-                                                            <div className="deck-stack-name">
-                                                                {illegal && <span className="deck-illegal-icon" title={t('cardIllegalInFormat')}>!</span>}
-                                                                {item.card.name}
-                                                            </div>
-                                                            {!isOwner ? (
-                                                                <div className="deck-stack-qty">{item.quantity > 1 && `x${item.quantity}`}</div>
-                                                            ) : (
-                                                                <div className="deck-stack-controls">
-                                                                    <button onClick={(e) => { e.stopPropagation(); handleQuantityChange(item.card_id, -1, item.board); }}>-</button>
-                                                                    <span>{item.quantity}</span>
-                                                                    <button onClick={(e) => { e.stopPropagation(); handleQuantityChange(item.card_id, 1, item.board); }}>+</button>
-                                                                </div>
-                                                            )}
-                                                        </div>
-                                                    );
-                                                })}
-                                            </div>
-                                        </div>
-                                    ))}
-                                </>
-                            )}
-                        </div>
+                    <DeckBoard
+                        mainboardGroups={mainboardGroups}
+                        sideboardGroups={sideboardGroups}
+                        mainboardCount={mainboardCount}
+                        sideboardCount={sideboardCount}
+                        selectedCard={selectedCard}
+                        cardIssuesById={deckValidation.cardIssuesById}
+                        quantityIncreaseGuards={quantityIncreaseGuards}
+                        dragOverBoard={dragOverBoard}
+                        isOwner={isOwner}
+                        language={language}
+                        t={t}
+                        handlers={{
+                            onDragStart: handleDragStart,
+                            onDragEnd: handleDragEnd,
+                            onDragOver: handleDragOver,
+                            onDragLeave: handleDragLeave,
+                            onDrop: handleDrop,
+                            onContextMenu: handleContextMenu,
+                            onTouchStart: handleTouchStart,
+                            onTouchMove: handleTouchMove,
+                            onTouchEnd: handleTouchEnd,
+                            onPreviewSelect: schedulePreviewSelect,
+                            onPreviewCancel: cancelPendingSelect,
+                            onSelectCard: (item) => { setSelectedCard(item); setShowMobileSheet(true); },
+                            onQuantityChange: handleQuantityChange,
+                        }}
+                    />
 
-                        {/* Sideboard Section - Below mainboard, separate layout */}
-                        <div className="deck-sideboard-section">
-                            <div className="deck-board-header">{t('sideboard')} ({sideboardCount})</div>
-                            {sideboardGroups.length > 0 ? (
-                                <div
-                                    className={`deck-sideboard-groups ${dragOverBoard === 'sideboard' ? 'drag-over' : ''}`}
-                                    data-drop-hint={language === 'zh' ? '将全部卡牌加入备牌' : 'Move all to Sideboard'}
-                                    onDragOver={(e) => handleDragOver(e, 'sideboard')}
-                                    onDragLeave={handleDragLeave}
-                                    onDrop={(e) => handleDrop(e, 'sideboard')}
-                                >
-                                    {sideboardGroups.map((group) => (
-                                        <div key={`side-${group.type}`} className="deck-type-group">
-                                            <div className="deck-type-header">
-                                                {TYPE_MANA_CLASSES[group.type] && (
-                                                    <span className="deck-type-icon">
-                                                        <i className={`ms ${TYPE_MANA_CLASSES[group.type]}`} aria-hidden="true" />
-                                                    </span>
-                                                )}
-                                                <span className="deck-type-label">{group.label}</span>
-                                                <span className="deck-type-count">{group.count}</span>
-                                            </div>
-                                            <div className="deck-stack-grid">
-                                                {group.items.map((item) => {
-                                                    const img = getCardDisplayImage(item);
-                                                    const isSelected = selectedCard?.card_id === item.card_id && selectedCard?.board === item.board;
-                                                    const illegal = deck.format && deck.format !== "undefined" && !isCardLegal(item.card, deck.format);
-                                                    return (
-                                                        <div
-                                                            key={`side-${item.card_id}`}
-                                                            className={`deck-stack-card ${isSelected ? "selected" : ""}`}
-                                                            draggable={isOwner}
-                                                            onDragStart={(e) => handleDragStart(e, item)}
-                                                            onDragEnd={handleDragEnd}
-                                                            onContextMenu={(e) => handleContextMenu(e, item)}
-                                                            onTouchStart={(e) => handleTouchStart(e, item)}
-                                                            onTouchMove={handleTouchMove}
-                                                            onTouchEnd={handleTouchEnd}
-                                                            onMouseEnter={() => schedulePreviewSelect(item)}
-                                                            onMouseLeave={cancelPendingSelect}
-                                                            onClick={() => { setSelectedCard(item); setShowMobileSheet(true); }}
-                                                        >
-                                                            {img ? (
-                                                                <img src={img} alt={item.card.name} className="deck-stack-img" loading="lazy" />
-                                                            ) : (
-                                                                <div className="deck-stack-placeholder">{item.card.name}</div>
-                                                            )}
-                                                            <div className="deck-stack-overlay" />
-                                                            <div className="deck-stack-name">
-                                                                {illegal && <span className="deck-illegal-icon" title={t('cardIllegalInFormat')}>!</span>}
-                                                                {item.card.name}
-                                                            </div>
-                                                            {!isOwner ? (
-                                                                <div className="deck-stack-qty">{item.quantity > 1 && `x${item.quantity}`}</div>
-                                                            ) : (
-                                                                <div className="deck-stack-controls">
-                                                                    <button onClick={(e) => { e.stopPropagation(); handleQuantityChange(item.card_id, -1, item.board); }}>-</button>
-                                                                    <span>{item.quantity}</span>
-                                                                    <button onClick={(e) => { e.stopPropagation(); handleQuantityChange(item.card_id, 1, item.board); }}>+</button>
-                                                                </div>
-                                                            )}
-                                                        </div>
-                                                    );
-                                                })}
-                                            </div>
-                                        </div>
-                                    ))}
-                                </div>
-                            ) : (
-                                <div
-                                    className={`deck-sideboard-empty drag-drop-zone ${dragOverBoard === 'sideboard' ? 'drag-over' : ''}`}
-                                    onDragOver={(e) => handleDragOver(e, 'sideboard')}
-                                    onDragLeave={handleDragLeave}
-                                    onDrop={(e) => handleDrop(e, 'sideboard')}
-                                >
-                                    <p>{language === 'zh' ? '拖拽卡牌到这里添加到备牌' : 'Drag cards here to add to sideboard'}</p>
-                                </div>
-                            )}
-                        </div>
-                    </div>
-
-                    {/* Right: Deck Analysis */}
-                    {deckAnalysis && (
-                        <aside className="deck-analysis">
-                            <div className={`analysis-card analyze-card ${deck?.analysis ? 'has-analysis' : ''}`}>
-                                {deck?.analysis ? (
-                                    <>
-                                        {isOwner && (
-                                            <div className="analyze-header">
-                                                <button
-                                                    className="analyze-btn analyze-btn-compact"
-                                                    onClick={handleAnalyze}
-                                                    disabled={analyzing}
-                                                >
-                                                    {analyzing ? (
-                                                        <><span className="analyze-spinner" aria-hidden="true" /> {t('analyzing')}</>
-                                                    ) : (
-                                                        <><span className="analyze-sparkle" aria-hidden="true">✦</span> {t('reanalyzeDeck')}</>
-                                                    )}
-                                                </button>
-                                                <div className="analyze-meta">
-                                                    <span>{t('analysisLastUpdated')} {formatRelativeTime(deck.analysis.updated_at)}</span>
-                                                    {new Date(deck.updated_at).getTime() > new Date(deck.analysis.updated_at).getTime() && (
-                                                        <span className="analyze-stale" title={t('analysisDeckChanged')}>● {t('analysisDeckChanged')}</span>
-                                                    )}
-                                                </div>
-                                            </div>
-                                        )}
-                                        {analyzing ? (
-                                            <div className="analyze-skeleton">
-                                                <div className="analyze-skeleton-block" />
-                                                <div className="analyze-skeleton-block" />
-                                                <div className="analyze-skeleton-block" />
-                                            </div>
-                                        ) : (() => {
-                                            const block = deck.analysis[language] || deck.analysis.zh || deck.analysis.en;
-                                            if (!block) return null;
-                                            return (
-                                                <>
-                                                    <p className="analyze-summary">{block.summary}</p>
-                                                    <h4 className="analyze-subtitle">{t('analysisPlaystyle')}</h4>
-                                                    <p className="analyze-text">{block.playstyle}</p>
-                                                    <h4 className="analyze-subtitle">{t('analysisWeaknesses')}</h4>
-                                                    <p className="analyze-text">{block.weaknesses}</p>
-                                                </>
-                                            );
-                                        })()}
-                                    </>
-                                ) : !isOwner ? (
-                                    <p className="analyze-text" style={{ textAlign: "center", color: "var(--text-muted)" }}>
-                                        {t('noAnalysisYet')}
-                                    </p>
-                                ) : (
-                                    <button
-                                        className="analyze-btn analyze-btn-primary"
-                                        onClick={handleAnalyze}
-                                        disabled={analyzing}
-                                    >
-                                        {analyzing ? (
-                                            <><span className="analyze-spinner" aria-hidden="true" /> {t('analyzing')}</>
-                                        ) : (
-                                            <><span className="analyze-sparkle" aria-hidden="true">✦</span> {t('analyzeDeck')}</>
-                                        )}
-                                    </button>
-                                )}
-                            </div>
-
-                            <div className="analysis-card">
-                                <h3 className="analysis-title">{t('manaCurve')}</h3>
-                                <div className="analysis-mana-curve">
-                                    {deckAnalysis.cmcBuckets.map((count, i) => (
-                                        <div key={i} className="mana-curve-col">
-                                            <span className="mana-curve-value">{count || ""}</span>
-                                            <div className="mana-curve-bar-wrapper">
-                                                <div
-                                                    className="mana-curve-bar"
-                                                    style={{ height: `${(count / deckAnalysis.cmcMax) * 100}%` }}
-                                                />
-                                            </div>
-                                            <span className="mana-curve-label">{i < 7 ? i : "7+"}</span>
-                                        </div>
-                                    ))}
-                                </div>
-                            </div>
-
-                            <div className="analysis-card">
-                                <h3 className="analysis-title">{t('colorDistribution')}</h3>
-                                {(() => {
-                                    const COLOR_HEX = { W: "#d5c67a", U: "#0e68ab", B: "#3d3a3a", R: "#d3202a", G: "#00733e" };
-                                    const colors = ["W", "U", "B", "R", "G"];
-                                    const total = deckAnalysis.totalColorCards;
-                                    let cumulative = 0;
-                                    const slices = colors.map((c) => {
-                                        const pct = (deckAnalysis.colorCounts[c] / total) * 100;
-                                        const start = cumulative;
-                                        cumulative += pct;
-                                        return { color: c, pct, start, hex: COLOR_HEX[c] };
-                                    });
-                                    const conicGradient = slices
-                                        .filter((s) => s.pct > 0)
-                                        .map((s) => `${s.hex} ${s.start}% ${s.start + s.pct}%`)
-                                        .join(", ");
-                                    return (
-                                        <div className="analysis-pie-container">
-                                            <div
-                                                className="analysis-pie"
-                                                style={{ background: conicGradient ? `conic-gradient(${conicGradient})` : "var(--bg-secondary)" }}
-                                            />
-                                            <div className="analysis-pie-legend">
-                                                {colors.map((c) => {
-                                                    const count = deckAnalysis.colorCounts[c];
-                                                    if (count === 0) return null;
-                                                    return (
-                                                        <div key={c} className="pie-legend-item">
-                                                            <span className={`analysis-color-dot mana-${c}`} />
-                                                            <span className="pie-legend-label">{deckAnalysis.colorLabels[c]}</span>
-                                                            <span className="pie-legend-value">{count}</span>
-                                                        </div>
-                                                    );
-                                                })}
-                                            </div>
-                                        </div>
-                                    );
-                                })()}
-                            </div>
-
-                            <div className="analysis-card">
-                                <h3 className="analysis-title">{t('cardTypes')}</h3>
-                                <div className="analysis-bars">
-                                    {groupedCards.map((group) => (
-                                        <div key={group.type} className="analysis-bar-row">
-                                            <span className="analysis-bar-label">{group.label}</span>
-                                            <div className="analysis-bar-track">
-                                                <div
-                                                    className="analysis-bar-fill type-bar"
-                                                    style={{ width: `${(group.count / totalCards) * 100}%` }}
-                                                />
-                                            </div>
-                                            <span className="analysis-bar-value">{group.count}</span>
-                                        </div>
-                                    ))}
-                                </div>
-                            </div>
-
-                            <div className="analysis-card">
-                                <h3 className="analysis-title">{t('rarityDistribution')}</h3>
-                                <div className="analysis-bars">
-                                    {deckAnalysis.rarityOrder.map((r) => {
-                                        const count = deckAnalysis.rarityCounts[r] || 0;
-                                        const totalRarity = cards.reduce((s, c) => s + c.quantity, 0) || 1;
-                                        return (
-                                            <div key={r} className="analysis-bar-row">
-                                                <span className="analysis-bar-label">{deckAnalysis.rarityLabels[r]}</span>
-                                                <div className="analysis-bar-track">
-                                                    <div
-                                                        className={`analysis-bar-fill rarity-bar-${r}`}
-                                                        style={{ width: `${(count / totalRarity) * 100}%` }}
-                                                    />
-                                                </div>
-                                                <span className="analysis-bar-value">{count}</span>
-                                            </div>
-                                        );
-                                    })}
-                                </div>
-                            </div>
-                        </aside>
-                    )}
+                    <DeckAnalysisPanel
+                        deck={deck}
+                        deckAnalysis={deckAnalysis}
+                        groupedCards={groupedCards}
+                        language={language}
+                        isOwner={isOwner}
+                        analyzing={analyzing}
+                        onAnalyze={handleAnalyze}
+                        formatRelativeTime={formatRelativeTime}
+                        t={t}
+                    />
                 </div>
             )}
 
-            {/* Art Picker Modal */}
-            {showArtPicker && createPortal(
-                <>
-                    <div className="art-picker-backdrop" onClick={() => setShowArtPicker(false)} />
-                    <div className="art-picker">
-                        <div className="art-picker-header">
-                            <span>{t('selectArtVersion')} ({artPrints.length})</span>
-                            <div className="art-picker-header-actions">
-                                {selectedCard?.image_url && (
-                                    <button className="art-picker-reset" onClick={handleResetArt}>{t('resetDefaultArt')}</button>
-                                )}
-                                <button className="art-picker-close" onClick={() => setShowArtPicker(false)}>&times;</button>
-                            </div>
-                        </div>
-                        {loadingPrints ? (
-                            <div className="art-picker-loading">{t('loadingVersions')}</div>
-                        ) : (
-                            <div className="art-picker-grid">
-                                {(() => {
-                                    const currentImageUrl = selectedCard?.image_url
-                                        || getImageUri(selectedCard?.card.image_uris, "normal")
-                                        || getImageUri(selectedCard?.card.card_faces?.[0]?.image_uris, "normal");
-                                    return artPrints.map((p) => {
-                                        const isSelected = currentImageUrl === p.normal;
-                                        return (
-                                            <div
-                                                key={p.id}
-                                                className={`art-picker-item ${isSelected ? "selected" : ""}`}
-                                                onClick={() => handleSelectArt(p)}
-                                                title={`${p.setName} - ${p.artist}`}
-                                            >
-                                                <img src={p.normal} alt={p.setName} loading="lazy" />
-                                                <span className="art-picker-label">{p.setName}</span>
-                                                {isSelected && (
-                                                    <span className="art-picker-current-badge">
-                                                        {language === 'zh' ? '当前' : 'Current'}
-                                                    </span>
-                                                )}
-                                            </div>
-                                        );
-                                    });
-                                })()}
-                            </div>
-                        )}
-                    </div>
-                </>,
-                document.body
+            {showArtPicker && (
+                <ArtPickerModal
+                    selectedCard={selectedCard}
+                    artPrints={artPrints}
+                    loadingPrints={loadingPrints}
+                    language={language}
+                    onClose={() => setShowArtPicker(false)}
+                    onResetArt={handleResetArt}
+                    onSelectArt={handleSelectArt}
+                    t={t}
+                />
             )}
 
-            {/* Mobile Bottom Sheet */}
-            {showMobileSheet && selectedCard && createPortal(
-                <>
-                    <div className="mobile-sheet-backdrop" onClick={() => setShowMobileSheet(false)} />
-                    <div className="mobile-sheet" ref={sheetRef}>
-                        <div
-                            className="mobile-sheet-header"
-                            onTouchStart={(e) => {
-                                sheetDragStartY.current = e.touches[0].clientY;
-                                sheetDragDelta.current = 0;
-                                if (sheetRef.current) sheetRef.current.style.transition = 'none';
-                            }}
-                            onTouchMove={(e) => {
-                                const dy = e.touches[0].clientY - sheetDragStartY.current;
-                                if (dy > 0 && sheetRef.current) {
-                                    sheetRef.current.style.transform = `translateY(${dy}px)`;
-                                    sheetDragDelta.current = dy;
-                                }
-                            }}
-                            onTouchEnd={() => {
-                                if (sheetRef.current) sheetRef.current.style.transition = '';
-                                if (sheetDragDelta.current > 120) {
-                                    setShowMobileSheet(false);
-                                }
-                                if (sheetRef.current) sheetRef.current.style.transform = '';
-                                sheetDragDelta.current = 0;
-                            }}
-                        >
-                            <div className="mobile-sheet-handle" />
-                            <button
-                                className="mobile-sheet-close"
-                                onClick={() => setShowMobileSheet(false)}
-                                aria-label={t('close') || 'Close'}
-                            >
-                                &times;
-                            </button>
-                        </div>
-                        <div className="mobile-sheet-body">
-                            <div className="mobile-sheet-image">
-                                <img src={getCardFullImage(selectedCard)} alt={selectedCard.card.name} />
-                                {isOwner && selectedCard.card_id && (
-                                    <button className="card-art-btn" onClick={handleOpenArtPicker} title={t('changeArt')}>
-                                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                            <rect x="3" y="3" width="7" height="7" />
-                                            <rect x="14" y="3" width="7" height="7" />
-                                            <rect x="3" y="14" width="7" height="7" />
-                                            <rect x="14" y="14" width="7" height="7" />
-                                        </svg>
-                                    </button>
-                                )}
-                            </div>
-                            <div className="mobile-sheet-info">
-                                <h3 className="deck-preview-name">{selectedCard.card.name}</h3>
-                                {selectedCard.card.mana_cost && (
-                                    <span className="deck-preview-mana">
-                                        {parseManaCost(selectedCard.card.mana_cost).map((sym, idx) =>
-                                            sym.half ? (
-                                                <span key={idx} className="ms-half">
-                                                    <i className={`ms ${sym.classes}`} aria-hidden="true" />
-                                                </span>
-                                            ) : (
-                                                <i key={idx} className={`ms ${sym.classes}`} aria-hidden="true" />
-                                            )
-                                        )}
-                                    </span>
-                                )}
-                                <p className="deck-preview-type">{selectedCard.card.type_line}</p>
-                                {selectedCard.card.oracle_text && (
-                                    <p className="deck-preview-oracle">{parseOracleText(selectedCard.card.oracle_text, React.createElement)}</p>
-                                )}
-                                {(selectedCard.card.power || selectedCard.card.toughness) && (
-                                    <p className="deck-preview-pt">{selectedCard.card.power}/{selectedCard.card.toughness}</p>
-                                )}
-                                {deck.format && deck.format !== "undefined" && (() => {
-                                    const legality = getCardLegality(selectedCard.card, deck.format);
-                                    return (
-                                        <span className={`legality-chip legality-${legality}`}>
-                                            {getFormatLabel(deck.format, language)}: {legalityLabel(legality, language)}
-                                        </span>
-                                    );
-                                })()}
-                            </div>
-                        </div>
-                    </div>
-                </>,
-                document.body
+            {showMobileSheet && selectedCard && (
+                <MobileDeckSheet
+                    selectedCard={selectedCard}
+                    selectedPreview={selectedPreview}
+                    deck={deck}
+                    language={language}
+                    isOwner={isOwner}
+                    previewFlipped={previewFlipped}
+                    onFlip={() => setPreviewFlipped((v) => !v)}
+                    onClose={() => setShowMobileSheet(false)}
+                    onOpenArtPicker={handleOpenArtPicker}
+                    t={t}
+                />
             )}
 
-            {/* Context menu (right-click) */}
-            {contextMenu && createPortal(
-                <div
-                    className="context-menu"
-                    style={{ left: contextMenu.x, top: contextMenu.y }}
-                    onClick={(e) => e.stopPropagation()}
-                >
-                    {contextMenu.item.board === 'mainboard' ? (
-                        <div className="context-menu-item" onClick={() => handleContextMenuMoveOne('sideboard')}>
-                            {language === 'zh' ? '发送一张到备牌' : 'Send 1 to Sideboard'}
-                        </div>
-                    ) : (
-                        <div className="context-menu-item" onClick={() => handleContextMenuMoveOne('mainboard')}>
-                            {language === 'zh' ? '发送一张到主卡组' : 'Send 1 to Mainboard'}
-                        </div>
-                    )}
-                </div>,
-                document.body
+            <DeckContextMenu
+                contextMenu={contextMenu}
+                language={language}
+                onMoveOne={handleContextMenuMoveOne}
+            />
+
+            {showMovePanel && touchDragCard && (
+                <MovePanel
+                    card={touchDragCard}
+                    language={language}
+                    onMove={handleMoveCard}
+                    onClose={handleMovePanelClose}
+                />
             )}
 
-            {/* Touch move panel for mobile */}
-            {showMovePanel && touchDragCard && createPortal(
-                <>
-                    <div className="move-panel-backdrop" onClick={handleMovePanelClose} />
-                    <div className="move-panel">
-                        <div className="move-panel-header">
-                            <div className="move-panel-handle" />
-                            <button className="move-panel-close" onClick={handleMovePanelClose}>&times;</button>
-                        </div>
-                        <div className="move-panel-card-info">
-                            <span className="move-panel-card-name">{touchDragCard.card.name}</span>
-                            <span className="move-panel-card-qty">{touchDragCard.quantity}x</span>
-                        </div>
-                        <div className="move-panel-options">
-                            {touchDragCard.board === 'mainboard' ? (
-                                <>
-                                    <button
-                                        className="move-panel-option active"
-                                        onClick={() => { handleMoveCard(touchDragCard.card_id, 'mainboard', 'sideboard', 'all'); handleMovePanelClose(); }}
-                                    >
-                                        <span className="move-panel-option-icon">📦</span>
-                                        <span className="move-panel-option-label">{language === 'zh' ? '全部移动到备牌' : 'Move all to Sideboard'}</span>
-                                    </button>
-                                    <button
-                                        className="move-panel-option active"
-                                        onClick={() => { handleMoveCard(touchDragCard.card_id, 'mainboard', 'sideboard', 1); handleMovePanelClose(); }}
-                                    >
-                                        <span className="move-panel-option-icon">📤</span>
-                                        <span className="move-panel-option-label">{language === 'zh' ? '移动一张到备牌' : 'Move 1 to Sideboard'}</span>
-                                    </button>
-                                </>
-                            ) : (
-                                <>
-                                    <button
-                                        className="move-panel-option active"
-                                        onClick={() => { handleMoveCard(touchDragCard.card_id, 'sideboard', 'mainboard', 'all'); handleMovePanelClose(); }}
-                                    >
-                                        <span className="move-panel-option-icon">📚</span>
-                                        <span className="move-panel-option-label">{language === 'zh' ? '全部移动到主卡组' : 'Move all to Mainboard'}</span>
-                                    </button>
-                                    <button
-                                        className="move-panel-option active"
-                                        onClick={() => { handleMoveCard(touchDragCard.card_id, 'sideboard', 'mainboard', 1); handleMovePanelClose(); }}
-                                    >
-                                        <span className="move-panel-option-icon">📤</span>
-                                        <span className="move-panel-option-label">{language === 'zh' ? '移动一张到主卡组' : 'Move 1 to Mainboard'}</span>
-                                    </button>
-                                </>
-                            )}
-                        </div>
-                        <button className="move-panel-cancel" onClick={handleMovePanelClose}>
-                            {language === 'zh' ? '取消' : 'Cancel'}
-                        </button>
-                    </div>
-                </>,
-                document.body
-            )}
-
-            {/* Import Modal */}
             {showImportModal && (
-                <div className="modal-overlay" onClick={handleImportCancel}>
-                    <div className="modal-content import-modal" onClick={(e) => e.stopPropagation()}>
-                        <div className="modal-header">
-                            <h3>{t('importDecklist')}</h3>
-                            <button className="modal-close" onClick={handleImportCancel}>&times;</button>
-                        </div>
-                        <textarea
-                            className="import-textarea"
-                            value={importText}
-                            onChange={(e) => setImportText(e.target.value)}
-                            placeholder={t('importPlaceholder')}
-                            autoFocus
-                            rows={12}
-                        />
-                        <div className="modal-actions">
-                            <button className="btn-secondary" onClick={handleImportCancel}>{t('cancel')}</button>
-                            <button className="btn-accent" onClick={handleImportSubmit} disabled={importing || !importText.trim()}>
-                                {importing ? `${language === 'zh' ? '导入中...' : 'Importing...'}` : `${language === 'zh' ? '导入' : 'Import'}`}
-                            </button>
-                        </div>
-                    </div>
-                </div>
+                <ImportDeckModal
+                    importText={importText}
+                    importing={importing}
+                    language={language}
+                    onTextChange={setImportText}
+                    onSubmit={handleImportSubmit}
+                    onCancel={handleImportCancel}
+                    t={t}
+                />
             )}
         </div>
     );

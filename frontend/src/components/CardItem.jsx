@@ -30,9 +30,7 @@ function CardItem({ card, imageMode, decks: propDecks }) {
   const doubleFacedLayouts = new Set(["transform", "modal_dfc", "double_faced_token", "reversible_card"]);
   const isDoubleFaced =
     selectedCardFaces.length >= 2 &&
-    (doubleFacedLayouts.has(card.layout) ||
-      selectedCardFaces[0]?.image_uris ||
-      selectedCardFaces[1]?.image_uris);
+    doubleFacedLayouts.has(card.layout);
 
   let frontImageUri = "";
   let backImageUri = "";
@@ -90,23 +88,29 @@ function CardItem({ card, imageMode, decks: propDecks }) {
       if (!res.ok) return;
       const data = await res.json();
       const allPrints = (data.prints || [])
-        .map((p) => ({
-          id: p.id,
-          normal: p.image_normal || getImageUri(p.card_faces?.[0]?.image_uris, "normal"),
-          image_uris: {
-            small: p.image_small,
-            normal: p.image_normal,
-            large: p.image_large,
-            png: p.image_png,
-            art_crop: p.image_art_crop,
-            border_crop: p.image_border_crop,
-          },
-          card_faces: p.card_faces,
-          setName: p.set_name,
-          set: p.set_code,
-          rarity: p.rarity,
-          artist: p.artist,
-        }))
+        .map((p) => {
+          const collectorNumber = p.image_collector_number;
+          const imageSetName = p.image_set_name;
+          return {
+            id: p.id,
+            normal: p.image_normal || getImageUri(p.card_faces?.[0]?.image_uris, "normal"),
+            image_uris: {
+              small: p.image_small,
+              normal: p.image_normal,
+              large: p.image_large,
+              png: p.image_png,
+              art_crop: p.image_art_crop,
+              border_crop: p.image_border_crop,
+            },
+            card_faces: p.card_faces,
+            setName: imageSetName,
+            set: p.image_set_code,
+            collectorNumber,
+            label: `${imageSetName}${collectorNumber ? ` #${collectorNumber}` : ""}`,
+            rarity: p.rarity,
+            artist: p.artist,
+          };
+        })
         .filter((p) => p.normal);
       setPrints(allPrints);
     } catch {
@@ -339,10 +343,10 @@ function CardItem({ card, imageMode, decks: propDecks }) {
                     key={p.id}
                     className={`art-picker-item ${selectedArt?.id === p.id ? "selected" : ""}`}
                     onClick={() => handleSelectArt(p)}
-                    title={`${p.setName} - ${p.artist}`}
+                    title={`${p.label} - ${p.artist}`}
                   >
-                    <img src={p.normal} alt={p.setName} loading="lazy" />
-                    <span className="art-picker-label">{p.setName}</span>
+                    <img src={p.normal} alt={p.label} loading="lazy" />
+                    <span className="art-picker-label">{p.label}</span>
                   </div>
                 ))}
               </div>

@@ -5,7 +5,7 @@ from collections.abc import Callable
 
 import requests
 
-from .db import get_pool
+from .repositories.database import get_pool
 
 logger = logging.getLogger(__name__)
 
@@ -166,26 +166,49 @@ async def sync_abilities_incremental(status_callback: StatusCallback = None) -> 
 
 async def backfill_missing_embeddings(status_callback: StatusCallback = None) -> None:
     pool = await get_pool()
+    card_total = await pool.fetchval("SELECT COUNT(*) FROM cards")
     card_count = await pool.fetchval("SELECT COUNT(*) FROM cards WHERE name_embedding IS NULL")
     ability_count = await pool.fetchval("SELECT COUNT(*) FROM keyword_abilities WHERE embedding IS NULL")
+    effect_total = await pool.fetchval("SELECT COUNT(*) FROM card_effects")
+    effect_count = await pool.fetchval("SELECT COUNT(*) FROM card_effects WHERE embedding IS NULL")
+    should_sync_effect_chunks = card_total > 0 and effect_total == 0
 
-    if card_count == 0 and ability_count == 0:
+    if card_count == 0 and ability_count == 0 and effect_count == 0 and not should_sync_effect_chunks:
         logger.info("All embeddings present, nothing to backfill.")
         return
 
-    logger.info("Backfilling embeddings: %d cards, %d abilities missing.", card_count, ability_count)
+    logger.info(
+        "Backfilling embeddings: %d cards, %d effect chunks missing (%d existing), %d abilities missing.",
+        card_count,
+        effect_count,
+        effect_total,
+        ability_count,
+    )
 
     def _do_backfill() -> None:
-        from scripts.seed_pg import generate_ability_embeddings, generate_card_embeddings, get_conn
+        from scripts.seed_pg import (
+            generate_ability_embeddings,
+            generate_card_embeddings,
+            generate_effect_embeddings,
+            get_conn,
+            sync_card_effect_chunks,
+        )
 
         conn = get_conn()
         try:
+            _emit_status(status_callback, "正在同步卡牌效果分段...")
+            sync_card_effect_chunks(conn)
             if card_count > 0:
                 _emit_status(status_callback, "正在补全卡牌 embedding...")
                 generate_card_embeddings(
                     conn,
                     on_progress=_make_progress_callback(status_callback, "正在补全卡牌 embedding"),
                 )
+            _emit_status(status_callback, "正在补全效果分段 embedding...")
+            generate_effect_embeddings(
+                conn,
+                on_progress=_make_progress_callback(status_callback, "正在补全效果分段 embedding"),
+            )
             if ability_count > 0:
                 _emit_status(status_callback, "正在补全异能 embedding...")
                 generate_ability_embeddings(conn)
@@ -197,11 +220,12 @@ async def backfill_missing_embeddings(status_callback: StatusCallback = None) ->
 
 
 async def full_reseed(with_embeddings: bool = True, status_callback: StatusCallback = None) -> int:
-    """完全重新导入卡牌数据（不影响关键词数据）。使用 unique_artwork 支持多版本。"""
+    """完全重新导入卡牌数据（不影响关键词数据）。使用 all_cards 支持完整印刷版本。"""
     def _do_reseed() -> None:
         from scripts.seed_pg import (
             create_schema,
             generate_card_embeddings,
+            generate_effect_embeddings,
             get_conn,
             insert_cards_and_prints,
         )
@@ -226,6 +250,11 @@ async def full_reseed(with_embeddings: bool = True, status_callback: StatusCallb
                     conn,
                     on_progress=_make_progress_callback(status_callback, "正在生成卡牌 embedding"),
                 )
+                _emit_status(status_callback, "正在生成效果分段 embedding...")
+                generate_effect_embeddings(
+                    conn,
+                    on_progress=_make_progress_callback(status_callback, "正在生成效果分段 embedding"),
+                )
             else:
                 logger.info("[reseed] Skipping embedding generation.")
         finally:
@@ -240,10 +269,17 @@ async def full_reseed(with_embeddings: bool = True, status_callback: StatusCallb
 
 async def regenerate_embeddings(status_callback: StatusCallback = None) -> None:
     def _do_reembed() -> None:
-        from scripts.seed_pg import generate_ability_embeddings, generate_card_embeddings, get_conn
+        from scripts.seed_pg import (
+            generate_ability_embeddings,
+            generate_card_embeddings,
+            generate_effect_embeddings,
+            get_conn,
+            sync_card_effect_chunks,
+        )
 
         conn = get_conn()
         try:
+            sync_card_effect_chunks(conn)
             logger.info("[reembed] Clearing existing embeddings...")
             with conn.cursor() as cur:
                 cur.execute("""
@@ -252,6 +288,7 @@ async def regenerate_embeddings(status_callback: StatusCallback = None) -> None:
                         type_line_embedding = NULL,
                         oracle_text_embedding = NULL
                 """)
+                cur.execute("UPDATE card_effects SET embedding = NULL")
                 cur.execute("UPDATE keyword_abilities SET embedding = NULL")
             conn.commit()
 
@@ -259,6 +296,11 @@ async def regenerate_embeddings(status_callback: StatusCallback = None) -> None:
             generate_card_embeddings(
                 conn,
                 on_progress=_make_progress_callback(status_callback, "正在生成卡牌 embedding"),
+            )
+            _emit_status(status_callback, "正在生成效果分段 embedding...")
+            generate_effect_embeddings(
+                conn,
+                on_progress=_make_progress_callback(status_callback, "正在生成效果分段 embedding"),
             )
             _emit_status(status_callback, "正在生成异能 embedding...")
             generate_ability_embeddings(conn)
@@ -270,12 +312,14 @@ async def regenerate_embeddings(status_callback: StatusCallback = None) -> None:
 
 
 def _get_scryfall_bulk_updated_at() -> str | None:
-    """Fetch the updated_at timestamp of the unique_artwork bulk data from Scryfall."""
+    """Fetch the updated_at timestamp of the configured Scryfall bulk data."""
     try:
+        from app.data_loader import BULK_DATA_TYPE
+
         resp = requests.get("https://api.scryfall.com/bulk-data", timeout=15)
         resp.raise_for_status()
         for entry in resp.json()["data"]:
-            if entry["type"] == "unique_artwork":
+            if entry["type"] == BULK_DATA_TYPE:
                 return entry["updated_at"]
     except Exception as e:
         logger.warning("[sync] Failed to check Scryfall bulk data: %s", e)
@@ -283,7 +327,7 @@ def _get_scryfall_bulk_updated_at() -> str | None:
 
 
 async def incremental_sync(status_callback: StatusCallback = None, force: bool = False, skip_embeddings: bool = False) -> dict:
-    """Download Scryfall unique_artwork data, upsert cards and prints.
+    """Download Scryfall all_cards data, upsert cards and prints.
 
     If force=True, skip the timestamp check and always sync.
     If skip_embeddings=True, don't regenerate embeddings (only update card data).
@@ -319,7 +363,13 @@ async def incremental_sync(status_callback: StatusCallback = None, force: bool =
 
     try:
         def _do_sync() -> None:
-            from scripts.seed_pg import generate_ability_embeddings, generate_card_embeddings, get_conn, insert_cards_and_prints
+            from scripts.seed_pg import (
+                generate_ability_embeddings,
+                generate_card_embeddings,
+                generate_effect_embeddings,
+                get_conn,
+                insert_cards_and_prints,
+            )
 
             conn = get_conn()
             try:
@@ -355,6 +405,11 @@ async def incremental_sync(status_callback: StatusCallback = None, force: bool =
                     generate_card_embeddings(
                         conn,
                         on_progress=_make_progress_callback(status_callback, "正在生成 embedding"),
+                    )
+                    _emit_status(status_callback, "正在生成效果分段 embedding...")
+                    generate_effect_embeddings(
+                        conn,
+                        on_progress=_make_progress_callback(status_callback, "正在生成效果分段 embedding"),
                     )
 
                     _emit_status(status_callback, "正在刷新规则 702 关键词...")

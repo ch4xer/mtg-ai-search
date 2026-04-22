@@ -1,7 +1,7 @@
 import { useState, useRef } from "react";
 import { useLanguage } from "../contexts/LanguageContext.jsx";
 
-function SearchBar({ onSearch, loading }) {
+function SearchBar({ onSearch, loading, rightActions = null }) {
   const { t } = useLanguage();
   const [query, setQuery] = useState("");
   const inputRef = useRef(null);
@@ -32,6 +32,7 @@ function SearchBar({ onSearch, loading }) {
             </svg>
           )}
         </button>
+        {rightActions}
       </div>
     </form>
   );

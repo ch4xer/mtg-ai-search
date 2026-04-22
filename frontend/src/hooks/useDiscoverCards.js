@@ -9,7 +9,6 @@ export function useDiscoverCards({ enabled = true } = {}) {
   const [rarity, setRarity] = useState("");
   const [selectedKeywords, setSelectedKeywords] = useState(new Set());
   const [selectedSubtypes, setSelectedSubtypes] = useState(new Set());
-  const [includePlaytest, setIncludePlaytest] = useState(false);
   const [cmcMin, setCmcMin] = useState("");
   const [cmcMax, setCmcMax] = useState("");
   const [powerMin, setPowerMin] = useState("");
@@ -46,7 +45,6 @@ export function useDiscoverCards({ enabled = true } = {}) {
     if (rarity) body.rarities = [rarity];
     if (selectedKeywords.size > 0) body.keywords = [...selectedKeywords];
     if (selectedSubtypes.size > 0) body.subtypes = [...selectedSubtypes];
-    if (includePlaytest) body.include_playtest = true;
     if (cmcMin !== "") body.cmc_min = parseFloat(cmcMin);
     if (cmcMax !== "") body.cmc_max = parseFloat(cmcMax);
     if (powerMin !== "") body.power_min = parseFloat(powerMin);
@@ -54,7 +52,7 @@ export function useDiscoverCards({ enabled = true } = {}) {
     if (toughnessMin !== "") body.toughness_min = parseFloat(toughnessMin);
     if (toughnessMax !== "") body.toughness_max = parseFloat(toughnessMax);
     return body;
-  }, [q, colors, types, rarity, selectedKeywords, selectedSubtypes, includePlaytest, cmcMin, cmcMax, powerMin, powerMax, toughnessMin, toughnessMax]);
+  }, [q, colors, types, rarity, selectedKeywords, selectedSubtypes, cmcMin, cmcMax, powerMin, powerMax, toughnessMin, toughnessMax]);
 
   const fetchResults = useCallback(async (pageNum) => {
     if (abortRef.current) abortRef.current.abort();
@@ -113,7 +111,6 @@ export function useDiscoverCards({ enabled = true } = {}) {
     setSelectedKeywords(new Set());
     setSelectedSubtypes(new Set());
     setSubtypeSearch("");
-    setIncludePlaytest(false);
     setCmcMin("");
     setCmcMax("");
     setPowerMin("");
@@ -132,9 +129,17 @@ export function useDiscoverCards({ enabled = true } = {}) {
   const subtypeFacets = (facets.subtypes || []).filter(
     (st) => st.name.toLowerCase().includes(subtypeSearch.toLowerCase())
   );
-  const hasFilters = q || colors.size || types.size || rarity || selectedKeywords.size || selectedSubtypes.size
-    || cmcMin !== "" || cmcMax !== "" || powerMin !== "" || powerMax !== ""
-    || toughnessMin !== "" || toughnessMax !== "";
+  const activeFilterCount = [
+    colors.size > 0,
+    types.size > 0,
+    selectedSubtypes.size > 0,
+    Boolean(rarity),
+    cmcMin !== "" || cmcMax !== "",
+    powerMin !== "" || powerMax !== "",
+    toughnessMin !== "" || toughnessMax !== "",
+    selectedKeywords.size > 0,
+  ].filter(Boolean).length;
+  const hasFilters = Boolean(q.trim() || activeFilterCount > 0);
 
   return {
     q, setQ,
@@ -143,7 +148,6 @@ export function useDiscoverCards({ enabled = true } = {}) {
     rarity, setRarity,
     selectedKeywords, setSelectedKeywords,
     selectedSubtypes, setSelectedSubtypes,
-    includePlaytest, setIncludePlaytest,
     cmcMin, setCmcMin,
     cmcMax, setCmcMax,
     powerMin, setPowerMin,
@@ -166,6 +170,7 @@ export function useDiscoverCards({ enabled = true } = {}) {
     keywordFacets: facets.keywords || [],
     allKeywords,
     hasFilters,
+    activeFilterCount,
     totalPages: Math.ceil(total / PAGE_SIZE),
   };
 }

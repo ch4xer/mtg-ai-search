@@ -376,10 +376,10 @@ async def remove_card_from_deck(deck_id: str, card_id: str):
 - [ ] **Step 3: Verify imports work**
 
 ```bash
-cd backend && uv run python -c "from app.db import create_user, get_user_by_username, create_deck, get_user_decks, get_deck, update_deck, delete_deck, get_deck_cards, add_card_to_deck, remove_card_from_deck; print('db functions OK')"
+cd backend && uv run python -c "from app.repositories.users import create_user, get_user_by_username; from app.repositories.decks import create_deck, get_user_decks, get_deck, update_deck, delete_deck, get_deck_cards, add_card_to_deck, remove_card_from_deck; print('repository functions OK')"
 ```
 
-Expected: "db functions OK"
+Expected: "repository functions OK"
 
 - [ ] **Step 4: Commit**
 
@@ -413,18 +413,17 @@ from .auth import (
     hash_password,
     verify_password,
 )
-from .db import (
+from .repositories.decks import (
     add_card_to_deck,
     create_deck,
-    create_user,
     delete_deck,
     get_deck,
     get_deck_cards,
-    get_user_by_username,
     get_user_decks,
     remove_card_from_deck,
     update_deck,
 )
+from .repositories.users import create_user, get_user_by_username
 
 # ── Auth Router ─────────────────────────────────────────────────────────
 

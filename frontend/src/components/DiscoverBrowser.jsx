@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from "react";
 import CardGrid from "./CardGrid.jsx";
 import { useDiscoverCards } from "../hooks/useDiscoverCards.js";
 import { useUserDecks } from "../hooks/useUserDecks.js";
@@ -40,6 +41,9 @@ const RARITY_OPTIONS_ZH = [
 function DiscoverBrowser({ imageMode, onToggleImageMode, enabled = true }) {
   const { t, language } = useLanguage();
   const decks = useUserDecks();
+  const [keywordsOpen, setKeywordsOpen] = useState(false);
+  const keywordsRef = useRef(null);
+  const filtersRef = useRef(null);
   const {
     q, setQ,
     colors, setColors,
@@ -47,7 +51,6 @@ function DiscoverBrowser({ imageMode, onToggleImageMode, enabled = true }) {
     rarity, setRarity,
     selectedKeywords, setSelectedKeywords,
     selectedSubtypes, setSelectedSubtypes,
-    includePlaytest, setIncludePlaytest,
     cmcMin, setCmcMin,
     cmcMax, setCmcMax,
     powerMin, setPowerMin,
@@ -70,63 +73,120 @@ function DiscoverBrowser({ imageMode, onToggleImageMode, enabled = true }) {
     keywordFacets,
     allKeywords,
     hasFilters,
+    activeFilterCount,
     totalPages,
   } = useDiscoverCards({ enabled });
 
   const TYPE_OPTIONS = language === 'zh' ? TYPE_OPTIONS_ZH : TYPE_OPTIONS_EN;
   const RARITY_OPTIONS = language === 'zh' ? RARITY_OPTIONS_ZH : RARITY_OPTIONS_EN;
+  const selectedKeywordCount = selectedKeywords.size;
+  const keywordSummary = selectedKeywordCount
+    ? (language === "zh" ? `已选择 ${selectedKeywordCount} 个能力` : `${selectedKeywordCount} abilities selected`)
+    : t('addAbility');
 
-  const handleKeywordSelect = (e) => {
-    const value = e.target.value;
-    if (value && !selectedKeywords.has(value)) {
-      setSelectedKeywords(new Set([...selectedKeywords, value]));
-    }
-    e.target.value = "";
-  };
-
-  const removeKeyword = (keyword) => {
-    const next = new Set(selectedKeywords);
-    next.delete(keyword);
-    setSelectedKeywords(next);
+  const toggleKeyword = (keyword) => {
+    setSelectedKeywords((prev) => {
+      const next = new Set(prev);
+      if (next.has(keyword)) {
+        next.delete(keyword);
+      } else {
+        next.add(keyword);
+      }
+      return next;
+    });
   };
 
   // Use allKeywords for the dropdown options
   const keywordOptions = allKeywords.length > 0 ? allKeywords : keywordFacets.map((kw) => kw.name);
 
+  useEffect(() => {
+    if (!keywordsOpen) return;
+
+    const closeOnOutsideClick = (event) => {
+      if (!keywordsRef.current?.contains(event.target)) {
+        setKeywordsOpen(false);
+      }
+    };
+
+    const closeOnEscape = (event) => {
+      if (event.key === "Escape") {
+        setKeywordsOpen(false);
+      }
+    };
+
+    document.addEventListener("pointerdown", closeOnOutsideClick);
+    document.addEventListener("keydown", closeOnEscape);
+
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutsideClick);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [keywordsOpen]);
+
+  useEffect(() => {
+    if (!filtersOpen) return;
+
+    const closeOnOutsideClick = (event) => {
+      if (!filtersRef.current?.contains(event.target)) {
+        setFiltersOpen(false);
+      }
+    };
+
+    const closeOnEscape = (event) => {
+      if (event.key === "Escape") {
+        setFiltersOpen(false);
+      }
+    };
+
+    document.addEventListener("pointerdown", closeOnOutsideClick);
+    document.addEventListener("keydown", closeOnEscape);
+
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutsideClick);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [filtersOpen, setFiltersOpen]);
+
   return (
     <>
-      <div className="discover-search-bar">
-        <div className="discover-search-row">
-          <input
-            type="text"
-            className="discover-search-input"
-            placeholder={t('searchPlaceholderDiscover')}
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter") handleSearch(); }}
-          />
-          <button className="discover-search-go" onClick={handleSearch} disabled={loading}>
-            {loading ? "..." : (
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                <circle cx="11" cy="11" r="8" />
-                <line x1="21" y1="21" x2="16.65" y2="16.65" />
+      <div className="discover-filter-popover" ref={filtersRef}>
+        <div className="discover-search-bar">
+          <div className="discover-search-row">
+            <input
+              type="text"
+              className="discover-search-input"
+              placeholder={t('searchPlaceholderDiscover')}
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") handleSearch(); }}
+            />
+            <button className="discover-search-go" onClick={handleSearch} disabled={loading}>
+              {loading ? "..." : (
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="11" cy="11" r="8" />
+                  <line x1="21" y1="21" x2="16.65" y2="16.65" />
+                </svg>
+              )}
+            </button>
+            <button
+              type="button"
+              className={`discover-filter-toggle search-row-toggle ${filtersOpen || activeFilterCount > 0 ? "active" : ""}`}
+              onClick={() => setFiltersOpen(!filtersOpen)}
+              aria-expanded={filtersOpen}
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <line x1="4" y1="6" x2="20" y2="6" />
+                <line x1="8" y1="12" x2="20" y2="12" />
+                <line x1="12" y1="18" x2="20" y2="18" />
               </svg>
-            )}
-          </button>
+              <span>{t('filters')}</span>
+              {activeFilterCount > 0 && <span className="filter-count-badge">{activeFilterCount}</span>}
+            </button>
+          </div>
         </div>
 
-        <button className="discover-filter-toggle" onClick={() => setFiltersOpen(!filtersOpen)}>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <line x1="4" y1="6" x2="20" y2="6" />
-            <line x1="8" y1="12" x2="20" y2="12" />
-            <line x1="12" y1="18" x2="20" y2="18" />
-          </svg>
-          {filtersOpen ? t('hideFilters') : t('filters')}
-        </button>
-      </div>
-
-      <div className={`discover-filters-bar ${filtersOpen ? "open" : ""}`}>
-        <div className="discover-filters-row">
+        <div className={`discover-filters-bar ${filtersOpen ? "open" : ""}`}>
+          <div className="discover-filters-row">
           <div className="filter-group">
             <span className="filter-group-title">{t('colors')}</span>
             <div className="filter-color-inline">
@@ -142,7 +202,7 @@ function DiscoverBrowser({ imageMode, onToggleImageMode, enabled = true }) {
           <div className="filter-group">
             <span className="filter-group-title">{t('type')}</span>
             <select
-              className="filter-select"
+              className="filter-select filter-select-type"
               value={types.size === 1 ? [...types][0] : ""}
               onChange={(e) => {
                 if (e.target.value) {
@@ -224,7 +284,7 @@ function DiscoverBrowser({ imageMode, onToggleImageMode, enabled = true }) {
           <div className="filter-group">
             <span className="filter-group-title">{t('rarity')}</span>
             <select
-              className="filter-select"
+              className="filter-select filter-select-rarity"
               value={rarity}
               onChange={(e) => setRarity(e.target.value)}
             >
@@ -308,42 +368,41 @@ function DiscoverBrowser({ imageMode, onToggleImageMode, enabled = true }) {
           <div className="filter-group filter-abilities-group">
             <span className="filter-group-title">{t('abilities')}</span>
             <div className="filter-abilities-wrapper">
-              <select
-                className="filter-select filter-abilities-select"
-                value=""
-                onChange={handleKeywordSelect}
-              >
-                <option value="">{t('addAbility')}</option>
-                {keywordOptions.map((kw) => (
-                  <option key={kw} value={kw} disabled={selectedKeywords.has(kw)}>
-                    {kw}
-                  </option>
-                ))}
-              </select>
-              {selectedKeywords.size > 0 && (
-                <div className="filter-selected-keywords">
-                  {[...selectedKeywords].map((kw) => (
-                    <span key={kw} className="filter-keyword-tag" onClick={() => removeKeyword(kw)}>
-                      {kw}
-                      <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
-                        <line x1="18" y1="6" x2="6" y2="18" />
-                        <line x1="6" y1="6" x2="18" y2="18" />
-                      </svg>
-                    </span>
-                  ))}
-                </div>
-              )}
+              <div className="filter-ability-multiselect" ref={keywordsRef}>
+                <button
+                  type="button"
+                  className={`filter-ability-trigger ${selectedKeywordCount > 0 ? "active" : ""}`}
+                  onClick={() => setKeywordsOpen((open) => !open)}
+                  aria-expanded={keywordsOpen}
+                >
+                  <span>{keywordSummary}</span>
+                  {selectedKeywordCount > 0 && <span className="filter-count-badge">{selectedKeywordCount}</span>}
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M6 9l6 6 6-6" />
+                  </svg>
+                </button>
+                {keywordsOpen && (
+                  <div className="filter-ability-menu" role="listbox" aria-multiselectable="true">
+                    {keywordOptions.map((kw) => (
+                      <label key={kw} className="filter-ability-option">
+                        <input
+                          type="checkbox"
+                          checked={selectedKeywords.has(kw)}
+                          onChange={() => toggleKeyword(kw)}
+                        />
+                        <span>{kw}</span>
+                      </label>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
           </div>
-
-          <label className="filter-checkbox-inline filter-playtest">
-            <input type="checkbox" checked={includePlaytest} onChange={(e) => setIncludePlaytest(e.target.checked)} />
-            <span>{t('playtest')}</span>
-          </label>
 
           <button className="discover-clear-all-inline" onClick={clearAll} disabled={!hasFilters}>
             {t('clearAll')}
           </button>
+          </div>
         </div>
       </div>
 

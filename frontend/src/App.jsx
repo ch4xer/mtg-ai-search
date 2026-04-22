@@ -11,6 +11,58 @@ import SettingsPage from "./pages/SettingsPage.jsx";
 import { AuthProvider, useAuth } from "./contexts/AuthContext.jsx";
 import { ToastProvider } from "./contexts/ToastContext.jsx";
 import { LanguageProvider } from "./contexts/LanguageContext.jsx";
+import { useLanguage } from "./contexts/LanguageContext.jsx";
+
+function SystemUpgradeNotice() {
+  const { t } = useLanguage();
+
+  return (
+    <div className="system-upgrade" role="status" aria-live="polite">
+      <div className="system-upgrade-inner">
+        <div className="system-upgrade-mark" aria-hidden="true">
+          <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M12 3l8 4v5c0 4.4-3.1 7.7-8 9-4.9-1.3-8-4.6-8-9V7l8-4z" />
+            <path d="M9 12l2 2 4-5" />
+          </svg>
+        </div>
+        <p>{t("systemMaintenanceUpgrade")}</p>
+      </div>
+    </div>
+  );
+}
+
+function useSystemReadiness() {
+  const [isUpgrading, setIsUpgrading] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    let intervalId;
+
+    const checkHealth = async () => {
+      try {
+        const res = await fetch("/api/health", { cache: "no-store" });
+        const data = await res.json().catch(() => null);
+        if (!cancelled) {
+          setIsUpgrading(data?.status === "initializing");
+        }
+      } catch {
+        if (!cancelled) {
+          setIsUpgrading(false);
+        }
+      }
+    };
+
+    checkHealth();
+    intervalId = window.setInterval(checkHealth, 3000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, []);
+
+  return isUpgrading;
+}
 
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth();
@@ -28,6 +80,7 @@ function AdminRoute({ children }) {
 }
 
 function AppContent() {
+  const isUpgrading = useSystemReadiness();
   const [theme, setTheme] = useState(() => {
     const saved = localStorage.getItem("mtg-theme");
     if (saved) return saved;
@@ -61,6 +114,7 @@ function AppContent() {
   return (
     <div className="app">
       <Header theme={theme} onToggleTheme={toggleTheme} />
+      {isUpgrading && <SystemUpgradeNotice />}
       <main className="main-content">
         {/* SearchContainer stays mounted across / and /discover to preserve state */}
         <div style={{ display: isSearchRoute ? undefined : "none" }}>

@@ -1,4 +1,4 @@
-"""Seed script: download Scryfall unique_artwork data, populate PostgreSQL + pgvector.
+"""Seed script: download Scryfall all_cards data, populate PostgreSQL + pgvector.
 
 Usage:
     1. Start PostgreSQL: docker compose up db -d
@@ -21,6 +21,7 @@ from app.data_loader import (
     parse_keyword_abilities,
     stream_cards,
 )
+from app.effect_chunks import build_card_effect_chunks
 
 KEYWORD_ABILITY_FILE = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -64,12 +65,14 @@ def create_schema(conn):
                 legalities            JSONB,
                 layout                TEXT,
                 card_faces            JSONB,
+                image_set_code        TEXT,
+                image_set_name        TEXT,
+                image_collector_number TEXT,
                 name_embedding        halfvec(2560),
                 type_line_embedding   halfvec(2560),
                 oracle_text_embedding halfvec(2560)
             )
         """)
-        cur.execute("ALTER TABLE cards ADD COLUMN IF NOT EXISTS card_faces JSONB")
 
         # card_prints 表：存储印刷版本信息（一个 oracle_id 对应多个版本）
         cur.execute("""
@@ -92,10 +95,12 @@ def create_schema(conn):
                 image_art_crop  TEXT,
                 image_border_crop TEXT,
                 card_faces      JSONB,
+                image_set_code  TEXT,
+                image_set_name  TEXT,
+                image_collector_number TEXT,
                 UNIQUE(card_id, set_code, collector_num)
             )
         """)
-        cur.execute("ALTER TABLE card_prints ADD COLUMN IF NOT EXISTS card_faces JSONB")
 
         cur.execute("""
             CREATE TABLE IF NOT EXISTS keyword_abilities (
@@ -106,10 +111,29 @@ def create_schema(conn):
             )
         """)
         cur.execute("""
+            CREATE TABLE IF NOT EXISTS card_effects (
+                id           TEXT PRIMARY KEY,
+                card_id      TEXT NOT NULL REFERENCES cards(id) ON DELETE CASCADE,
+                face_index   INT NOT NULL DEFAULT 0,
+                chunk_index  INT NOT NULL,
+                effect_text  TEXT NOT NULL,
+                source       TEXT NOT NULL DEFAULT 'oracle_text',
+                embedding    halfvec(2560),
+                UNIQUE(card_id, face_index, chunk_index)
+            )
+        """)
+        cur.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
                 username      TEXT UNIQUE NOT NULL,
                 password_hash TEXT NOT NULL,
+                role          TEXT NOT NULL DEFAULT 'user',
+                email         TEXT,
+                email_verified BOOLEAN NOT NULL DEFAULT FALSE,
+                verification_code TEXT,
+                verification_code_expires_at TIMESTAMPTZ,
+                verification_attempts INT NOT NULL DEFAULT 0,
+                last_active_at TIMESTAMPTZ,
                 created_at    TIMESTAMPTZ DEFAULT now()
             )
         """)
@@ -136,7 +160,18 @@ def create_schema(conn):
                 display_url TEXT,
                 board      TEXT NOT NULL DEFAULT 'mainboard',
                 added_at   TIMESTAMPTZ DEFAULT now(),
-                UNIQUE(deck_id, card_id)
+                UNIQUE(deck_id, card_id, board)
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS search_logs (
+                id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                user_id       UUID REFERENCES users(id) ON DELETE SET NULL,
+                query         TEXT NOT NULL,
+                tokens_prompt INT NOT NULL DEFAULT 0,
+                tokens_completion INT NOT NULL DEFAULT 0,
+                ip_address    TEXT,
+                created_at    TIMESTAMPTZ DEFAULT now()
             )
         """)
         cur.execute("""
@@ -147,13 +182,13 @@ def create_schema(conn):
         """)
         cur.execute("""
             CREATE TABLE IF NOT EXISTS sync_logs (
-                id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                status      TEXT NOT NULL,
-                new_cards   INT DEFAULT 0,
-                updated_cards INT DEFAULT 0,
-                message     TEXT,
-                started_at  TIMESTAMPTZ DEFAULT now(),
-                completed_at TIMESTAMPTZ
+                id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                started_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+                completed_at TIMESTAMPTZ,
+                status       TEXT NOT NULL DEFAULT 'running',
+                new_cards    INT NOT NULL DEFAULT 0,
+                updated_cards INT NOT NULL DEFAULT 0,
+                message      TEXT NOT NULL DEFAULT ''
             )
         """)
 
@@ -161,10 +196,14 @@ def create_schema(conn):
         cur.execute("CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_decks_user_id ON decks(user_id)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_deck_cards_deck_id ON deck_cards(deck_id)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_search_logs_user_id ON search_logs(user_id)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_search_logs_created_at ON search_logs(created_at)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_search_logs_ip_address ON search_logs(ip_address)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_cards_name ON cards(name)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_cards_cmc ON cards(cmc)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_cards_colors ON cards USING GIN(colors)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_cards_keywords ON cards USING GIN(keywords)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_card_effects_card_id ON card_effects(card_id)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_card_prints_card_id ON card_prints(card_id)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_card_prints_set_code ON card_prints(set_code)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_card_prints_lookup ON card_prints(card_id, set_code, collector_num)")
@@ -186,7 +225,12 @@ def insert_cards_and_prints(conn, chunk_size: int = 5000, batch_size: int = 1000
     # First pass: collect and insert cards
     log("Processing cards...")
     for chunk in stream_cards(chunk_size=chunk_size):
-        valid_prints = [p for p in chunk if p.get("layout") not in ("token", "emblem", "art_series")]
+        valid_prints = [
+            p for p in chunk
+            if p.get("layout") not in ("token", "emblem", "art_series")
+            and p.get("lang") == "en"
+            and p.get("oracle_id")
+        ]
         total_prints += len(valid_prints)
 
         # Group by oracle_id
@@ -214,7 +258,12 @@ def insert_cards_and_prints(conn, chunk_size: int = 5000, batch_size: int = 1000
     log("Inserting card prints...")
     prints_inserted = 0
     for chunk in stream_cards(chunk_size=chunk_size):
-        valid_prints = [p for p in chunk if p.get("layout") not in ("token", "emblem", "art_series")]
+        valid_prints = [
+            p for p in chunk
+            if p.get("layout") not in ("token", "emblem", "art_series")
+            and p.get("lang") == "en"
+            and p.get("oracle_id")
+        ]
         _insert_prints_batch(conn, valid_prints, batch_size)
         prints_inserted += len(valid_prints)
         if prints_inserted % 10000 == 0:
@@ -222,6 +271,7 @@ def insert_cards_and_prints(conn, chunk_size: int = 5000, batch_size: int = 1000
 
     log(f"Prints complete: {prints_inserted} total")
     log(f"Summary: {total_oracles} cards, {prints_inserted} prints")
+    sync_card_effect_chunks(conn)
 
 
 def _insert_cards_batch(conn, oracle_groups: dict[str, list[dict]], batch_size: int):
@@ -256,6 +306,9 @@ def _insert_cards_batch(conn, oracle_groups: dict[str, list[dict]], batch_size: 
             json.dumps(legalities),
             first_print.get("layout"),
             json.dumps(card_faces) if card_faces else None,
+            first_print.get("set"),
+            first_print.get("set_name"),
+            first_print.get("collector_number"),
         ))
 
     with conn.cursor() as cur:
@@ -265,8 +318,9 @@ def _insert_cards_batch(conn, oracle_groups: dict[str, list[dict]], batch_size: 
                 """INSERT INTO cards (
                     id, name, mana_cost, cmc, type_line, oracle_text,
                     power, toughness, colors, color_identity, keywords,
-                    legalities, layout, card_faces
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    legalities, layout, card_faces,
+                    image_set_code, image_set_name, image_collector_number
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (id) DO UPDATE SET
                     name = EXCLUDED.name,
                     mana_cost = EXCLUDED.mana_cost,
@@ -281,6 +335,9 @@ def _insert_cards_batch(conn, oracle_groups: dict[str, list[dict]], batch_size: 
                     legalities = EXCLUDED.legalities,
                     layout = EXCLUDED.layout,
                     card_faces = EXCLUDED.card_faces,
+                    image_set_code = EXCLUDED.image_set_code,
+                    image_set_name = EXCLUDED.image_set_name,
+                    image_collector_number = EXCLUDED.image_collector_number,
                     name_embedding = CASE WHEN cards.name IS NOT DISTINCT FROM EXCLUDED.name THEN cards.name_embedding ELSE NULL END,
                     type_line_embedding = CASE WHEN cards.type_line IS NOT DISTINCT FROM EXCLUDED.type_line THEN cards.type_line_embedding ELSE NULL END,
                     oracle_text_embedding = CASE WHEN cards.oracle_text IS NOT DISTINCT FROM EXCLUDED.oracle_text THEN cards.oracle_text_embedding ELSE NULL END
@@ -288,6 +345,70 @@ def _insert_cards_batch(conn, oracle_groups: dict[str, list[dict]], batch_size: 
                 batch,
             )
             conn.commit()
+
+
+def sync_card_effect_chunks(conn, card_ids: list[str] | None = None, batch_size: int = 500):
+    """Create/update effect-level oracle text chunks for cards."""
+    log("Syncing card effect chunks...")
+    where = "WHERE id = ANY(%s)" if card_ids else ""
+    params = (card_ids,) if card_ids else ()
+
+    with conn.cursor() as cur:
+        cur.execute(
+            f"SELECT id, oracle_text, card_faces, keywords FROM cards {where}",
+            params,
+        )
+        rows = cur.fetchall()
+
+    total = len(rows)
+    for i in range(0, total, batch_size):
+        batch = rows[i:i + batch_size]
+        with conn.cursor() as cur:
+            for card_id, oracle_text, card_faces, keywords in batch:
+                card = {
+                    "id": card_id,
+                    "oracle_text": oracle_text,
+                    "card_faces": card_faces,
+                    "keywords": keywords or [],
+                }
+                chunks = build_card_effect_chunks(card)
+                expected_ids = []
+                for chunk in chunks:
+                    chunk_id = f"{card_id}:{chunk['face_index']}:{chunk['chunk_index']}"
+                    expected_ids.append(chunk_id)
+                    cur.execute(
+                        """INSERT INTO card_effects (
+                               id, card_id, face_index, chunk_index, effect_text, source
+                           ) VALUES (%s, %s, %s, %s, %s, %s)
+                           ON CONFLICT (id) DO UPDATE SET
+                               face_index = EXCLUDED.face_index,
+                               chunk_index = EXCLUDED.chunk_index,
+                               effect_text = EXCLUDED.effect_text,
+                               source = EXCLUDED.source,
+                               embedding = CASE
+                                   WHEN card_effects.effect_text IS NOT DISTINCT FROM EXCLUDED.effect_text
+                                   THEN card_effects.embedding
+                                   ELSE NULL
+                               END""",
+                        (
+                            chunk_id,
+                            card_id,
+                            chunk["face_index"],
+                            chunk["chunk_index"],
+                            chunk["effect_text"],
+                            chunk["source"],
+                        ),
+                    )
+
+                if expected_ids:
+                    cur.execute(
+                        "DELETE FROM card_effects WHERE card_id = %s AND NOT (id = ANY(%s))",
+                        (card_id, expected_ids),
+                    )
+                else:
+                    cur.execute("DELETE FROM card_effects WHERE card_id = %s", (card_id,))
+        conn.commit()
+        log(f"  [{min(i + batch_size, total)}/{total}] Synced effect chunks")
 
 
 def _insert_prints_batch(conn, prints: list[dict], batch_size: int):
@@ -319,6 +440,9 @@ def _insert_prints_batch(conn, prints: list[dict], batch_size: int):
             image_uris.get("art_crop"),
             image_uris.get("border_crop"),
             json.dumps(p.get("card_faces")) if p.get("card_faces") else None,
+            p.get("set"),
+            p.get("set_name"),
+            p.get("collector_number"),
         ))
 
     with conn.cursor() as cur:
@@ -329,8 +453,9 @@ def _insert_prints_batch(conn, prints: list[dict], batch_size: int):
                     id, card_id, set_code, set_name, collector_num,
                     rarity, artist, flavor_name, flavor_text, released_at, finishes,
                     image_small, image_normal, image_large, image_png,
-                    image_art_crop, image_border_crop, card_faces
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    image_art_crop, image_border_crop, card_faces,
+                    image_set_code, image_set_name, image_collector_number
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (card_id, set_code, collector_num) DO UPDATE SET
                     rarity = EXCLUDED.rarity,
                     artist = EXCLUDED.artist,
@@ -343,7 +468,10 @@ def _insert_prints_batch(conn, prints: list[dict], batch_size: int):
                     image_png = EXCLUDED.image_png,
                     image_art_crop = EXCLUDED.image_art_crop,
                     image_border_crop = EXCLUDED.image_border_crop,
-                    card_faces = EXCLUDED.card_faces
+                    card_faces = EXCLUDED.card_faces,
+                    image_set_code = EXCLUDED.image_set_code,
+                    image_set_name = EXCLUDED.image_set_name,
+                    image_collector_number = EXCLUDED.image_collector_number
                 """,
                 batch,
             )
@@ -571,6 +699,62 @@ def generate_ability_embeddings(conn, batch_size: int = 50, max_rounds: int = 10
         log("All ability embeddings complete.")
 
 
+def generate_effect_embeddings(conn, batch_size: int = 200, max_rounds: int = 10, on_progress=None):
+    """Generate embeddings for effect-level card text chunks."""
+    from app.embedding import encode_batch_safe
+
+    for round_num in range(1, max_rounds + 1):
+        with conn.cursor() as cur:
+            cur.execute("SELECT id, effect_text FROM card_effects WHERE embedding IS NULL")
+            rows = cur.fetchall()
+
+        if not rows:
+            log("All effect chunk embeddings complete.")
+            return
+
+        total = len(rows)
+        failed = 0
+        log(f"Generating effect chunk embeddings (round {round_num}/{max_rounds}): {total} remaining...")
+
+        for i in range(0, total, batch_size):
+            batch = rows[i:i + batch_size]
+            texts = [r[1] or "" for r in batch]
+            t0 = time.time()
+            vecs = encode_batch_safe(texts)
+
+            if vecs is None:
+                failed += len(batch)
+                log(f"  [{min(i + batch_size, total)}/{total}] SKIPPED {len(batch)} chunks (API error)")
+                continue
+
+            with conn.cursor() as cur:
+                for j, row in enumerate(batch):
+                    cur.execute(
+                        "UPDATE card_effects SET embedding = %s::halfvec WHERE id = %s",
+                        (str(vecs[j]), row[0]),
+                    )
+            conn.commit()
+
+            done = min(i + batch_size, total)
+            elapsed = time.time() - t0
+            log(f"  [{done}/{total}] Embedded {len(batch)} effect chunks ({elapsed:.1f}s)")
+            if on_progress:
+                on_progress(done, total)
+
+        if failed == 0:
+            return
+        log(f"Round {round_num} done. {failed} chunks failed, will retry...")
+        time.sleep(10)
+
+    with conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM card_effects WHERE embedding IS NULL")
+        remaining = cur.fetchone()[0]
+    if remaining > 0:
+        log(f"WARNING: {remaining} effect chunks still missing embeddings after {max_rounds} rounds.")
+    else:
+        log("All effect chunk embeddings complete.")
+
+
 def create_vector_indexes(conn):
     """Skipped – halfvec columns are searched via sequential scan."""
     log("Skipping vector index creation (halfvec sequential scan).")
@@ -587,7 +771,7 @@ def main():
     try:
         create_schema(conn)
 
-        # Download and insert unique artwork cards
+        # Download and insert all_cards prints
         insert_cards_and_prints(conn)
 
         # Parse and insert abilities (with DeepSeek summarization)
@@ -596,6 +780,7 @@ def main():
 
         # Generate embeddings
         generate_card_embeddings(conn)
+        generate_effect_embeddings(conn)
         generate_ability_embeddings(conn)
 
         # Create vector indexes

@@ -1,0 +1,43 @@
+/* ===== Keyrune Set Symbols ===== */
+.card-set-icon-wrap {
+  display: inline-flex;
+  align-items: center;
+}
+
+.card-set-icon-wrap .ss {
+  font-size: 0.95rem;
+  line-height: 1;
+}
+
+/* Keyrune rarity colors are designed for light backgrounds;
+   override common/uncommon for dark theme visibility using Catppuccin */
+[data-theme="dark"] .ss.ss-common {
+  color: var(--ctp-overlay0);
+}
+[data-theme="dark"] .ss.ss-uncommon {
+  color: var(--ctp-sky);
+}
+
+.deck-stack-name .ss {
+  margin-right: 0.35rem;
+  font-size: 0.9rem;
+  line-height: 1;
+  vertical-align: -0.05em;
+}
+
+/* ===== Footer ===== */
+.footer {
+  background: var(--bg-secondary);
+  border-top: 2px solid var(--border);
+  padding: 1.5rem;
+  margin-top: 3rem;
+}
+
+.footer-inner {
+  max-width: 1000px;
+  margin: 0 auto;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  line-height: 1.6;
+}

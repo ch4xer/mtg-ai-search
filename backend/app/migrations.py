@@ -1,12 +1,8 @@
-"""Idempotent schema migrations.
+"""Runtime schema bootstrap for fresh databases.
 
-All statements here must be safe to run on every startup. Prefer
-`CREATE TABLE IF NOT EXISTS` and `ADD COLUMN IF NOT EXISTS` forms.
-
-This is the single source of truth for the app's runtime schema. The
-`scripts/seed_pg.py` bulk loader creates the same tables from scratch
-for fresh databases; any column added here should also be added to
-the CREATE TABLE statements there to keep the two in sync.
+This module intentionally defines the current schema directly. Historical
+upgrade/backfill migrations are not kept here because the supported reset path
+is to recreate the database and initialize it from the current bulk data.
 """
 
 import logging
@@ -18,40 +14,32 @@ logger = logging.getLogger(__name__)
 
 # Tables that do not reference cards(id) and can be created before seeding.
 _PRE_SEED_DDL = """
+CREATE EXTENSION IF NOT EXISTS vector;
+
 CREATE TABLE IF NOT EXISTS users (
     id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     username      TEXT UNIQUE NOT NULL,
     password_hash TEXT NOT NULL,
     role          TEXT NOT NULL DEFAULT 'user',
+    email         TEXT,
+    email_verified BOOLEAN NOT NULL DEFAULT FALSE,
+    verification_code TEXT,
+    verification_code_expires_at TIMESTAMPTZ,
+    verification_attempts INT NOT NULL DEFAULT 0,
+    last_active_at TIMESTAMPTZ,
     created_at    TIMESTAMPTZ DEFAULT now()
 );
-ALTER TABLE users ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'user';
-ALTER TABLE users ADD COLUMN IF NOT EXISTS email TEXT;
-ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified BOOLEAN NOT NULL DEFAULT FALSE;
-ALTER TABLE users ADD COLUMN IF NOT EXISTS verification_code TEXT;
-ALTER TABLE users ADD COLUMN IF NOT EXISTS verification_code_expires_at TIMESTAMPTZ;
-ALTER TABLE users ADD COLUMN IF NOT EXISTS verification_attempts INT NOT NULL DEFAULT 0;
--- Existing users (no email) are treated as verified
-UPDATE users SET email_verified = TRUE WHERE email IS NULL AND email_verified = FALSE;
-ALTER TABLE users ADD COLUMN IF NOT EXISTS last_active_at TIMESTAMPTZ;
 
 CREATE TABLE IF NOT EXISTS decks (
     id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     name       TEXT NOT NULL,
     format     TEXT NOT NULL DEFAULT 'undefined',
+    analysis_data JSONB,
+    analysis_updated_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ DEFAULT now(),
     updated_at TIMESTAMPTZ DEFAULT now()
 );
-ALTER TABLE decks ADD COLUMN IF NOT EXISTS format TEXT NOT NULL DEFAULT 'undefined';
--- Bilingual deck analysis: stored as a single JSONB blob so we can grow the
--- structure without further migrations. Shape: {"zh": {...}, "en": {...}}.
-ALTER TABLE decks ADD COLUMN IF NOT EXISTS analysis_data JSONB;
-ALTER TABLE decks ADD COLUMN IF NOT EXISTS analysis_updated_at TIMESTAMPTZ;
-ALTER TABLE decks DROP COLUMN IF EXISTS analysis_summary;
-ALTER TABLE decks DROP COLUMN IF EXISTS analysis_playstyle;
-ALTER TABLE decks DROP COLUMN IF EXISTS analysis_weaknesses;
-ALTER TABLE decks DROP COLUMN IF EXISTS analysis_language;
 
 CREATE TABLE IF NOT EXISTS search_logs (
     id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -59,6 +47,7 @@ CREATE TABLE IF NOT EXISTS search_logs (
     query         TEXT NOT NULL,
     tokens_prompt INT NOT NULL DEFAULT 0,
     tokens_completion INT NOT NULL DEFAULT 0,
+    ip_address    TEXT,
     created_at    TIMESTAMPTZ DEFAULT now()
 );
 
@@ -80,56 +69,38 @@ CREATE INDEX IF NOT EXISTS idx_sync_logs_started_at ON sync_logs(started_at DESC
 
 CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
 CREATE INDEX IF NOT EXISTS idx_decks_user_id ON decks(user_id);
-ALTER TABLE search_logs ADD COLUMN IF NOT EXISTS ip_address TEXT;
 CREATE INDEX IF NOT EXISTS idx_search_logs_user_id ON search_logs(user_id);
 CREATE INDEX IF NOT EXISTS idx_search_logs_created_at ON search_logs(created_at);
 CREATE INDEX IF NOT EXISTS idx_search_logs_ip_address ON search_logs(ip_address);
 """
 
-# Migrations for the cards table (added after it has been seeded).
-_CARDS_DDL = """
-ALTER TABLE cards ADD COLUMN IF NOT EXISTS is_playtest BOOLEAN NOT NULL DEFAULT FALSE;
-ALTER TABLE cards ADD COLUMN IF NOT EXISTS card_faces JSONB;
-ALTER TABLE card_prints ADD COLUMN IF NOT EXISTS card_faces JSONB;
-"""
-
 # Tables that depend on cards(id) existing. Run after seeding.
 _POST_SEED_DDL = """
+CREATE TABLE IF NOT EXISTS card_effects (
+    id           TEXT PRIMARY KEY,
+    card_id      TEXT NOT NULL REFERENCES cards(id) ON DELETE CASCADE,
+    face_index   INT NOT NULL DEFAULT 0,
+    chunk_index  INT NOT NULL,
+    effect_text  TEXT NOT NULL,
+    source       TEXT NOT NULL DEFAULT 'oracle_text',
+    embedding    halfvec(2560),
+    UNIQUE(card_id, face_index, chunk_index)
+);
+CREATE INDEX IF NOT EXISTS idx_card_effects_card_id ON card_effects(card_id);
+
 CREATE TABLE IF NOT EXISTS deck_cards (
     id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     deck_id    UUID NOT NULL REFERENCES decks(id) ON DELETE CASCADE,
     card_id    TEXT NOT NULL REFERENCES cards(id),
+    print_id   TEXT REFERENCES card_prints(id) ON DELETE SET NULL,
     quantity   INT NOT NULL DEFAULT 1,
     image_url  TEXT,
     display_url TEXT,
+    board      TEXT NOT NULL DEFAULT 'mainboard',
     added_at   TIMESTAMPTZ DEFAULT now(),
-    UNIQUE(deck_id, card_id)
+    UNIQUE(deck_id, card_id, board)
 );
-ALTER TABLE deck_cards ADD COLUMN IF NOT EXISTS image_url TEXT;
-ALTER TABLE deck_cards ADD COLUMN IF NOT EXISTS display_url TEXT;
-ALTER TABLE deck_cards ADD COLUMN IF NOT EXISTS board TEXT NOT NULL DEFAULT 'mainboard';
 CREATE INDEX IF NOT EXISTS idx_deck_cards_deck_id ON deck_cards(deck_id);
-
--- Migrate unique constraint from (deck_id, card_id) to (deck_id, card_id, board)
-DO $$
-BEGIN
-    IF EXISTS (
-        SELECT 1 FROM pg_constraint
-        WHERE conname = 'deck_cards_deck_id_card_id_key'
-    ) THEN
-        ALTER TABLE deck_cards DROP CONSTRAINT deck_cards_deck_id_card_id_key;
-    END IF;
-END $$;
-DO $$
-BEGIN
-    IF NOT EXISTS (
-        SELECT 1 FROM pg_constraint
-        WHERE conname = 'deck_cards_deck_id_card_id_board_key'
-    ) THEN
-        ALTER TABLE deck_cards ADD CONSTRAINT deck_cards_deck_id_card_id_board_key
-            UNIQUE (deck_id, card_id, board);
-    END IF;
-END $$;
 """
 
 
@@ -140,16 +111,8 @@ async def run_pre_seed(pool: asyncpg.Pool) -> None:
     logger.info("Pre-seed migrations applied.")
 
 
-async def run_cards_migrations(pool: asyncpg.Pool) -> None:
-    """Run idempotent migrations against the cards table."""
-    async with pool.acquire() as conn:
-        await conn.execute(_CARDS_DDL)
-    logger.info("Cards-table migrations applied.")
-
-
 async def run_post_seed(pool: asyncpg.Pool) -> None:
     """Run migrations that depend on cards(id) existing."""
     async with pool.acquire() as conn:
         await conn.execute(_POST_SEED_DDL)
     logger.info("Post-seed migrations applied.")
-

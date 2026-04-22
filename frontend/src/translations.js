@@ -18,6 +18,11 @@ export const translations = {
     searchPlaceholderDiscover: "Search name, type, text...",
     searchButton: "Search",
     searching: "Searching...",
+    systemMaintenanceUpgrade: "The system is under maintenance and upgrade. Please visit again later.",
+    searchSettings: "Search Settings",
+    hideSearchSettings: "Hide Settings",
+    enableRerank: "Enable rerank",
+    rerankTopN: "Rerank Top N",
 
     // Filters
     filters: "Filters",
@@ -208,6 +213,11 @@ export const translations = {
     searchPlaceholderDiscover: "搜索名称、类型、文本...",
     searchButton: "搜索",
     searching: "搜索中...",
+    systemMaintenanceUpgrade: "系统正在维护升级，欢迎下次再来。",
+    searchSettings: "搜索设置",
+    hideSearchSettings: "隐藏设置",
+    enableRerank: "启用 Rerank",
+    rerankTopN: "Rerank 数量",
 
     // Filters
     filters: "过滤器",

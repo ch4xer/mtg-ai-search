@@ -1,22 +1,46 @@
 import asyncio
 import logging
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timedelta, timezone
 
 from fastapi import FastAPI
 
 from .auth import hash_password, verify_password
 from .config import get_admin_credentials, update_rate_limits
-from .db import close_pool, get_pool
 from .maintenance import (
     backfill_missing_embeddings,
     incremental_sync,
     seed_abilities_if_empty,
     seed_cards_if_empty,
 )
-from .migrations import run_cards_migrations, run_post_seed, run_pre_seed
+from .migrations import run_post_seed, run_pre_seed
+from .repositories.database import close_pool, get_pool
 
 logger = logging.getLogger(__name__)
+
+CST = timezone(timedelta(hours=8))
+UTC = timezone.utc
+
+_startup_state = {
+    "status": "initializing",
+    "message": "系统正在初始化...",
+    "started_at": datetime.now(UTC).isoformat(),
+    "completed_at": None,
+}
+
+
+def _set_startup_state(status: str, message: str) -> None:
+    _startup_state.update(
+        {
+            "status": status,
+            "message": message,
+            "completed_at": datetime.now(UTC).isoformat() if status != "initializing" else None,
+        }
+    )
+
+
+def get_startup_state() -> dict:
+    return dict(_startup_state)
 
 
 async def ensure_admin_account(pool) -> None:
@@ -55,9 +79,6 @@ async def ensure_admin_account(pool) -> None:
         hash_password(admin_password),
     )
     logger.info("Built-in admin account '%s' created.", admin_user)
-
-
-CST = timezone(timedelta(hours=8))
 
 
 def _seconds_until_midnight() -> float:
@@ -103,22 +124,47 @@ async def _load_persisted_settings(pool) -> None:
         logger.info("Loaded persisted rate limits: %s", kwargs)
 
 
+async def _initialize_system() -> None:
+    _set_startup_state("initializing", "系统正在初始化...")
+    try:
+        pool = await get_pool()
+
+        await run_pre_seed(pool)
+        await ensure_admin_account(pool)
+        await seed_cards_if_empty()
+        await seed_abilities_if_empty()
+        await run_post_seed(pool)
+        await _load_persisted_settings(pool)
+        await backfill_missing_embeddings()
+    except Exception as exc:
+        _set_startup_state("error", f"系统初始化失败: {exc}")
+        logger.exception("System initialization failed")
+        return
+
+    _set_startup_state("ok", "系统已就绪")
+    logger.info("System initialization complete")
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    pool = await get_pool()
+    sync_task: asyncio.Task | None = None
 
-    await run_pre_seed(pool)
-    await ensure_admin_account(pool)
-    await seed_cards_if_empty()
-    await seed_abilities_if_empty()
-    await run_cards_migrations(pool)
-    await run_post_seed(pool)
-    await _load_persisted_settings(pool)
-    await backfill_missing_embeddings()
+    async def initialize_then_schedule_sync():
+        nonlocal sync_task
+        await _initialize_system()
+        if get_startup_state()["status"] == "ok":
+            sync_task = asyncio.create_task(_daily_sync_loop())
 
-    sync_task = asyncio.create_task(_daily_sync_loop())
+    init_task = asyncio.create_task(initialize_then_schedule_sync())
 
     yield
 
-    sync_task.cancel()
+    if not init_task.done():
+        init_task.cancel()
+    with suppress(asyncio.CancelledError):
+        await init_task
+    if sync_task is not None:
+        sync_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await sync_task
     await close_pool()

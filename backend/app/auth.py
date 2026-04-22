@@ -54,7 +54,7 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
     causing foreign key errors later.
     """
     user_id = decode_token(credentials.credentials, expected_type="access")
-    from .db import get_user_by_id
+    from .repositories.users import get_user_by_id
     user = await get_user_by_id(user_id)
     if not user:
         raise HTTPException(
@@ -66,7 +66,7 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
 
 async def require_admin(user_id: str = Depends(get_current_user)) -> str:
     """FastAPI dependency that requires the current user to be an admin."""
-    from .db import get_user_by_id
+    from .repositories.users import get_user_by_id
     user = await get_user_by_id(user_id)
     if not user or user["role"] != "admin":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")

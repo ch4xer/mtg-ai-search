@@ -1,6 +1,6 @@
-"""Generate a bilingual (zh + en) strategy write-up for a deck using Deepseek.
+"""Generate a bilingual (zh + en) strategy write-up for a deck using chat LLM.
 
-A single Deepseek call returns a JSON object keyed by language. The model is
+A single chat model call returns a JSON object keyed by language. The model is
 forced to return valid JSON via `response_format={"type": "json_object"}`.
 """
 
@@ -76,23 +76,26 @@ def _extract_language_block(data: dict, lang: str) -> dict:
 
 
 async def analyze_deck(deck_name: str, deck_format: str, cards: list[dict]) -> dict:
-    """Call Deepseek once and return {"zh": {...}, "en": {...}}.
+    """Call the configured chat model once and return {"zh": {...}, "en": {...}}.
 
     Raises ValueError if the response cannot be parsed into the expected shape.
     """
     payload = build_deck_payload(deck_name, deck_format, cards)
 
-    bound = llm.bind(response_format={"type": "json_object"})
-    response = await bound.ainvoke(
-        [SystemMessage(content=_SYSTEM_PROMPT), HumanMessage(content=payload)]
-    )
+    messages = [SystemMessage(content=_SYSTEM_PROMPT), HumanMessage(content=payload)]
+    try:
+        bound = llm.bind(response_format={"type": "json_object"})
+        response = await bound.ainvoke(messages)
+    except Exception:
+        logger.warning("Chat provider rejected response_format=json_object; retrying without it.")
+        response = await llm.ainvoke(messages)
 
     raw = response.content if isinstance(response.content, str) else str(response.content)
     try:
         data = json.loads(raw)
     except json.JSONDecodeError as exc:
-        logger.warning("Deepseek returned non-JSON for deck analysis: %s", raw[:500])
-        raise ValueError("Deepseek returned non-JSON content") from exc
+        logger.warning("Chat model returned non-JSON for deck analysis: %s", raw[:500])
+        raise ValueError("Chat model returned non-JSON content") from exc
 
     return {
         "zh": _extract_language_block(data, "zh"),

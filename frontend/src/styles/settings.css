@@ -1,0 +1,123 @@
+/* ===== Settings Page ===== */
+.settings-page {
+  max-width: 600px;
+  margin: 0 auto;
+}
+
+.settings-title {
+  font-family: "Cinzel", serif;
+  font-size: 1.5rem;
+  color: var(--accent);
+  margin-bottom: 1.5rem;
+}
+
+.settings-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  padding: 1.5rem;
+  margin-bottom: 1.5rem;
+  box-shadow: 0 2px 8px var(--shadow);
+}
+
+.settings-section-title {
+  font-family: "Cinzel", serif;
+  font-size: 1rem;
+  color: var(--accent);
+  margin: 0 0 1rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.settings-info-row {
+  display: flex;
+  align-items: baseline;
+  gap: 1rem;
+  padding: 0.5rem 0;
+}
+
+.settings-label {
+  font-family: "Crimson Text", Georgia, serif;
+  font-size: 0.9rem;
+  color: var(--text-muted);
+  min-width: 80px;
+}
+
+.settings-value {
+  font-family: "Crimson Text", Georgia, serif;
+  font-size: 0.95rem;
+  color: var(--text-primary);
+}
+
+.settings-verified {
+  color: var(--ctp-green, #40a02b);
+  font-size: 0.85rem;
+}
+
+.settings-hint {
+  font-family: "Crimson Text", Georgia, serif;
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+  margin-bottom: 1rem;
+  line-height: 1.5;
+}
+
+.settings-warning {
+  font-family: "Crimson Text", Georgia, serif;
+  font-size: 0.85rem;
+  color: var(--ctp-red, #d20f39);
+  margin-top: 0.75rem;
+}
+
+.settings-password-idle {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.settings-password-form .form-group {
+  margin-bottom: 1rem;
+}
+
+.settings-password-form .form-group label {
+  display: block;
+  font-family: "Crimson Text", Georgia, serif;
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+  margin-bottom: 0.35rem;
+}
+
+.settings-password-form .form-group input {
+  width: 100%;
+  padding: 0.6rem 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-family: "Crimson Text", Georgia, serif;
+  font-size: 0.95rem;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.settings-password-form .form-group input:focus {
+  border-color: var(--accent);
+}
+
+.settings-password-form .form-group input::placeholder {
+  color: var(--text-muted);
+}
+
+.settings-password-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 1.5rem;
+}
+
+.verify-code-input {
+  font-family: monospace;
+  letter-spacing: 0.3em;
+  text-align: center;
+  font-size: 1.1rem;
+}
+

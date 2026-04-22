@@ -1,20 +1,18 @@
-"""Summarize keyword abilities using DeepSeek LLM.
+"""Summarize keyword abilities using the configured chat LLM provider.
 
 Converts verbose rules text into concise one-sentence descriptions
 for better embedding matching.
 """
 
 import logging
-import os
 import time
 
 import httpx
 
+from .llm_provider import get_chat_provider_config
+
 logger = logging.getLogger(__name__)
 
-DEEPSEEK_API_URL = "https://api.deepseek.com/v1/chat/completions"
-DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
-DEEPSEEK_MODEL = "deepseek-chat"
 MAX_RETRIES = 3
 RATE_LIMIT_DELAY = 0.5  # seconds between requests
 
@@ -35,20 +33,21 @@ SYSTEM_PROMPT = (
 
 
 def summarize_ability(name: str, description: str) -> str | None:
-    """Use DeepSeek to generate a concise summary of an ability.
+    """Use the configured chat provider to generate a concise summary of an ability.
 
     Returns None on failure.
     """
+    config = get_chat_provider_config()
     for attempt in range(1, MAX_RETRIES + 1):
         try:
             resp = httpx.post(
-                DEEPSEEK_API_URL,
+                f"{config.base_url.rstrip('/')}/chat/completions",
                 headers={
-                    "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+                    "Authorization": f"Bearer {config.api_key}",
                     "Content-Type": "application/json",
                 },
                 json={
-                    "model": DEEPSEEK_MODEL,
+                    "model": config.model,
                     "messages": [
                         {"role": "system", "content": SYSTEM_PROMPT},
                         {"role": "user", "content": f"{name} - \"{description}\""},
