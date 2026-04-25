@@ -7,6 +7,10 @@ agent finds it for you, even when you don't remember the exact name.
 > 用自然语言描述你想要的万智牌，AI 会理解你的意图并为你找到。
 > 支持中英文混合查询，并提供卡组管理、PDF 代牌打印等功能。
 
+![Search · 1](docs/images/search-dark-1.png)
+![Search · 2](docs/images/search-dark-2.png)
+![Deck detail](docs/images/deck-detail.png)
+
 ## Features
 
 - **Natural-language search.** A LangGraph agent reasons over card text,
