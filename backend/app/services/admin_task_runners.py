@@ -3,7 +3,13 @@
 import asyncio
 import logging
 
-from ..maintenance import full_reseed, incremental_sync, regenerate_embeddings, sync_abilities_incremental
+from ..maintenance import (
+    full_reseed,
+    incremental_sync,
+    rebuild_effect_chunks,
+    regenerate_embeddings,
+    sync_abilities_incremental,
+)
 from ..repositories.database import get_pool
 from .admin_task_state import TaskStatus, set_task_state
 
@@ -33,6 +39,17 @@ async def run_reembed():
     except Exception as exc:
         logger.exception("[reembed] Failed")
         set_task_state("reembed", TaskStatus.ERROR, f"失败: {exc}")
+
+
+async def run_rebuild_effect_chunks():
+    try:
+        await rebuild_effect_chunks(
+            status_callback=lambda message: set_task_state("effect_chunks", TaskStatus.RUNNING, message),
+        )
+        set_task_state("effect_chunks", TaskStatus.DONE, "效果分段已重建并更新 embedding")
+    except Exception as exc:
+        logger.exception("[effect_chunks] Failed")
+        set_task_state("effect_chunks", TaskStatus.ERROR, f"失败: {exc}")
 
 
 async def run_seed_abilities():

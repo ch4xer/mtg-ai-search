@@ -4,6 +4,8 @@ from fastapi import APIRouter, Depends
 
 from .auth import get_current_user
 from .schemas.auth import (
+    ApiKeyCreateResponse,
+    ApiKeyStatusResponse,
     AuthResponse,
     ChangePasswordRequest,
     LoginRequest,
@@ -11,6 +13,7 @@ from .schemas.auth import (
     RegisterRequest,
     VerifyEmailRequest,
 )
+from .services.api_key_service import get_user_api_key_status, regenerate_user_api_key
 from .services.auth_email_service import resend_verification_code, verify_email_code
 from .services.auth_password_service import change_user_password, request_password_change_code
 from .services.auth_session_service import get_current_profile, login_user, refresh_access_token, register_user
@@ -47,6 +50,16 @@ async def refresh(req: RefreshRequest):
 async def me(user_id: str = Depends(get_current_user)):
     """Return the current user's profile, refreshed from the database."""
     return await get_current_profile(user_id)
+
+
+@auth_router.get("/api-key", response_model=ApiKeyStatusResponse)
+async def api_key_status(user_id: str = Depends(get_current_user)):
+    return ApiKeyStatusResponse(**await get_user_api_key_status(user_id))
+
+
+@auth_router.post("/api-key", response_model=ApiKeyCreateResponse)
+async def regenerate_api_key(user_id: str = Depends(get_current_user)):
+    return ApiKeyCreateResponse(**await regenerate_user_api_key(user_id))
 
 
 @auth_router.post("/request-password-change")

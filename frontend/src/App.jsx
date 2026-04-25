@@ -94,6 +94,10 @@ function AppContent() {
     document.documentElement.setAttribute("data-theme", theme);
     document.documentElement.style.colorScheme = theme;
     localStorage.setItem("mtg-theme", theme);
+    const favicon = document.getElementById("app-favicon");
+    if (favicon) {
+      favicon.href = theme === "dark" ? "/favicon-dark.svg" : "/favicon-light.svg";
+    }
   }, [theme]);
 
   const toggleTheme = () => {

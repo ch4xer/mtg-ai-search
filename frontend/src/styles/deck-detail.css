@@ -59,10 +59,22 @@
 .deck-detail-actions {
   display: flex;
   gap: 0.5rem;
+  align-items: center;
 }
 
 .export-dropdown {
   position: relative;
+}
+
+.export-dropdown > .btn-accent.export-trigger {
+  justify-content: center;
+}
+
+.export-dropdown > .btn-accent.export-trigger .btn-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .export-dropdown-menu {
@@ -107,6 +119,25 @@
   flex-shrink: 0;
 }
 
+@media (max-width: 768px) {
+  .export-dropdown > .btn-accent.export-trigger {
+    width: auto !important;
+    min-width: 0 !important;
+  }
+
+  .export-dropdown > .btn-accent.export-trigger .export-trigger-chevron {
+    display: none;
+  }
+
+  .export-dropdown > .btn-accent.export-trigger.export-trigger-busy {
+    justify-content: center;
+  }
+
+  .export-dropdown > .btn-accent.export-trigger.export-trigger-busy .btn-label {
+    display: inline !important;
+  }
+}
+
 .deck-rename-form input {
   padding: 0.4rem 0.7rem;
   font-family: "Cinzel", serif;
@@ -117,37 +148,6 @@
   border-radius: 6px;
   outline: none;
   width: 250px;
-}
-
-.export-progress {
-  margin-bottom: 1rem;
-  padding: 0.75rem 1rem;
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  max-width: 1400px;
-  margin-left: auto;
-  margin-right: auto;
-}
-
-.export-progress-bar {
-  height: 8px;
-  background: var(--bg-secondary);
-  border-radius: 4px;
-  overflow: hidden;
-  margin-bottom: 0.5rem;
-}
-
-.export-progress-fill {
-  height: 100%;
-  background: var(--accent);
-  border-radius: 4px;
-  transition: width 0.2s ease;
-}
-
-.export-progress-text {
-  font-size: 0.85rem;
-  color: var(--text-muted);
 }
 
 /* ── Deck Body: Moxfield-style layout ── */

@@ -1,12 +1,13 @@
 import asyncio
 import logging
+import os
 from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timedelta, timezone
 
 from fastapi import FastAPI
 
 from .auth import hash_password, verify_password
-from .config import get_admin_credentials, update_rate_limits
+from .config import get_admin_credentials, get_startup_retry_config, update_rate_limits
 from .maintenance import (
     backfill_missing_embeddings,
     incremental_sync,
@@ -125,24 +126,49 @@ async def _load_persisted_settings(pool) -> None:
 
 
 async def _initialize_system() -> None:
-    _set_startup_state("initializing", "系统正在初始化...")
-    try:
-        pool = await get_pool()
+    retry_config = get_startup_retry_config()
+    max_attempts = retry_config["max_attempts"]
+    retry_delay_seconds = retry_config["retry_delay_seconds"]
 
-        await run_pre_seed(pool)
-        await ensure_admin_account(pool)
-        await seed_cards_if_empty()
-        await seed_abilities_if_empty()
-        await run_post_seed(pool)
-        await _load_persisted_settings(pool)
-        await backfill_missing_embeddings()
-    except Exception as exc:
-        _set_startup_state("error", f"系统初始化失败: {exc}")
-        logger.exception("System initialization failed")
+    for attempt in range(1, max_attempts + 1):
+        _set_startup_state("initializing", f"系统正在初始化...（第 {attempt}/{max_attempts} 次）")
+        try:
+            pool = await get_pool()
+
+            await run_pre_seed(pool)
+            await ensure_admin_account(pool)
+            await seed_cards_if_empty()
+            await seed_abilities_if_empty()
+            await run_post_seed(pool)
+            await _load_persisted_settings(pool)
+            await backfill_missing_embeddings()
+        except Exception as exc:
+            if attempt >= max_attempts:
+                _set_startup_state("error", f"系统初始化失败: {exc}")
+                logger.exception(
+                    "System initialization failed after %d attempts, exiting for container restart",
+                    attempt,
+                )
+                await close_pool()
+                os._exit(1)
+
+            _set_startup_state(
+                "initializing",
+                f"系统初始化失败，{retry_delay_seconds} 秒后重试（第 {attempt}/{max_attempts} 次）: {exc}",
+            )
+            logger.exception(
+                "System initialization attempt %d/%d failed; retrying in %ds",
+                attempt,
+                max_attempts,
+                retry_delay_seconds,
+            )
+            await close_pool()
+            await asyncio.sleep(retry_delay_seconds)
+            continue
+
+        _set_startup_state("ok", "系统已就绪")
+        logger.info("System initialization complete on attempt %d/%d", attempt, max_attempts)
         return
-
-    _set_startup_state("ok", "系统已就绪")
-    logger.info("System initialization complete")
 
 
 @asynccontextmanager

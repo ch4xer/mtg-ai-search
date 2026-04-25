@@ -336,6 +336,16 @@
   gap: 0.75rem;
 }
 
+.admin-db-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.admin-db-card-actions > button {
+  flex: 1 1 180px;
+}
+
 .admin-db-card-header {
   display: flex;
   align-items: center;
@@ -721,4 +731,3 @@
   opacity: 0.5;
   cursor: not-allowed;
 }
-

@@ -45,14 +45,14 @@ export function fetchDeckPdfStream(id) {
   return fetch(`/api/shared/decks/${id}/export/stream`);
 }
 
-export function fetchDeckPdfDownload(id, exportId) {
-  return fetch(`/api/shared/decks/${id}/export/download/${exportId}`);
+export function getDeckPdfDownloadUrl(id, exportId) {
+  return `/api/shared/decks/${id}/export/download/${exportId}`;
 }
 
 export function fetchDeckImagesStream(id) {
   return fetch(`/api/shared/decks/${id}/export/images/stream`);
 }
 
-export function fetchDeckImagesDownload(id, exportId) {
-  return fetch(`/api/shared/decks/${id}/export/images/download/${exportId}`);
+export function getDeckImagesDownloadUrl(id, exportId) {
+  return `/api/shared/decks/${id}/export/images/download/${exportId}`;
 }

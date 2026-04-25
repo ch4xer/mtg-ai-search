@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useAuth } from "../contexts/AuthContext.jsx";
 import { useToast } from "../contexts/ToastContext.jsx";
 import { useLanguage } from "../contexts/LanguageContext.jsx";
@@ -16,6 +16,29 @@ function SettingsPage() {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [requesting, setRequesting] = useState(false);
   const [changing, setChanging] = useState(false);
+  const [apiKeyStatus, setApiKeyStatus] = useState(null);
+  const [apiKeyLoading, setApiKeyLoading] = useState(true);
+  const [apiKeyGenerating, setApiKeyGenerating] = useState(false);
+  const [generatedApiKey, setGeneratedApiKey] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadApiKeyStatus = async () => {
+      setApiKeyLoading(true);
+      try {
+        const res = await apiFetch("/api/auth/api-key");
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!cancelled) setApiKeyStatus(data);
+      } finally {
+        if (!cancelled) setApiKeyLoading(false);
+      }
+    };
+
+    loadApiKeyStatus();
+    return () => { cancelled = true; };
+  }, []);
 
   const handleRequestCode = async () => {
     setRequesting(true);
@@ -65,6 +88,41 @@ function SettingsPage() {
       showToast(t('changePasswordFailed'), "error");
     } finally {
       setChanging(false);
+    }
+  };
+
+  const handleGenerateApiKey = async () => {
+    if (apiKeyStatus?.has_api_key) {
+      const confirmed = confirm(t('apiKeyRegenerateConfirm'));
+      if (!confirmed) return;
+    }
+
+    setApiKeyGenerating(true);
+    try {
+      const res = await apiFetch("/api/auth/api-key", { method: "POST" });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        showToast(err.detail || t('apiKeyGenerateFailed'), "error");
+        return;
+      }
+      const data = await res.json();
+      setGeneratedApiKey(data.api_key);
+      setApiKeyStatus({ has_api_key: true, created_at: data.created_at });
+      showToast(t('apiKeyGenerated'));
+    } catch {
+      showToast(t('apiKeyGenerateFailed'), "error");
+    } finally {
+      setApiKeyGenerating(false);
+    }
+  };
+
+  const handleCopyApiKey = async () => {
+    if (!generatedApiKey) return;
+    try {
+      await navigator.clipboard.writeText(generatedApiKey);
+      showToast(t('apiKeyCopied'));
+    } catch {
+      showToast(generatedApiKey, "info");
     }
   };
 
@@ -180,6 +238,44 @@ function SettingsPage() {
             </div>
           </form>
         )}
+      </div>
+
+      <div className="settings-card">
+        <h3 className="settings-section-title">{t('apiAccess')}</h3>
+        <p className="settings-hint">{t('apiAccessHint')}</p>
+        <div className="settings-info-row">
+          <span className="settings-label">{t('apiKeyStatus')}</span>
+          <span className="settings-value">
+            {apiKeyLoading && t('loading')}
+            {!apiKeyLoading && apiKeyStatus?.has_api_key && t('apiKeyExists')}
+            {!apiKeyLoading && !apiKeyStatus?.has_api_key && t('apiKeyMissing')}
+          </span>
+        </div>
+        {apiKeyStatus?.created_at && (
+          <div className="settings-info-row">
+            <span className="settings-label">{t('apiKeyCreatedAt')}</span>
+            <span className="settings-value">{new Date(apiKeyStatus.created_at).toLocaleString()}</span>
+          </div>
+        )}
+        {generatedApiKey && (
+          <div className="settings-api-key-box">
+            <p className="settings-warning">{t('apiKeyOneTime')}</p>
+            <code>{generatedApiKey}</code>
+            <button className="btn-secondary" type="button" onClick={handleCopyApiKey}>
+              {t('copyApiKey')}
+            </button>
+          </div>
+        )}
+        <button
+          className="btn-primary"
+          type="button"
+          onClick={handleGenerateApiKey}
+          disabled={apiKeyGenerating}
+        >
+          {apiKeyGenerating && t('generating')}
+          {!apiKeyGenerating && apiKeyStatus?.has_api_key && t('regenerateApiKey')}
+          {!apiKeyGenerating && !apiKeyStatus?.has_api_key && t('generateApiKey')}
+        </button>
       </div>
     </div>
   );

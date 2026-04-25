@@ -82,6 +82,10 @@ async def discover(req: DiscoverRequest) -> dict:
     )
 
 
+async def discover_exact_match(query: str, limit: int, **filters) -> dict:
+    return await discover_cards(q=query, page=1, page_size=limit, **filters)
+
+
 async def list_keywords() -> dict:
     return {"keywords": await get_all_keywords()}
 

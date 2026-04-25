@@ -311,6 +311,26 @@ async def regenerate_embeddings(status_callback: StatusCallback = None) -> None:
     logger.info("[reembed] Complete.")
 
 
+async def rebuild_effect_chunks(status_callback: StatusCallback = None) -> None:
+    def _do_rebuild() -> None:
+        from scripts.seed_pg import generate_effect_embeddings, get_conn, sync_card_effect_chunks
+
+        conn = get_conn()
+        try:
+            _emit_status(status_callback, "正在重建卡牌效果分段...")
+            sync_card_effect_chunks(conn)
+            _emit_status(status_callback, "正在生成效果分段 embedding...")
+            generate_effect_embeddings(
+                conn,
+                on_progress=_make_progress_callback(status_callback, "正在生成效果分段 embedding"),
+            )
+        finally:
+            conn.close()
+
+    await asyncio.to_thread(_do_rebuild)
+    logger.info("[effect_chunks] Complete.")
+
+
 def _get_scryfall_bulk_updated_at() -> str | None:
     """Fetch the updated_at timestamp of the configured Scryfall bulk data."""
     try:

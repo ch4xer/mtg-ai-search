@@ -141,9 +141,13 @@ def create_schema(conn):
                 verification_code_expires_at TIMESTAMPTZ,
                 verification_attempts INT NOT NULL DEFAULT 0,
                 last_active_at TIMESTAMPTZ,
+                api_key_hash TEXT,
+                api_key_created_at TIMESTAMPTZ,
                 created_at    TIMESTAMPTZ DEFAULT now()
             )
         """)
+        cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS api_key_hash TEXT")
+        cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS api_key_created_at TIMESTAMPTZ")
         cur.execute("""
             CREATE TABLE IF NOT EXISTS decks (
                 id                   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -201,6 +205,7 @@ def create_schema(conn):
 
         # 索引
         cur.execute("CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)")
+        cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_api_key_hash ON users(api_key_hash) WHERE api_key_hash IS NOT NULL")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_decks_user_id ON decks(user_id)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_deck_cards_deck_id ON deck_cards(deck_id)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_search_logs_user_id ON search_logs(user_id)")
@@ -236,6 +241,7 @@ def insert_cards_and_prints(conn, chunk_size: int = 5000, batch_size: int = 1000
         valid_prints = [
             p for p in chunk
             if p.get("layout") not in ("token", "emblem", "art_series")
+            and p.get("set_type") != "minigame"
             and p.get("lang") == "en"
             and p.get("oracle_id")
         ]
@@ -269,6 +275,7 @@ def insert_cards_and_prints(conn, chunk_size: int = 5000, batch_size: int = 1000
         valid_prints = [
             p for p in chunk
             if p.get("layout") not in ("token", "emblem", "art_series")
+            and p.get("set_type") != "minigame"
             and p.get("lang") == "en"
             and p.get("oracle_id")
         ]

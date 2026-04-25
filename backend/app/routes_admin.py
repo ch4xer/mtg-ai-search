@@ -7,6 +7,7 @@ from .schemas.admin import UpdateRoleRequest, UpdateSettingsRequest
 from .services.admin_settings_service import get_settings, update_settings
 from .services.admin_stats_service import get_admin_stats
 from .services.admin_task_service import (
+    start_rebuild_effect_chunks,
     get_task_status,
     list_sync_logs,
     start_reembed,
@@ -63,6 +64,11 @@ async def admin_reseed_only(_: str = Depends(require_admin)):
 @admin_router.post("/reembed")
 async def admin_reembed(_: str = Depends(require_admin)):
     return await start_reembed()
+
+
+@admin_router.post("/rebuild-effect-chunks")
+async def admin_rebuild_effect_chunks(_: str = Depends(require_admin)):
+    return await start_rebuild_effect_chunks()
 
 
 @admin_router.post("/seed-abilities")

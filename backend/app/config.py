@@ -16,6 +16,16 @@ def get_admin_credentials() -> tuple[str | None, str | None]:
     return os.getenv("ADMIN_USERNAME"), os.getenv("ADMIN_PASSWORD")
 
 
+def get_startup_retry_config() -> dict[str, int]:
+    """Return startup initialization retry settings from env."""
+    max_attempts = int(os.getenv("STARTUP_INIT_MAX_ATTEMPTS", "5"))
+    retry_delay_seconds = int(os.getenv("STARTUP_INIT_RETRY_DELAY_SECONDS", "15"))
+    return {
+        "max_attempts": max(1, max_attempts),
+        "retry_delay_seconds": max(1, retry_delay_seconds),
+    }
+
+
 # ── Mutable rate-limit settings ──────────────────────────────────
 
 _rate_limits = {

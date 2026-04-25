@@ -27,8 +27,12 @@ CREATE TABLE IF NOT EXISTS users (
     verification_code_expires_at TIMESTAMPTZ,
     verification_attempts INT NOT NULL DEFAULT 0,
     last_active_at TIMESTAMPTZ,
+    api_key_hash TEXT,
+    api_key_created_at TIMESTAMPTZ,
     created_at    TIMESTAMPTZ DEFAULT now()
 );
+ALTER TABLE users ADD COLUMN IF NOT EXISTS api_key_hash TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS api_key_created_at TIMESTAMPTZ;
 
 CREATE TABLE IF NOT EXISTS decks (
     id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -68,6 +72,7 @@ CREATE TABLE IF NOT EXISTS sync_logs (
 CREATE INDEX IF NOT EXISTS idx_sync_logs_started_at ON sync_logs(started_at DESC);
 
 CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_api_key_hash ON users(api_key_hash) WHERE api_key_hash IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_decks_user_id ON decks(user_id);
 CREATE INDEX IF NOT EXISTS idx_search_logs_user_id ON search_logs(user_id);
 CREATE INDEX IF NOT EXISTS idx_search_logs_created_at ON search_logs(created_at);
@@ -88,6 +93,18 @@ CREATE TABLE IF NOT EXISTS card_effects (
 );
 CREATE INDEX IF NOT EXISTS idx_card_effects_card_id ON card_effects(card_id);
 CREATE INDEX IF NOT EXISTS idx_cards_is_unofficial ON cards(is_unofficial);
+UPDATE cards c
+SET is_unofficial = TRUE
+WHERE EXISTS (
+    SELECT 1 FROM card_prints cp
+    WHERE cp.card_id = c.id
+      AND cp.set_type = 'minigame'
+)
+AND NOT EXISTS (
+    SELECT 1 FROM card_prints cp
+    WHERE cp.card_id = c.id
+      AND cp.set_type IS DISTINCT FROM 'minigame'
+);
 
 CREATE TABLE IF NOT EXISTS deck_cards (
     id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),

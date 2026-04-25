@@ -24,8 +24,10 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 ABILITY_DISTANCE_THRESHOLD = 0.18
+EFFECT_DISTANCE_THRESHOLD = 0.5
 VECTOR_SEARCH_N_RESULTS = 50
 EFFECT_VECTOR_SEARCH_N_RESULTS = 100
+MAX_EFFECT_MATCHES_PER_CARD = 2
 RERANK_TOP_N = 10  # Number of cards to send to LLM for reranking
 RRF_K = 60
 FILTER_KEYS = (
@@ -43,33 +45,33 @@ VECTOR_QUERY_COLUMNS = {
     "oracle_text": "oracle_text_embedding",
 }
 QUERY_OPTIMIZER_PROMPT = (
-    "You are a Magic: The Gathering expert. Given a user's card search query, "
-    "extract structured information.\n\n"
-    "Return a JSON object with these fields:\n"
-    '- "oracle_text": English description of the card effect/mechanics for vector search. Leave empty if the user only specified a card name.\n'
-    '- "name": exact card name if the user specified one, otherwise empty string\n'
-    '- "type": card type and/or subtype if specified, space-separated (e.g. "Creature", "Creature Eldrazi", "Instant", "Artifact Equipment"). '
-    "Include supertypes (Legendary), card types (Creature, Instant, Sorcery, Enchantment, Artifact, Land, Planeswalker), "
-    "and subtypes/creature types (Eldrazi, Dragon, Human, Goblin, Angel, etc.). Otherwise empty string\n"
-    '- "colors": color codes for filtering, space-separated. W=White, U=Blue, B=Black, R=Red, G=Green, C=Colorless. '
-    'For example "B", "B R", "C" for colorless. Otherwise empty string\n'
-    '- "released_at": date condition if specified (e.g. ">2020-01-01"), otherwise empty string\n'
-    '- "layout": card layout if specified (e.g. "transform"), otherwise empty string\n'
-    '- "mana_cost": mana cost condition if specified, otherwise empty string\n'
-    '- "cmc": mana value condition if specified (e.g. "<3", ">5"), otherwise empty string\n'
-    '- "power": power condition if specified (e.g. ">10"), otherwise empty string\n'
-    '- "toughness": toughness condition if specified, otherwise empty string\n\n'
-    "Examples:\n"
-    'Input: "能让对手弃牌的黑色生物"\n'
-    'Output: {"oracle_text": "discard cards from opponent hand", "name": "", "type": "Creature", '
-    '"colors": "B", "released_at": "", "layout": "", "mana_cost": "", "cmc": "", "power": "", "toughness": ""}\n\n'
-    'Input: "red instant that deals damage with cmc less than 3"\n'
-    'Output: {"oracle_text": "deal direct damage to target", "name": "", "type": "Instant", '
-    '"colors": "R", "released_at": "", "layout": "", "mana_cost": "", "cmc": "<3", "power": "", "toughness": ""}\n\n'
-    'Input: "creatures with power greater than 10 released after 2020"\n'
-    'Output: {"oracle_text": "", "name": "", "type": "Creature", '
-    '"colors": "", "released_at": ">2020-01-01", "layout": "", "mana_cost": "", "cmc": "", "power": ">10", "toughness": ""}\n\n'
-    "Return ONLY the JSON object, nothing else."
+    "Extract MTG card-search constraints. Return ONLY JSON with exactly these keys: "
+    "oracle_text,name,type,colors,released_at,layout,mana_cost,cmc,power,toughness. Empty string means unspecified.\n"
+    "Field rules:\n"
+    "oracle_text: English effect/gameplay intent only, not card titles.\n"
+    "name: English card-title query. If input is a short title-like noun phrase, put its literal English title here and leave oracle_text empty.\n"
+    "type: supertypes/types/subtypes, space-separated, e.g. Legendary Creature Dragon.\n"
+    "colors: W U B R G C, space-separated. released_at: date condition like >2020-01-01.\n"
+    "layout: layout word like transform, modal_dfc, adventure. mana_cost: condition on mana cost if explicit.\n"
+    "cmc,power,toughness: numeric conditions using >,>=,<,<=,=.\n"
+    "Type allocation rules:\n"
+    "- If a token/word is a card supertype, type, creature type, planeswalker type, or any MTG subtype, put it in type first.\n"
+    "- Do not repeat the same semantic token in multiple fields. If a word is already captured in type, do not repeat it in name.\n"
+    "- When a query mixes a kind/category word with a title-like word, keep only the non-type/title-distinguishing remainder in name.\n"
+    "Color rules:\n"
+    "- Only set colors when the user's original query explicitly mentions a color, color combination, mana symbol, or colorless.\n"
+    "- Never infer colors from creature race, subtype, faction, lore, or common MTG knowledge.\n"
+    "- If the query does not explicitly mention color, leave colors empty.\n"
+    "Preserve the user's semantic relationships in oracle_text, including actor, target, quantity, and qualifiers when they matter to card matching.\n"
+    "Be faithful to the original wording. Do not add unstated constraints.\n"
+    "Do not map a localized/translated title to a different known card by guesswork.\n"
+    'Example full: "2020年后的红蓝双面传奇龙，法术力值小于5，力量大于3，能抓牌" -> '
+    '{"oracle_text":"draw cards","name":"","type":"Legendary Creature Dragon","colors":"U R","released_at":">2020-01-01",'
+    '"layout":"transform","mana_cost":"","cmc":"<5","power":">3","toughness":""}\n'
+    'Example discard: "能让对手弃牌的黑色生物" -> '
+    '{"oracle_text":"target opponent discards a card","name":"","type":"Creature","colors":"B","released_at":"","layout":"","mana_cost":"","cmc":"","power":"","toughness":""}\n'
+    'Example faithful typing: "奥扎奇泰坦" -> '
+    '{"oracle_text":"","name":"Titan","type":"Creature Eldrazi","colors":"","released_at":"","layout":"","mana_cost":"","cmc":"","power":"","toughness":""}'
 )
 
 RERANK_PROMPT = (
@@ -213,26 +215,28 @@ def _fuse_rankings(rankings: dict[str, list[str]]) -> list[tuple[str, float]]:
 def _rank_effect_results(effect_results: list[dict]) -> tuple[list[str], dict[str, list[dict]]]:
     """Aggregate effect-level matches into card-level rankings.
 
-    A card can earn score from multiple matching chunks, which helps queries
-    that mention more than one effect without requiring query splitting.
+    Caps matches per card at MAX_EFFECT_MATCHES_PER_CARD so a single card with
+    many weakly related chunks can't out-score a card with fewer strong hits.
     """
     scores: dict[str, float] = defaultdict(float)
     matches_by_card: dict[str, list[dict]] = defaultdict(list)
 
     for rank, row in enumerate(effect_results, start=1):
         card_id = row["card_id"]
+        if len(matches_by_card[card_id]) >= MAX_EFFECT_MATCHES_PER_CARD:
+            continue
+
         scores[card_id] += 1.0 / (RRF_K + rank)
-        if len(matches_by_card[card_id]) < 3:
-            matches_by_card[card_id].append(
-                {
-                    "effect_id": row["effect_id"],
-                    "effect_text": row["effect_text"],
-                    "face_index": row["face_index"],
-                    "chunk_index": row["chunk_index"],
-                    "source": row["source"],
-                    "distance": row["distance"],
-                }
-            )
+        matches_by_card[card_id].append(
+            {
+                "effect_id": row["effect_id"],
+                "effect_text": row["effect_text"],
+                "face_index": row["face_index"],
+                "chunk_index": row["chunk_index"],
+                "source": row["source"],
+                "distance": row["distance"],
+            }
+        )
 
     ranking = [card_id for card_id, _ in sorted(scores.items(), key=lambda item: item[1], reverse=True)]
     return ranking, matches_by_card
@@ -322,7 +326,11 @@ def prepare_ability_embedding(state: SearchState) -> dict:
 
     started_embedding = perf_counter()
     embedding = encode_query([oracle_text])[0]
-    logger.info("<<< ability embedding: 1 text in %.2fs", perf_counter() - started_embedding)
+    logger.info(
+        "<<< ability embedding: %r in %.2fs",
+        oracle_text,
+        perf_counter() - started_embedding,
+    )
     logger.info("<<< prepare_ability_embedding took %.2fs", perf_counter() - started)
     return {"query_embeddings": {"ability_oracle_text": embedding}}
 
@@ -393,15 +401,17 @@ async def vector_search_node(state: SearchState) -> dict:
                 query_embedding,
                 n_results=EFFECT_VECTOR_SEARCH_N_RESULTS,
                 card_ids=filtered_card_ids,
+                distance_threshold=EFFECT_DISTANCE_THRESHOLD,
             )
             if effect_results:
                 effect_ranking, effect_matches = _rank_effect_results(effect_results)
                 rankings["oracle_text_effects"] = effect_ranking[:VECTOR_SEARCH_N_RESULTS]
                 effect_matches_by_card.update(effect_matches)
                 logger.info(
-                    "  Effect chunk search [%s]: %d chunks, %d cards",
+                    "  Effect chunk search [%s]: %d chunks under %.3f, %d cards",
                     query_key,
                     len(effect_results),
+                    EFFECT_DISTANCE_THRESHOLD,
                     len(effect_ranking),
                 )
                 continue
@@ -468,11 +478,6 @@ def rerank_with_llm(state: SearchState) -> dict:
 
     if not rerank_enabled:
         logger.info("<<< rerank skipped: disabled in %.2fs", perf_counter() - started)
-        return {"ranked_results": candidate_results, "rerank_tokens_prompt": 0, "rerank_tokens_completion": 0}
-
-    # Only rerank when vector retrieval returns more than the rerank window.
-    if len(candidate_results) <= rerank_top_n:
-        logger.info("<<< rerank skipped: %d candidates <= %d in %.2fs", len(candidate_results), rerank_top_n, perf_counter() - started)
         return {"ranked_results": candidate_results, "rerank_tokens_prompt": 0, "rerank_tokens_completion": 0}
 
     # Take top N candidates for reranking

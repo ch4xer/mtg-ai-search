@@ -8,7 +8,7 @@ services:
     environment:
       POSTGRES_DB: mtg
       POSTGRES_USER: mtg
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required, copy .env.example to .env and set it}
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U mtg"]
       interval: 5s
@@ -30,15 +30,13 @@ services:
         condition: service_healthy
     environment:
       DATABASE_URL: postgresql://mtg:${POSTGRES_PASSWORD}@mtg-db:5432/mtg
-      LLM_PROVIDER: ${LLM_PROVIDER:-deepseek}
-      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
-      DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-chat}
-      SILICONFLOW_API_KEY: ${SILICONFLOW_API_KEY}
-      SILICONFLOW_CHAT_MODEL: ${SILICONFLOW_CHAT_MODEL:-Pro/moonshotai/Kimi-K2.5}
-      JWT_SECRET: ${JWT_SECRET}
-      ADMIN_USERNAME: ${ADMIN_USERNAME}
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
-      RESEND_API_KEY: ${RESEND_API_KEY}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-v4-flash}
+      SILICONFLOW_API_KEY: ${SILICONFLOW_API_KEY:-}
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required, generate one with `openssl rand -hex 32`}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
     restart: unless-stopped
     deploy:
       resources:

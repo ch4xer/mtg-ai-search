@@ -1,8 +1,6 @@
 """Deck HTTP endpoints."""
 
-import io
-
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import PlainTextResponse, StreamingResponse
 
 from .auth import get_current_user
@@ -15,6 +13,7 @@ from .schemas.decks import (
 )
 from .services.deck_export_service import (
     build_attachment_headers,
+    build_export_download_response,
     pop_image_export,
     pop_pdf_export,
     stream_image_export,
@@ -119,13 +118,14 @@ async def export_deck_pdf_stream(deck_id: str, user_id: str = Depends(get_curren
 
 
 @deck_router.get("/{deck_id}/export/download/{export_id}")
-async def export_download(deck_id: str, export_id: str, user_id: str = Depends(get_current_user)):
+async def export_download(deck_id: str, export_id: str, request: Request, user_id: str = Depends(get_current_user)):
     await require_owner(deck_id, user_id)
     pdf_bytes, filename = pop_pdf_export(export_id)
-    return StreamingResponse(
-        io.BytesIO(pdf_bytes),
-        media_type="application/pdf",
-        headers=build_attachment_headers(filename),
+    return build_export_download_response(
+        pdf_bytes,
+        filename,
+        "application/pdf",
+        request.headers.get("range"),
     )
 
 
@@ -135,13 +135,14 @@ async def export_deck_images_stream(deck_id: str, user_id: str = Depends(get_cur
 
 
 @deck_router.get("/{deck_id}/export/images/download/{export_id}")
-async def export_images_download(deck_id: str, export_id: str, user_id: str = Depends(get_current_user)):
+async def export_images_download(deck_id: str, export_id: str, request: Request, user_id: str = Depends(get_current_user)):
     await require_owner(deck_id, user_id)
     zip_bytes, filename = pop_image_export(export_id)
-    return StreamingResponse(
-        io.BytesIO(zip_bytes),
-        media_type="application/zip",
-        headers=build_attachment_headers(filename),
+    return build_export_download_response(
+        zip_bytes,
+        filename,
+        "application/zip",
+        request.headers.get("range"),
     )
 
 
@@ -168,12 +169,13 @@ async def shared_export_deck_pdf_stream(deck_id: str):
 
 
 @shared_deck_router.get("/{deck_id}/export/download/{export_id}")
-async def shared_export_download(deck_id: str, export_id: str):
+async def shared_export_download(deck_id: str, export_id: str, request: Request):
     pdf_bytes, filename = pop_pdf_export(export_id)
-    return StreamingResponse(
-        io.BytesIO(pdf_bytes),
-        media_type="application/pdf",
-        headers=build_attachment_headers(filename),
+    return build_export_download_response(
+        pdf_bytes,
+        filename,
+        "application/pdf",
+        request.headers.get("range"),
     )
 
 
@@ -183,10 +185,11 @@ async def shared_export_deck_images_stream(deck_id: str):
 
 
 @shared_deck_router.get("/{deck_id}/export/images/download/{export_id}")
-async def shared_export_images_download(deck_id: str, export_id: str):
+async def shared_export_images_download(deck_id: str, export_id: str, request: Request):
     zip_bytes, filename = pop_image_export(export_id)
-    return StreamingResponse(
-        io.BytesIO(zip_bytes),
-        media_type="application/zip",
-        headers=build_attachment_headers(filename),
+    return build_export_download_response(
+        zip_bytes,
+        filename,
+        "application/zip",
+        request.headers.get("range"),
     )

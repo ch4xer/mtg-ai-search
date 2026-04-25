@@ -3,12 +3,20 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" type="image/svg+xml" href="/favicon-light.svg" id="app-favicon" />
     <title>MTG AI Search</title>
     <script>
       // Must run in <head>, before any stylesheet is parsed and before <body> enters
       // the DOM. body has `transition: background-color 0.3s` — if we set data-theme
       // after body exists with light computed styles, the change would animate.
       (function () {
+        function applyFavicon(theme) {
+          var favicon = document.getElementById("app-favicon");
+          if (favicon) {
+            favicon.href = theme === "dark" ? "/favicon-dark.svg" : "/favicon-light.svg";
+          }
+        }
+
         var theme = localStorage.getItem("mtg-theme");
         if (theme !== "light" && theme !== "dark") {
           theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
@@ -16,6 +24,7 @@
         var root = document.documentElement;
         root.setAttribute("data-theme", theme);
         root.style.colorScheme = theme;
+        applyFavicon(theme);
       })();
     </script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />

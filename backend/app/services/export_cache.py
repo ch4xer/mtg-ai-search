@@ -17,8 +17,9 @@ def put_export(cache: ExportCache, data: bytes, filename: str) -> str:
     return export_id
 
 
-def pop_export(cache: ExportCache, export_id: str) -> tuple[bytes, str]:
-    entry = cache.pop(export_id, None)
+def get_export(cache: ExportCache, export_id: str) -> tuple[bytes, str]:
+    cleanup_exports(cache)
+    entry = cache.get(export_id)
     if not entry:
         raise HTTPException(status_code=404, detail="Export not found or expired")
     data, filename, _ = entry
@@ -30,4 +31,3 @@ def cleanup_exports(cache: ExportCache) -> None:
     expired = [key for key, value in cache.items() if now - value[2] > EXPORT_CACHE_TTL]
     for key in expired:
         del cache[key]
-

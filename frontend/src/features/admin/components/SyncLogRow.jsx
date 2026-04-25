@@ -1,8 +1,11 @@
 import { useState } from "react";
 import { SyncStatusBadge } from "./StatusBadge.jsx";
+import { useLanguage } from "../../../contexts/LanguageContext.jsx";
 
 export default function SyncLogRow({ log }) {
   const [expanded, setExpanded] = useState(false);
+  const { language } = useLanguage();
+  const dateLocale = language === "zh" ? "zh-CN" : "en-US";
   const hasLongMessage = log.message && log.message.length > 50;
 
   return (
@@ -17,7 +20,7 @@ export default function SyncLogRow({ log }) {
             </button>
           )}
         </td>
-        <td>{new Date(log.started_at).toLocaleString("zh-CN")}</td>
+        <td>{new Date(log.started_at).toLocaleString(dateLocale)}</td>
         <td><SyncStatusBadge status={log.status} /></td>
         <td>{log.new_cards}</td>
         <td>{log.updated_cards}</td>

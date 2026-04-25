@@ -1,11 +1,22 @@
+import { useLanguage } from "../../../contexts/LanguageContext.jsx";
+
+const STATUS_KEY = {
+  running: "adminStatusRunning",
+  done: "adminStatusDone",
+  error: "adminStatusError",
+  skipped: "adminStatusSkipped",
+};
+
 export function StatusBadge({ status }) {
+  const { t } = useLanguage();
   if (!status || status === "idle") return null;
-  const labels = { running: "运行中", done: "已完成", error: "失败" };
-  return <span className={`admin-task-badge admin-task-badge-${status}`}>{labels[status]}</span>;
+  const labelKey = STATUS_KEY[status];
+  return <span className={`admin-task-badge admin-task-badge-${status}`}>{labelKey ? t(labelKey) : status}</span>;
 }
 
 export function SyncStatusBadge({ status }) {
-  const labels = { running: "运行中", done: "完成", error: "失败", skipped: "跳过" };
+  const { t } = useLanguage();
   const className = status === "skipped" ? "idle" : status;
-  return <span className={`admin-task-badge admin-task-badge-${className}`}>{labels[status] || status}</span>;
+  const labelKey = STATUS_KEY[status];
+  return <span className={`admin-task-badge admin-task-badge-${className}`}>{labelKey ? t(labelKey) : status}</span>;
 }

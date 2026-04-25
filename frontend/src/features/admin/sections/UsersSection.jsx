@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { deleteAdminUser, fetchAdminUsers, updateAdminUserRole } from "../../../api/admin.js";
 import { useToast } from "../../../contexts/ToastContext.jsx";
+import { useLanguage } from "../../../contexts/LanguageContext.jsx";
 import { formatNumber } from "../utils.js";
 
 export default function UsersSection() {
@@ -11,6 +12,8 @@ export default function UsersSection() {
   const [totalUsers, setTotalUsers] = useState(0);
   const [pageSize] = useState(20);
   const { showToast } = useToast();
+  const { language, t } = useLanguage();
+  const dateLocale = language === "zh" ? "zh-CN" : "en-US";
   const searchTimerRef = useRef(null);
 
   const totalPages = Math.max(1, Math.ceil(totalUsers / pageSize));
@@ -31,7 +34,7 @@ export default function UsersSection() {
         }
       }
     } catch {
-      showToast("加载用户列表失败", "error");
+      showToast(t("adminUsersLoadFailed"), "error");
     } finally {
       setLoading(false);
     }
@@ -60,66 +63,66 @@ export default function UsersSection() {
       const res = await updateAdminUserRole(userId, newRole);
       if (res.ok) {
         setUsers((prev) => prev.map((u) => (u.id === userId ? { ...u, role: newRole } : u)));
-        showToast(`已将用户角色更改为 ${newRole}`);
+        showToast(t("adminRoleChanged").replace("{role}", newRole));
       } else {
         const err = await res.json().catch(() => ({}));
-        showToast(err.detail || "操作失败", "error");
+        showToast(err.detail || t("adminActionFailed"), "error");
       }
-    } catch { showToast("操作失败", "error"); }
+    } catch { showToast(t("adminActionFailed"), "error"); }
   };
 
   const handleDelete = async (userId, username) => {
-    if (!confirm(`确定要删除用户「${username}」吗？该用户的所有卡组也将被删除。`)) return;
+    if (!confirm(t("adminConfirmDeleteUser").replace("{username}", username))) return;
     try {
       const res = await deleteAdminUser(userId);
       if (res.ok) {
         setUsers((prev) => prev.filter((u) => u.id !== userId));
         setTotalUsers((prev) => prev - 1);
-        showToast(`用户「${username}」已删除`);
+        showToast(t("adminUserDeleted").replace("{username}", username));
       } else {
         const err = await res.json().catch(() => ({}));
-        showToast(err.detail || "删除失败", "error");
+        showToast(err.detail || t("adminDeleteFailed"), "error");
       }
-    } catch { showToast("删除失败", "error"); }
+    } catch { showToast(t("adminDeleteFailed"), "error"); }
   };
 
   if (loading) return <div className="loading"><div className="loading-spinner" /></div>;
 
   return (
     <>
-      <h2 className="admin-title">用户管理</h2>
+      <h2 className="admin-title">{t("adminTitleUsers")}</h2>
 
       <div className="admin-search-bar">
         <input
           type="text"
           className="admin-search-input"
-          placeholder="搜索用户名或邮箱..."
+          placeholder={t("adminSearchUsersPlaceholder")}
           value={searchQuery}
           onChange={handleSearchChange}
         />
-        <span className="admin-user-count">共 {totalUsers} 个用户</span>
+        <span className="admin-user-count">{t("adminUsersTotal").replace("{n}", totalUsers)}</span>
       </div>
 
       <div className="admin-table-wrapper">
         <table className="admin-table">
           <thead>
             <tr>
-              <th>用户名</th>
-              <th>角色</th>
-              <th>注册时间</th>
-              <th>最近活动</th>
-              <th className="admin-stat-group" colSpan="3">搜索次数</th>
-              <th className="admin-stat-group" colSpan="3">Token 消耗</th>
-              <th>操作</th>
+              <th>{t("adminColUsername")}</th>
+              <th>{t("adminColRole")}</th>
+              <th>{t("adminColRegistered")}</th>
+              <th>{t("adminColLastActive")}</th>
+              <th className="admin-stat-group" colSpan="3">{t("adminColSearches")}</th>
+              <th className="admin-stat-group" colSpan="3">{t("adminColTokens")}</th>
+              <th>{t("adminColActions")}</th>
             </tr>
             <tr className="admin-subheader">
               <th colSpan="4"></th>
-              <th className="admin-stat-col">总计</th>
-              <th className="admin-stat-col">7天</th>
-              <th className="admin-stat-col">3小时</th>
-              <th className="admin-stat-col">总计</th>
-              <th className="admin-stat-col">7天</th>
-              <th className="admin-stat-col">3小时</th>
+              <th className="admin-stat-col">{t("adminSubTotal")}</th>
+              <th className="admin-stat-col">{t("adminSub7d")}</th>
+              <th className="admin-stat-col">{t("adminSub3h")}</th>
+              <th className="admin-stat-col">{t("adminSubTotal")}</th>
+              <th className="admin-stat-col">{t("adminSub7d")}</th>
+              <th className="admin-stat-col">{t("adminSub3h")}</th>
               <th></th>
             </tr>
           </thead>
@@ -127,7 +130,7 @@ export default function UsersSection() {
             {users.length === 0 ? (
               <tr>
                 <td colSpan="11" style={{ textAlign: "center", padding: "2rem", color: "var(--text-muted)" }}>
-                  {searchQuery ? "没有找到匹配的用户" : "暂无用户"}
+                  {searchQuery ? t("adminUsersNoMatch") : t("adminUsersEmpty")}
                 </td>
               </tr>
             ) : (
@@ -135,8 +138,8 @@ export default function UsersSection() {
                 <tr key={u.id}>
                   <td>{u.username}</td>
                   <td><span className={`role-badge role-${u.role}`}>{u.role}</span></td>
-                  <td>{new Date(u.created_at).toLocaleDateString("zh-CN")}</td>
-                  <td>{u.last_active_at ? new Date(u.last_active_at).toLocaleDateString("zh-CN") : "—"}</td>
+                  <td>{new Date(u.created_at).toLocaleDateString(dateLocale)}</td>
+                  <td>{u.last_active_at ? new Date(u.last_active_at).toLocaleDateString(dateLocale) : "—"}</td>
                   <td className="admin-stat-cell">{formatNumber(u.total_searches)}</td>
                   <td className="admin-stat-cell">{formatNumber(u.searches_7d)}</td>
                   <td className="admin-stat-cell">{formatNumber(u.searches_3h)}</td>
@@ -145,10 +148,10 @@ export default function UsersSection() {
                   <td className="admin-stat-cell">{formatNumber(u.tokens_3h)}</td>
                   <td className="admin-actions-cell">
                     <button className="btn-secondary" onClick={() => handleToggleRole(u.id, u.role)}>
-                      {u.role === "admin" ? "降为用户" : "升为管理员"}
+                      {u.role === "admin" ? t("adminDemoteToUser") : t("adminPromoteToAdmin")}
                     </button>
                     <button className="btn-danger" onClick={() => handleDelete(u.id, u.username)}>
-                      删除
+                      {t("adminDeleteUserBtn")}
                     </button>
                   </td>
                 </tr>
@@ -161,7 +164,7 @@ export default function UsersSection() {
       {totalPages > 1 && (
         <div className="admin-pagination">
           <button className="admin-page-btn" disabled={currentPage <= 1} onClick={() => handlePageChange(currentPage - 1)}>
-            &laquo; 上一页
+            {t("adminPaginationPrev")}
           </button>
           {Array.from({ length: totalPages }, (_, i) => i + 1)
             .filter((p) => p === 1 || p === totalPages || Math.abs(p - currentPage) <= 2)
@@ -180,7 +183,7 @@ export default function UsersSection() {
               )
             )}
           <button className="admin-page-btn" disabled={currentPage >= totalPages} onClick={() => handlePageChange(currentPage + 1)}>
-            下一页 &raquo;
+            {t("adminPaginationNext")}
           </button>
         </div>
       )}

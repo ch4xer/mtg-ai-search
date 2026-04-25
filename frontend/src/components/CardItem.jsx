@@ -1,5 +1,7 @@
 import React, { useState, useRef, useEffect } from "react";
 import { createPortal } from "react-dom";
+import { addDeckCard } from "../api/decks.js";
+import { fetchCardPrints, normalizePrints } from "../api/cards.js";
 import { useAuth } from "../contexts/AuthContext.jsx";
 import { apiFetch } from "../utils/apiFetch.js";
 import { useToast } from "../contexts/ToastContext.jsx";
@@ -8,6 +10,8 @@ import { getFormatLabel, getCardLegality, legalityLabel } from "../utils/formats
 import { getImageUri } from "../utils/cardImage.js";
 import { getSetIconClass } from "../utils/keyrune.js";
 import { parseManaCost, parseOracleText } from "../utils/manaSymbols.js";
+
+const DOUBLE_FACED_LAYOUTS = new Set(["transform", "modal_dfc", "double_faced_token", "reversible_card"]);
 
 function CardItem({ card, imageMode, decks: propDecks }) {
   const [imgError, setImgError] = useState(false);
@@ -27,10 +31,9 @@ function CardItem({ card, imageMode, decks: propDecks }) {
   const decks = localDecks ?? propDecks ?? [];
 
   const selectedCardFaces = selectedArt?.card_faces || card.card_faces || [];
-  const doubleFacedLayouts = new Set(["transform", "modal_dfc", "double_faced_token", "reversible_card"]);
   const isDoubleFaced =
     selectedCardFaces.length >= 2 &&
-    doubleFacedLayouts.has(card.layout);
+    DOUBLE_FACED_LAYOUTS.has(card.layout);
 
   let frontImageUri = "";
   let backImageUri = "";
@@ -84,35 +87,10 @@ function CardItem({ card, imageMode, decks: propDecks }) {
     setLoadingPrints(true);
     setShowArtPicker(true);
     try {
-      const res = await apiFetch(`/api/cards/${card.id}/prints`);
+      const res = await fetchCardPrints(card.id);
       if (!res.ok) return;
       const data = await res.json();
-      const allPrints = (data.prints || [])
-        .map((p) => {
-          const collectorNumber = p.image_collector_number;
-          const imageSetName = p.image_set_name;
-          return {
-            id: p.id,
-            normal: p.image_normal || getImageUri(p.card_faces?.[0]?.image_uris, "normal"),
-            image_uris: {
-              small: p.image_small,
-              normal: p.image_normal,
-              large: p.image_large,
-              png: p.image_png,
-              art_crop: p.image_art_crop,
-              border_crop: p.image_border_crop,
-            },
-            card_faces: p.card_faces,
-            setName: imageSetName,
-            set: p.image_set_code,
-            collectorNumber,
-            label: `${imageSetName}${collectorNumber ? ` #${collectorNumber}` : ""}`,
-            rarity: p.rarity,
-            artist: p.artist,
-          };
-        })
-        .filter((p) => p.normal);
-      setPrints(allPrints);
+      setPrints(normalizePrints(data));
     } catch {
       showToast("获取版本列表失败", "error");
     } finally {
@@ -123,6 +101,10 @@ function CardItem({ card, imageMode, decks: propDecks }) {
   const handleOpenDeckMenu = async () => {
     if (showDeckMenu) {
       setShowDeckMenu(false);
+      return;
+    }
+    if (propDecks) {
+      setShowDeckMenu(true);
       return;
     }
     setLoadingDecks(true);
@@ -172,15 +154,17 @@ function CardItem({ card, imageMode, decks: propDecks }) {
     setShowDeckMenu(false);
     try {
       const body = { card_id: card.id };
-      if (selectedArt?.id) body.print_id = selectedArt.id;
-      const imageUrl = getImageUrlForDeck();
-      if (imageUrl) body.image_url = imageUrl;
-      const displayUrl = getDisplayUrlForDeck();
-      if (displayUrl) body.display_url = displayUrl;
-      const res = await apiFetch(`/api/decks/${deckId}/cards`, {
-        method: "POST",
-        body,
-      });
+      const printId = selectedArt?.id || card.print_id;
+      if (printId) {
+        body.print_id = printId;
+      }
+      if (selectedArt?.id) {
+        const imageUrl = getImageUrlForDeck();
+        if (imageUrl) body.image_url = imageUrl;
+        const displayUrl = getDisplayUrlForDeck();
+        if (displayUrl) body.display_url = displayUrl;
+      }
+      const res = await addDeckCard(deckId, body);
       if (res.ok) {
         showToast(`已将「${card.name}」加入「${deckName}」`);
       } else {

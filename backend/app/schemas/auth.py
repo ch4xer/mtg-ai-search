@@ -30,3 +30,12 @@ class AuthResponse(BaseModel):
     refresh_token: str
     user: dict
 
+
+class ApiKeyStatusResponse(BaseModel):
+    has_api_key: bool
+    created_at: str | None = None
+
+
+class ApiKeyCreateResponse(BaseModel):
+    api_key: str
+    created_at: str

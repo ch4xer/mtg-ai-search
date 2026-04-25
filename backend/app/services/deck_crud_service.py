@@ -11,7 +11,13 @@ from ..repositories.decks import (
     update_deck_card_image,
 )
 from ..schemas.decks import AddCardRequest, CreateDeckRequest, UpdateCardImageRequest, UpdateDeckRequest
-from .deck_access_service import require_deck_name, require_nonzero_quantity, require_owner, validate_format
+from .deck_access_service import (
+    require_copy_limit,
+    require_deck_name,
+    require_nonzero_quantity,
+    require_owner,
+    validate_format,
+)
 
 
 async def list_user_decks(user_id: str) -> list[dict]:
@@ -57,6 +63,7 @@ async def list_public_deck_cards(deck_id: str) -> list[dict]:
 async def add_owned_deck_card(deck_id: str, user_id: str, req: AddCardRequest) -> dict:
     await require_owner(deck_id, user_id)
     require_nonzero_quantity(req.quantity)
+    await require_copy_limit(deck_id, req.card_id, req.quantity)
     update_image = "image_url" in req.model_fields_set or "display_url" in req.model_fields_set
     return await add_card_to_deck(
         deck_id,

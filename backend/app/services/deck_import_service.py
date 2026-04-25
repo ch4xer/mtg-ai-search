@@ -73,15 +73,15 @@ async def import_owned_deck(deck_id: str, user_id: str, req: ImportDeckRequest) 
         card_id = name_to_id.get(name.lower())
         image_url = None
         display_url = None
-        print_id = None
+        selected_print_id = None
         resolved_name = None
 
         if card_id and set_code:
-            print_info = await get_card_print_by_set_cn(card_id, set_code, collector_num or "")
-            if print_info:
-                print_id = print_info["id"]
-                image_url = print_info.get("image_large") or print_info.get("image_png")
-                display_url = print_info.get("image_art_crop")
+            selected_print = await get_card_print_by_set_cn(card_id, set_code, collector_num or "")
+            if selected_print:
+                selected_print_id = selected_print["id"]
+                image_url = selected_print.get("image_large") or selected_print.get("image_png")
+                display_url = selected_print.get("image_art_crop")
 
         if not card_id:
             card_info = await get_card_by_oracle_id(name)
@@ -98,7 +98,7 @@ async def import_owned_deck(deck_id: str, user_id: str, req: ImportDeckRequest) 
                 display_url=display_url,
                 update_image=bool(image_url),
                 board=board,
-                print_id=print_id,
+                print_id=selected_print_id,
             )
             result = {"name": resolved_name or name, "quantity": qty, "board": board}
             if set_code:
