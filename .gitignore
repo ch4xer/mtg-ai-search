@@ -9,6 +9,7 @@ chroma_data/
 backend/.env
 pgdata/
 .claude/
+CLAUDE.md
 .playwright-mcp/
 
 # Bulk data cache
