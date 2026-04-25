@@ -39,7 +39,10 @@ git clone https://github.com/ch4xer/MTG-AI-Search.git
 cd MTG-AI-Search
 
 cp .env.example .env
-# Edit .env — at minimum set POSTGRES_PASSWORD, JWT_SECRET, and one LLM API key.
+# Edit .env. The following are all required to start the app:
+#   POSTGRES_PASSWORD, JWT_SECRET,
+#   DEEPSEEK_API_KEY     (chat),
+#   SILICONFLOW_API_KEY  (embeddings).
 
 docker compose up -d
 ```
@@ -49,10 +52,10 @@ Then open:
 - Frontend → <http://localhost:60010>
 - Backend  → <http://localhost:8000/docs>
 
-On first launch, sign in to the admin console (`/admin`) and trigger
-**Manual sync** under *Database Maintenance* to pull Scryfall data and build
-embeddings. The first sync takes a while; expect tens of minutes depending on
-your LLM provider.
+On first launch the backend automatically pulls Scryfall bulk data, seeds the
+keyword-ability table and backfills embeddings — no admin action required.
+The initial seed takes tens of minutes depending on your LLM provider; watch
+`docker compose logs -f mtg-backend` for progress.
 
 ## Local development
 
