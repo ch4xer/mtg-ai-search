@@ -25,10 +25,11 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 ABILITY_DISTANCE_THRESHOLD = 0.18
 EFFECT_DISTANCE_THRESHOLD = 0.5
-VECTOR_SEARCH_N_RESULTS = 50
-EFFECT_VECTOR_SEARCH_N_RESULTS = 100
+SEARCH_RESULT_LIMIT = 100
+VECTOR_SEARCH_N_RESULTS = 200
+EFFECT_VECTOR_SEARCH_N_RESULTS = 400
 MAX_EFFECT_MATCHES_PER_CARD = 2
-RERANK_TOP_N = 10  # Number of cards to send to LLM for reranking
+RERANK_TOP_N = 200  # Number of cards to send to LLM for reranking
 RRF_K = 60
 FILTER_KEYS = (
     "colors",
@@ -138,7 +139,7 @@ INITIAL_SEARCH_STATE: SearchState = {
     "query_embeddings": {},
     "candidate_results": [],
     "ranked_results": [],
-    "rerank_enabled": False,
+    "rerank_enabled": True,
     "rerank_top_n": RERANK_TOP_N,
     "tokens_prompt": 0,
     "tokens_completion": 0,
@@ -599,7 +600,7 @@ def _dedup_by_name(cards: list[dict]) -> list[dict]:
 
 async def run_search(
     query: str,
-    rerank_enabled: bool = False,
+    rerank_enabled: bool = True,
     rerank_top_n: int = RERANK_TOP_N,
 ) -> SearchResult:
     """Run the search agent with a query. Returns results and token usage.
@@ -614,7 +615,7 @@ async def run_search(
 
     # Direct string match
     started_text_match = perf_counter()
-    matches = await text_match_cards(query_stripped)
+    matches = await text_match_cards(query_stripped, limit=SEARCH_RESULT_LIMIT)
     logger.info("<<< direct text match check took %.2fs", perf_counter() - started_text_match)
     if matches:
         logger.info("<<< Direct text match: %d results for '%s'", len(matches), query_stripped)
@@ -632,7 +633,7 @@ async def run_search(
         **INITIAL_SEARCH_STATE,
         "query": query,
         "rerank_enabled": rerank_enabled,
-        "rerank_top_n": max(1, min(100, rerank_top_n)),
+        "rerank_top_n": max(1, min(VECTOR_SEARCH_N_RESULTS, rerank_top_n)),
     })
     logger.info("<<< run_search total took %.2fs", perf_counter() - started)
     ranked_results = result["ranked_results"]

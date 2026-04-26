@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import SearchBar from "../components/SearchBar.jsx";
 import CardGrid from "../components/CardGrid.jsx";
@@ -44,10 +44,6 @@ const FEATURES = [
   },
 ];
 
-const RERANK_TOP_N_OPTIONS = [5, 10, 15, 20, 30, 40, 50];
-const RERANK_ENABLED_KEY = "mtg-rerank-enabled";
-const RERANK_TOP_N_KEY = "mtg-rerank-top-n";
-
 function SearchContainer({ imageMode, onToggleImageMode }) {
   const { t } = useLanguage();
   const location = useLocation();
@@ -62,47 +58,6 @@ function SearchContainer({ imageMode, onToggleImageMode }) {
   const [aiResults, setAiResults] = useState([]);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiSearched, setAiSearched] = useState(false);
-  const [searchSettingsOpen, setSearchSettingsOpen] = useState(false);
-  const searchSettingsRef = useRef(null);
-  const [rerankEnabled, setRerankEnabled] = useState(() => localStorage.getItem(RERANK_ENABLED_KEY) === "true");
-  const [rerankTopN, setRerankTopN] = useState(() => {
-    const saved = Number(localStorage.getItem(RERANK_TOP_N_KEY));
-    return RERANK_TOP_N_OPTIONS.includes(saved) ? saved : 10;
-  });
-
-  const updateRerankEnabled = (enabled) => {
-    setRerankEnabled(enabled);
-    localStorage.setItem(RERANK_ENABLED_KEY, String(enabled));
-  };
-
-  const updateRerankTopN = (value) => {
-    setRerankTopN(value);
-    localStorage.setItem(RERANK_TOP_N_KEY, String(value));
-  };
-
-  useEffect(() => {
-    if (!searchSettingsOpen) return;
-
-    const closeOnOutsideClick = (event) => {
-      if (!searchSettingsRef.current?.contains(event.target)) {
-        setSearchSettingsOpen(false);
-      }
-    };
-
-    const closeOnEscape = (event) => {
-      if (event.key === "Escape") {
-        setSearchSettingsOpen(false);
-      }
-    };
-
-    document.addEventListener("pointerdown", closeOnOutsideClick);
-    document.addEventListener("keydown", closeOnEscape);
-
-    return () => {
-      document.removeEventListener("pointerdown", closeOnOutsideClick);
-      document.removeEventListener("keydown", closeOnEscape);
-    };
-  }, [searchSettingsOpen]);
 
   const handleAiSearch = async (query) => {
     if (!query.trim()) return;
@@ -111,7 +66,7 @@ function SearchContainer({ imageMode, onToggleImageMode }) {
     try {
       const res = await apiFetch("/api/search", {
         method: "POST",
-        body: { query, rerank_enabled: rerankEnabled, rerank_top_n: rerankTopN },
+        body: { query },
       });
       if (res.status === 429) {
         const err = await res.json().catch(() => ({}));
@@ -122,7 +77,7 @@ function SearchContainer({ imageMode, onToggleImageMode }) {
       }
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        showToast(err.detail || t('searchLimitReached'), "error");
+        showToast(err.detail || t('searchFailed'), "error");
         setAiResults([]);
         return;
       }
@@ -130,6 +85,7 @@ function SearchContainer({ imageMode, onToggleImageMode }) {
       setAiResults(data.results || []);
     } catch (err) {
       console.error("Search failed:", err);
+      showToast(t('searchFailed'), "error");
       setAiResults([]);
     } finally {
       setAiLoading(false);
@@ -189,53 +145,7 @@ function SearchContainer({ imageMode, onToggleImageMode }) {
 
       {/* AI search panel — hidden when on /discover, but stays mounted */}
       <div style={{ display: isDiscover ? "none" : undefined }}>
-        <SearchBar
-          onSearch={handleAiSearch}
-          loading={aiLoading}
-          rightActions={(
-            <div className="ai-search-settings-popover" ref={searchSettingsRef}>
-              <button
-                type="button"
-                className={`discover-filter-toggle search-row-toggle ${searchSettingsOpen || rerankEnabled ? "active" : ""}`}
-                onClick={() => setSearchSettingsOpen(!searchSettingsOpen)}
-                aria-expanded={searchSettingsOpen}
-              >
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <line x1="4" y1="6" x2="20" y2="6" />
-                  <line x1="8" y1="12" x2="20" y2="12" />
-                  <line x1="12" y1="18" x2="20" y2="18" />
-                </svg>
-                {t('searchSettings')}
-              </button>
-              {searchSettingsOpen && (
-                <div className="ai-search-settings-menu">
-                  <label className="ai-rerank-toggle">
-                    <input
-                      type="checkbox"
-                      checked={rerankEnabled}
-                      onChange={(e) => updateRerankEnabled(e.target.checked)}
-                      disabled={aiLoading}
-                    />
-                    <span>{t('enableRerank')}</span>
-                  </label>
-                  <div className="filter-group ai-rerank-topn">
-                    <span className="filter-group-title">{t('rerankTopN')}</span>
-                    <select
-                      className="filter-select"
-                      value={rerankTopN}
-                      onChange={(e) => updateRerankTopN(Number(e.target.value))}
-                      disabled={aiLoading || !rerankEnabled}
-                    >
-                      {RERANK_TOP_N_OPTIONS.map((value) => (
-                        <option key={value} value={value}>{value}</option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-        />
+        <SearchBar onSearch={handleAiSearch} loading={aiLoading} />
         {aiLoading && (
           <div className="loading">
             <div className="loading-spinner" />

@@ -147,6 +147,7 @@ export const translations = {
     // Errors
     searchLimitReached: "Search limit reached",
     searchLimitReachedAnon: "Anonymous search limit reached, please login",
+    searchFailed: "Search failed, please try again",
 
     // Settings page
     settingsTitle: "Account Settings",
@@ -480,6 +481,7 @@ export const translations = {
     // Errors
     searchLimitReached: "搜索次数已达上限",
     searchLimitReachedAnon: "未登录用户搜索次数已达上限，请登录后使用",
+    searchFailed: "搜索失败，请稍后重试",
 
     // Settings page
     settingsTitle: "账号设置",

@@ -24,8 +24,8 @@ async def search_cards(
     client_ip: str,
     user_id: str | None,
     *,
-    rerank_enabled: bool = False,
-    rerank_top_n: int = 10,
+    rerank_enabled: bool = True,
+    rerank_top_n: int = 200,
 ) -> list[dict]:
     limits = get_rate_limits()
     anon_limit = limits["anon_hourly"]

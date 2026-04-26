@@ -3,8 +3,6 @@ from pydantic import BaseModel, Field
 
 class SearchRequest(BaseModel):
     query: str
-    rerank_enabled: bool = False
-    rerank_top_n: int = Field(default=10, ge=1, le=100)
 
 
 class SearchResponse(BaseModel):
@@ -15,8 +13,8 @@ class ApiAiSearchRequest(BaseModel):
     api_key: str
     query: str
     limit: int = Field(default=10, ge=1, le=50)
-    rerank_enabled: bool = False
-    rerank_top_n: int = Field(default=10, ge=1, le=100)
+    rerank_enabled: bool = True
+    rerank_top_n: int = Field(default=200, ge=1, le=200)
 
 
 class ApiExactMatchRequest(BaseModel):

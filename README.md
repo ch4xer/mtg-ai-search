@@ -92,7 +92,7 @@ The most important ones:
 | `JWT_SECRET`       | ✅       | Signing key for auth tokens. Use `openssl rand -hex 32`. |
 | `DEEPSEEK_API_KEY` | ✅       | DeepSeek chat-completion key.                   |
 | `SILICONFLOW_API_KEY` | ✅    | SiliconFlow key for the embedding endpoint.     |
-| `DEEPSEEK_MODEL`   | ⬜       | Defaults to `deepseek-v4-flash`.                |
+| `DEEPSEEK_MODEL`   | ⬜       | Defaults to `deepseek-v4-pro`.                  |
 | `ADMIN_USERNAME` / `ADMIN_PASSWORD` | ⬜ | Bootstrap an admin on first run. Otherwise register via UI. |
 | `RESEND_API_KEY`   | ⬜       | Enables email verification & password reset.    |
 | `ALLOWED_ORIGINS`  | ⬜       | Comma-separated CORS allowlist.                 |

@@ -2,6 +2,7 @@
 
 from fastapi import APIRouter, Depends, Request
 
+from .agent import SEARCH_RESULT_LIMIT
 from .dependencies import get_optional_user
 from .schemas.search import DiscoverRequest, SearchRequest, SearchResponse
 from .services.search_service import (
@@ -22,14 +23,13 @@ async def search_cards(
     user_id: str | None = Depends(get_optional_user),
 ):
     client_ip = get_client_ip(raw_request)
+    results = await search_cards_service(
+        request.query,
+        client_ip,
+        user_id,
+    )
     return SearchResponse(
-        results=await search_cards_service(
-            request.query,
-            client_ip,
-            user_id,
-            rerank_enabled=request.rerank_enabled,
-            rerank_top_n=request.rerank_top_n,
-        )
+        results=results[:SEARCH_RESULT_LIMIT]
     )
 
 
