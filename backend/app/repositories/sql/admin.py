@@ -8,8 +8,6 @@ async def get_dashboard_stats() -> dict:
 
     total_cards = await pool.fetchval("SELECT COUNT(*) FROM cards")
     total_abilities = await pool.fetchval("SELECT COUNT(*) FROM keyword_abilities")
-    cards_missing = await pool.fetchval("SELECT COUNT(*) FROM cards WHERE name_embedding IS NULL")
-    abilities_missing = await pool.fetchval("SELECT COUNT(*) FROM keyword_abilities WHERE embedding IS NULL")
     last_sync = await pool.fetchval("SELECT value FROM app_meta WHERE key = 'last_sync_updated_at'")
 
     row = await pool.fetchrow("""
@@ -43,8 +41,6 @@ async def get_dashboard_stats() -> dict:
         "database": {
             "total_cards": int(total_cards),
             "total_abilities": int(total_abilities),
-            "cards_missing_embeddings": int(cards_missing),
-            "abilities_missing_embeddings": int(abilities_missing),
             "last_sync_at": last_sync,
         },
         "searches": {
@@ -82,4 +78,3 @@ async def persist_rate_limit_settings(anon_hourly_limit: int | None, user_hourly
                ON CONFLICT (key) DO UPDATE SET value = $1""",
             str(user_hourly_limit),
         )
-

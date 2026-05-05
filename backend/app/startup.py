@@ -7,15 +7,18 @@ from datetime import datetime, timedelta, timezone
 from fastapi import FastAPI
 
 from .auth import hash_password, verify_password
-from .config import get_admin_credentials, get_startup_retry_config, update_rate_limits
+from .config import get_admin_credentials, get_startup_retry_config, get_tag_bootstrap_config, update_rate_limits
 from .maintenance import (
-    backfill_missing_embeddings,
     incremental_sync,
-    seed_abilities_if_empty,
     seed_cards_if_empty,
 )
 from .migrations import run_post_seed, run_pre_seed
 from .repositories.database import close_pool, get_pool
+from .services.keyword_sync_service import seed_abilities_if_empty
+from .services.tag_search_service import (
+    build_tag_expansion_cache,
+    generate_missing_tag_embeddings,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -90,7 +93,7 @@ def _seconds_until_midnight() -> float:
 
 
 async def _daily_sync_loop():
-    """Background loop: sleep until midnight CST, then check for new cards."""
+    """Background loop: sleep until midnight CST, then check Scryfall data sources."""
     while True:
         delay = _seconds_until_midnight()
         logger.info("[scheduler] Next sync check in %.0f seconds (midnight CST).", delay)
@@ -102,7 +105,48 @@ async def _daily_sync_loop():
             else:
                 logger.info("[scheduler] Synced %d new cards.", result["new_cards"])
         except Exception:
-            logger.exception("[scheduler] Sync failed")
+            logger.exception("[scheduler] Card sync failed")
+
+
+async def _tag_bootstrap_loop():
+    """Generate functional tag expansion text and embeddings in small background batches."""
+    config = get_tag_bootstrap_config()
+    if not config["enabled"]:
+        logger.info("[tag-bootstrap] Disabled.")
+        return
+
+    logger.info("[tag-bootstrap] Starting functional tag expansion and embedding generation.")
+    while True:
+        try:
+            expansion_result = await build_tag_expansion_cache(
+                limit=config["expansion_batch_size"],
+                batch_size=config["expansion_batch_size"],
+                sample_size=config["sample_size"],
+                scryfall_delay_seconds=config["scryfall_delay_seconds"],
+                print_embedding_text=config["print_embedding_text"],
+            )
+            logger.info("[tag-bootstrap] Expansion batch: %s", expansion_result)
+            if expansion_result["generated"] == 0:
+                break
+        except Exception:
+            logger.exception("[tag-bootstrap] Expansion batch failed")
+            await asyncio.sleep(60)
+
+    while True:
+        try:
+            embedding_result = await generate_missing_tag_embeddings(
+                limit=config["embedding_batch_size"],
+                batch_size=config["embedding_batch_size"],
+                print_embedding_text=config["print_embedding_text"],
+            )
+            logger.info("[tag-bootstrap] Embedding batch: %s", embedding_result)
+            if embedding_result["processed"] == 0:
+                break
+        except Exception:
+            logger.exception("[tag-bootstrap] Embedding batch failed")
+            await asyncio.sleep(60)
+
+    logger.info("[tag-bootstrap] Complete.")
 
 
 async def _load_persisted_settings(pool) -> None:
@@ -141,7 +185,6 @@ async def _initialize_system() -> None:
             await seed_abilities_if_empty()
             await run_post_seed(pool)
             await _load_persisted_settings(pool)
-            await backfill_missing_embeddings()
         except Exception as exc:
             if attempt >= max_attempts:
                 _set_startup_state("error", f"系统初始化失败: {exc}")
@@ -174,12 +217,14 @@ async def _initialize_system() -> None:
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     sync_task: asyncio.Task | None = None
+    tag_bootstrap_task: asyncio.Task | None = None
 
     async def initialize_then_schedule_sync():
-        nonlocal sync_task
+        nonlocal sync_task, tag_bootstrap_task
         await _initialize_system()
         if get_startup_state()["status"] == "ok":
             sync_task = asyncio.create_task(_daily_sync_loop())
+            tag_bootstrap_task = asyncio.create_task(_tag_bootstrap_loop())
 
     init_task = asyncio.create_task(initialize_then_schedule_sync())
 
@@ -193,4 +238,8 @@ async def lifespan(_: FastAPI):
         sync_task.cancel()
         with suppress(asyncio.CancelledError):
             await sync_task
+    if tag_bootstrap_task is not None:
+        tag_bootstrap_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await tag_bootstrap_task
     await close_pool()

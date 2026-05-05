@@ -113,20 +113,25 @@ function AppContent() {
   };
 
   const location = useLocation();
-  const isSearchRoute = location.pathname === "/" || location.pathname === "/discover";
+  const isSearchRoute =
+    location.pathname === "/" ||
+    location.pathname === "/discover" ||
+    location.pathname === "/exact-match";
 
   return (
     <div className="app">
       <Header theme={theme} onToggleTheme={toggleTheme} />
       {isUpgrading && <SystemUpgradeNotice />}
       <main className="main-content">
-        {/* SearchContainer stays mounted across / and /discover to preserve state */}
+        {/* SearchContainer stays mounted across search routes to preserve state */}
         <div style={{ display: isSearchRoute ? undefined : "none" }}>
           <SearchContainer imageMode={imageMode} onToggleImageMode={toggleImageMode} />
         </div>
         <Routes>
           <Route path="/" element={null} />
-          <Route path="/discover" element={null} />
+          <Route path="/tag-search" element={<Navigate to="/" replace />} />
+          <Route path="/discover" element={<Navigate to="/exact-match" replace />} />
+          <Route path="/exact-match" element={null} />
           <Route path="/login" element={<LoginPage />} />
           <Route path="/decks" element={<ProtectedRoute><DecksPage /></ProtectedRoute>} />
           <Route path="/decks/:id" element={<DeckDetailPage imageMode={imageMode} />} />

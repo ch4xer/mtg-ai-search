@@ -7,17 +7,17 @@ import { useUserDecks } from "../hooks/useUserDecks.js";
 import { useAuth } from "../contexts/AuthContext.jsx";
 import { useToast } from "../contexts/ToastContext.jsx";
 import { useLanguage } from "../contexts/LanguageContext.jsx";
-import { apiFetch } from "../utils/apiFetch.js";
+import { searchCards } from "../api/search.js";
 
-const FEATURES = [
+const AI_SEARCH_FEATURES = [
   {
     icon: (
       <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
         <path d="M12 2a4 4 0 0 1 4 4c0 1.5-.8 2.8-2 3.4V11h3a3 3 0 0 1 3 3v1a2 2 0 0 1-2 2h-1v3a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2v-3H6a2 2 0 0 1-2-2v-1a3 3 0 0 1 3-3h3V9.4C8.8 8.8 8 7.5 8 6a4 4 0 0 1 4-4z" />
       </svg>
     ),
-    titleKey: 'featureAiSearch',
-    descKey: 'featureAiSearchDesc',
+    titleKey: 'aiSearchFeatureIntentTitle',
+    descKey: 'aiSearchFeatureIntentDesc',
   },
   {
     icon: (
@@ -27,8 +27,8 @@ const FEATURES = [
         <line x1="10" y1="3" x2="10" y2="9" />
       </svg>
     ),
-    titleKey: 'featureDeckManagement',
-    descKey: 'featureDeckManagementDesc',
+    titleKey: 'aiSearchFeatureHybridTitle',
+    descKey: 'aiSearchFeatureHybridDesc',
   },
   {
     icon: (
@@ -39,8 +39,8 @@ const FEATURES = [
         <path d="M8 15h4" />
       </svg>
     ),
-    titleKey: 'featurePdfExport',
-    descKey: 'featurePdfExportDesc',
+    titleKey: 'aiSearchFeatureRerankTitle',
+    descKey: 'aiSearchFeatureRerankDesc',
   },
 ];
 
@@ -52,7 +52,8 @@ function SearchContainer({ imageMode, onToggleImageMode }) {
   const { showToast } = useToast();
   const decks = useUserDecks();
 
-  const isDiscover = location.pathname === "/discover";
+  const isDiscover = location.pathname === "/exact-match";
+  const isAiSearch = !isDiscover;
 
   // AI search state
   const [aiResults, setAiResults] = useState([]);
@@ -64,10 +65,7 @@ function SearchContainer({ imageMode, onToggleImageMode }) {
     setAiLoading(true);
     setAiSearched(true);
     try {
-      const res = await apiFetch("/api/search", {
-        method: "POST",
-        body: { query },
-      });
+      const res = await searchCards(query);
       if (res.status === 429) {
         const err = await res.json().catch(() => ({}));
         showToast(err.detail || t('searchLimitReached'), "error");
@@ -99,8 +97,8 @@ function SearchContainer({ imageMode, onToggleImageMode }) {
           <Link
             to="/"
             role="tab"
-            aria-selected={!isDiscover}
-            className={`mode-toggle-btn ${!isDiscover ? "active" : ""}`}
+            aria-selected={isAiSearch}
+            className={`mode-toggle-btn ${isAiSearch ? "active" : ""}`}
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M12 2a4 4 0 0 1 4 4c0 1.5-.8 2.8-2 3.4V11h3a3 3 0 0 1 3 3v1a2 2 0 0 1-2 2h-1v3a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2v-3H6a2 2 0 0 1-2-2v-1a3 3 0 0 1 3-3h3V9.4C8.8 8.8 8 7.5 8 6a4 4 0 0 1 4-4z" />
@@ -108,7 +106,7 @@ function SearchContainer({ imageMode, onToggleImageMode }) {
             {t('aiSearch')}
           </Link>
           <Link
-            to="/discover"
+            to="/exact-match"
             role="tab"
             aria-selected={isDiscover}
             className={`mode-toggle-btn ${isDiscover ? "active" : ""}`}
@@ -143,8 +141,8 @@ function SearchContainer({ imageMode, onToggleImageMode }) {
         </button>
       </div>
 
-      {/* AI search panel — hidden when on /discover, but stays mounted */}
-      <div style={{ display: isDiscover ? "none" : undefined }}>
+      {/* AI search panel — hidden when on exact match, but stays mounted */}
+      <div style={{ display: isAiSearch ? undefined : "none" }}>
         <SearchBar onSearch={handleAiSearch} loading={aiLoading} />
         {aiLoading && (
           <div className="loading">
@@ -162,7 +160,7 @@ function SearchContainer({ imageMode, onToggleImageMode }) {
         )}
         {!aiLoading && !aiSearched && (
           <div className="features-section">
-            {FEATURES.map((f) => (
+            {AI_SEARCH_FEATURES.map((f) => (
               <div key={f.titleKey} className="feature-card">
                 <div className="feature-icon">{f.icon}</div>
                 <h3 className="feature-title">{t(f.titleKey)}</h3>

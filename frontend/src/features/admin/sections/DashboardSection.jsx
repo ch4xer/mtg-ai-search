@@ -22,7 +22,6 @@ export default function DashboardSection() {
   if (!stats) return <p className="admin-empty">{t("adminStatsLoadFailed")}</p>;
 
   const { database: db, searches, popular_queries } = stats;
-  const missingTotal = db.cards_missing_embeddings + db.abilities_missing_embeddings;
 
   return (
     <>
@@ -32,14 +31,6 @@ export default function DashboardSection() {
       <div className="admin-stats-grid">
         <StatCard label={t("adminStatTotalCards")} value={formatNumber(db.total_cards)} />
         <StatCard label={t("adminStatKeywordAbilities")} value={formatNumber(db.total_abilities)} />
-        <StatCard
-          label={t("adminStatMissingEmbeddings")}
-          value={missingTotal}
-          variant={missingTotal > 0 ? "warn" : "ok"}
-          detail={t("adminStatMissingEmbeddingsDetail")
-            .replace("{cards}", db.cards_missing_embeddings)
-            .replace("{abilities}", db.abilities_missing_embeddings)}
-        />
         <StatCard
           label={t("adminStatLastSync")}
           value={db.last_sync_at ? new Date(db.last_sync_at).toLocaleDateString(dateLocale) : t("adminStatNever")}

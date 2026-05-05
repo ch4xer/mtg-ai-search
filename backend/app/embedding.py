@@ -3,8 +3,12 @@ import os
 import time
 
 import httpx
+from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
+
+load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env"))
+load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), ".env"))
 
 SILICONFLOW_API_URL = "https://api.siliconflow.cn/v1/embeddings"
 SILICONFLOW_API_KEY = os.getenv("SILICONFLOW_API_KEY", "")
@@ -17,6 +21,9 @@ _RETRIABLE = (httpx.ReadTimeout, httpx.ConnectTimeout, httpx.RemoteProtocolError
 
 def _call_api_batch(batch: list[str]) -> list[list[float]] | None:
     """Call API for a single batch. Returns None on persistent failure."""
+    if not SILICONFLOW_API_KEY:
+        raise RuntimeError("SILICONFLOW_API_KEY is not configured")
+
     for attempt in range(1, MAX_RETRIES + 1):
         try:
             resp = httpx.post(

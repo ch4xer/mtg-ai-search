@@ -9,6 +9,51 @@ class SearchResponse(BaseModel):
     results: list[dict]
 
 
+class TagSearchRequest(BaseModel):
+    query: str
+    limit: int = Field(default=12, ge=1, le=30)
+
+
+class TagSearchMatch(BaseModel):
+    tag: str
+    tag_type: str
+    label: str
+    score: float
+    reason: str
+    search_query: str
+    search_url: str
+
+
+class TagSearchCatalogMeta(BaseModel):
+    total_tags: int
+    art_tags: int
+    function_tags: int
+    searched_tags: int | None = None
+    etag: str | None = None
+    loaded_at: str | None = None
+    checked_at: str | None = None
+    llm_used: bool = False
+    query_rewrite_used: bool = False
+    rewritten_intent: str = ""
+    type_hint: str = "mixed"
+    targets: list[dict] = Field(default_factory=list)
+    logic: dict | None = None
+    card_count: int = 0
+    card_filter_used: bool = False
+    card_filters: dict = Field(default_factory=dict)
+    card_filter_count: int | None = None
+    card_filter_error: str = ""
+    tag_retrieval_query: str = ""
+
+
+class TagSearchResponse(BaseModel):
+    query: str
+    suggested_queries: list[str]
+    matches: list[TagSearchMatch]
+    cards: list[dict] = Field(default_factory=list)
+    catalog: TagSearchCatalogMeta
+
+
 class ApiAiSearchRequest(BaseModel):
     api_key: str
     query: str

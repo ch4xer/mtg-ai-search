@@ -4,12 +4,12 @@ import asyncio
 
 from fastapi import HTTPException, Request
 
-from ..agent import run_search
 from ..config import get_rate_limits
 from ..repositories.cards import discover_cards, get_all_keywords, get_card_prints_by_oracle_id
 from ..repositories.search_logs import get_ip_hourly_search_count, get_user_hourly_search_count, log_search
 from ..repositories.users import get_user_by_id
 from ..schemas.search import DiscoverRequest
+from .tag_search_service import search_tags
 
 
 def get_client_ip(request: Request) -> str:
@@ -45,21 +45,17 @@ async def search_cards(
                 detail=f"未登录用户搜索次数已达上限 ({anon_limit}次/小时)，请登录后使用",
             )
 
-    search_result = await run_search(
-        query,
-        rerank_enabled=rerank_enabled,
-        rerank_top_n=rerank_top_n,
-    )
+    search_result = await search_tags(query)
     asyncio.create_task(
         log_search(
             user_id,
             query,
-            search_result["tokens_prompt"],
-            search_result["tokens_completion"],
+            int(search_result.get("catalog", {}).get("card_filter_tokens_prompt") or 0),
+            int(search_result.get("catalog", {}).get("card_filter_tokens_completion") or 0),
             ip_address=client_ip,
         )
     )
-    return search_result["ranked_results"]
+    return search_result["cards"]
 
 
 async def discover(req: DiscoverRequest) -> dict:

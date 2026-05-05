@@ -572,7 +572,7 @@
   position: absolute;
   top: calc(10px + 15pt + 40px);
   right: 10px;
-  z-index: 3;
+  z-index: 4;
   width: 36px;
   height: 36px;
   border-radius: 50%;
@@ -823,4 +823,3 @@
 .logo {
   text-decoration: none;
 }
-

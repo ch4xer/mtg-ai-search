@@ -104,10 +104,10 @@ def create_schema(conn):
                 set_type        TEXT,
                 security_stamp  TEXT,
                 border_color    TEXT,
-                games           TEXT[],
-                UNIQUE(card_id, set_code, collector_num)
+                games           TEXT[]
             )
         """)
+        cur.execute("ALTER TABLE card_prints DROP CONSTRAINT IF EXISTS card_prints_card_id_set_code_collector_num_key")
 
         cur.execute("""
             CREATE TABLE IF NOT EXISTS keyword_abilities (
@@ -115,6 +115,40 @@ def create_schema(conn):
                 name        TEXT NOT NULL,
                 description TEXT NOT NULL,
                 embedding   halfvec(2560)
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS tag_sync_state (
+                source_url      TEXT PRIMARY KEY,
+                etag            TEXT,
+                content_hash    TEXT,
+                checked_at      TIMESTAMPTZ,
+                updated_at      TIMESTAMPTZ,
+                total_tags      INT NOT NULL DEFAULT 0,
+                art_tags        INT NOT NULL DEFAULT 0,
+                function_tags   INT NOT NULL DEFAULT 0
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS tagger_tags (
+                tag             TEXT NOT NULL,
+                tag_type        TEXT NOT NULL CHECK (tag_type IN ('art', 'function')),
+                label           TEXT NOT NULL,
+                normalized      TEXT NOT NULL,
+                aliases         JSONB NOT NULL DEFAULT '[]'::jsonb,
+                retrieval_phrases JSONB NOT NULL DEFAULT '[]'::jsonb,
+                description     TEXT NOT NULL DEFAULT '',
+                embedding_text  TEXT NOT NULL DEFAULT '',
+                expansion_generated_at TIMESTAMPTZ,
+                expansion_source TEXT,
+                expansion_model TEXT,
+                expansion_version INT NOT NULL DEFAULT 1,
+                embedding        halfvec(2560),
+                content_hash    TEXT NOT NULL,
+                first_seen_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+                updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+                removed_at      TIMESTAMPTZ,
+                PRIMARY KEY (tag_type, tag)
             )
         """)
         cur.execute("""
@@ -127,6 +161,32 @@ def create_schema(conn):
                 source       TEXT NOT NULL DEFAULT 'oracle_text',
                 embedding    halfvec(2560),
                 UNIQUE(card_id, face_index, chunk_index)
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS card_tagger_tags (
+                tag_type           TEXT NOT NULL CHECK (tag_type IN ('art', 'function')),
+                tag                TEXT NOT NULL,
+                card_id            TEXT NOT NULL REFERENCES cards(id) ON DELETE CASCADE,
+                source_scryfall_id TEXT,
+                synced_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+                PRIMARY KEY (tag_type, tag, card_id),
+                FOREIGN KEY (tag_type, tag) REFERENCES tagger_tags(tag_type, tag) ON DELETE CASCADE
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS tag_card_sync_state (
+                tag_type           TEXT NOT NULL CHECK (tag_type IN ('art', 'function')),
+                tag                TEXT NOT NULL,
+                status             TEXT NOT NULL DEFAULT 'idle',
+                api_card_count     INT NOT NULL DEFAULT 0,
+                linked_card_count  INT NOT NULL DEFAULT 0,
+                missing_card_count INT NOT NULL DEFAULT 0,
+                last_error         TEXT NOT NULL DEFAULT '',
+                synced_at          TIMESTAMPTZ,
+                updated_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+                PRIMARY KEY (tag_type, tag),
+                FOREIGN KEY (tag_type, tag) REFERENCES tagger_tags(tag_type, tag) ON DELETE CASCADE
             )
         """)
         cur.execute("""
@@ -217,6 +277,11 @@ def create_schema(conn):
         cur.execute("CREATE INDEX IF NOT EXISTS idx_cards_keywords ON cards USING GIN(keywords)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_cards_is_unofficial ON cards(is_unofficial)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_card_effects_card_id ON card_effects(card_id)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_tagger_tags_type ON tagger_tags(tag_type) WHERE removed_at IS NULL")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_tagger_tags_normalized ON tagger_tags(normalized) WHERE removed_at IS NULL")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_card_tagger_tags_card_id ON card_tagger_tags(card_id)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_card_tagger_tags_tag ON card_tagger_tags(tag_type, tag)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_tag_card_sync_state_status ON tag_card_sync_state(status)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_card_prints_card_id ON card_prints(card_id)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_card_prints_set_code ON card_prints(set_code)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_card_prints_lookup ON card_prints(card_id, set_code, collector_num)")
@@ -483,9 +548,14 @@ def _insert_prints_batch(conn, prints: list[dict], batch_size: int):
                     image_set_code, image_set_name, image_collector_number,
                     set_type, security_stamp, border_color, games
                 ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (card_id, set_code, collector_num) DO UPDATE SET
+                ON CONFLICT (id) DO UPDATE SET
+                    card_id = EXCLUDED.card_id,
+                    set_code = EXCLUDED.set_code,
+                    set_name = EXCLUDED.set_name,
+                    collector_num = EXCLUDED.collector_num,
                     rarity = EXCLUDED.rarity,
                     artist = EXCLUDED.artist,
+                    released_at = EXCLUDED.released_at,
                     flavor_name = COALESCE(EXCLUDED.flavor_name, card_prints.flavor_name),
                     flavor_text = COALESCE(EXCLUDED.flavor_text, card_prints.flavor_text),
                     finishes = EXCLUDED.finishes,

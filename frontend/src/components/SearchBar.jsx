@@ -1,7 +1,7 @@
 import { useState, useRef } from "react";
 import { useLanguage } from "../contexts/LanguageContext.jsx";
 
-function SearchBar({ onSearch, loading, rightActions = null }) {
+function SearchBar({ onSearch, loading, rightActions = null, placeholder = null }) {
   const { t } = useLanguage();
   const [query, setQuery] = useState("");
   const inputRef = useRef(null);
@@ -19,7 +19,7 @@ function SearchBar({ onSearch, loading, rightActions = null }) {
           ref={inputRef}
           type="text"
           className="search-input"
-          placeholder={t('searchPlaceholder')}
+          placeholder={placeholder || t('searchPlaceholder')}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           disabled={loading}

@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { addDeckCard } from "../api/decks.js";
 import { fetchCardPrints, normalizePrints } from "../api/cards.js";
 import { useAuth } from "../contexts/AuthContext.jsx";
-import { apiFetch } from "../utils/apiFetch.js";
+import { apiFetch, getAccessToken } from "../utils/apiFetch.js";
 import { useToast } from "../contexts/ToastContext.jsx";
 import { useLanguage } from "../contexts/LanguageContext.jsx";
 import { getFormatLabel, getCardLegality, legalityLabel } from "../utils/formats.js";
@@ -27,8 +27,10 @@ function CardItem({ card, imageMode, decks: propDecks }) {
   const menuRef = useRef(null);
   const { user } = useAuth();
   const { showToast } = useToast();
+  const canAddToDeck = Boolean(user || getAccessToken());
 
-  const decks = localDecks ?? propDecks ?? [];
+  const canUsePropDecks = Boolean(user && propDecks);
+  const decks = localDecks ?? (canUsePropDecks ? propDecks : []);
 
   const selectedCardFaces = selectedArt?.card_faces || card.card_faces || [];
   const isDoubleFaced =
@@ -103,7 +105,7 @@ function CardItem({ card, imageMode, decks: propDecks }) {
       setShowDeckMenu(false);
       return;
     }
-    if (propDecks) {
+    if (canUsePropDecks) {
       setShowDeckMenu(true);
       return;
     }
@@ -252,7 +254,7 @@ function CardItem({ card, imageMode, decks: propDecks }) {
             </svg>
           </button>
         )}
-        {user && (
+        {canAddToDeck && (
           <button
             className="add-to-deck-btn"
             onClick={handleOpenDeckMenu}
@@ -268,7 +270,7 @@ function CardItem({ card, imageMode, decks: propDecks }) {
         )}
       </div>
 
-      {showDeckMenu && user && (
+      {showDeckMenu && canAddToDeck && (
         <div className="deck-dropdown-overlay" ref={menuRef}>
           <div className="deck-dropdown">
             {loadingDecks ? (

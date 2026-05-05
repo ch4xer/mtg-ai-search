@@ -26,6 +26,18 @@ def get_startup_retry_config() -> dict[str, int]:
     }
 
 
+def get_tag_bootstrap_config() -> dict:
+    """Return startup tag expansion/embedding settings."""
+    return {
+        "enabled": os.getenv("TAG_BOOTSTRAP_ENABLED", "true").lower() in {"1", "true", "yes", "on"},
+        "expansion_batch_size": max(1, int(os.getenv("TAG_EXPANSION_BATCH_SIZE", "10"))),
+        "embedding_batch_size": max(1, int(os.getenv("TAG_EMBEDDING_BATCH_SIZE", "64"))),
+        "sample_size": max(0, int(os.getenv("TAG_SAMPLE_SIZE", "3"))),
+        "scryfall_delay_seconds": max(0.0, float(os.getenv("SCRYFALL_SAMPLE_REQUEST_DELAY_SECONDS", "0.8"))),
+        "print_embedding_text": os.getenv("TAG_PRINT_EMBEDDING_TEXT", "true").lower() in {"1", "true", "yes", "on"},
+    }
+
+
 # ── Mutable rate-limit settings ──────────────────────────────────
 
 _rate_limits = {

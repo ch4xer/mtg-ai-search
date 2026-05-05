@@ -1,95 +1,12 @@
 import asyncio
 import logging
-import os
-from collections.abc import Callable
 
 import requests
 
 from .repositories.database import get_pool
+from .services.task_progress import StatusCallback, emit_status
 
 logger = logging.getLogger(__name__)
-
-StatusCallback = Callable[[str], None] | None
-
-
-def _ability_file() -> str:
-    return os.path.join(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-        "data",
-        "keyword_ability.txt",
-    )
-
-
-def _download_ability_file(status_callback: StatusCallback = None) -> str:
-    """总是从官方规则页面重新下载最新的 702 章节，写入本地缓存。"""
-    filepath = _ability_file()
-    _emit_status(status_callback, "正在下载万智牌规则文件...")
-    logger.info("Downloading keyword abilities from Wizards...")
-    try:
-        from scripts.extract_keywords import download_and_extract_keywords
-
-        download_and_extract_keywords(filepath)
-        _emit_status(status_callback, "已下载关键词规则文件")
-        logger.info("Downloaded keyword abilities to %s", filepath)
-        return filepath
-    except Exception as e:
-        logger.exception("Failed to download keyword abilities: %s", e)
-        raise
-
-
-def _emit_status(callback: StatusCallback, message: str) -> None:
-    if callback:
-        callback(message)
-
-
-def _make_progress_callback(callback: StatusCallback, prefix: str):
-    if not callback:
-        return None
-
-    def _progress(done: int, total: int) -> None:
-        callback(f"{prefix}（{done}/{total}）...")
-
-    return _progress
-
-
-def _refresh_abilities_from_rules(conn, status_callback: StatusCallback = None) -> list[str]:
-    """Re-download rules 702, summarize with DeepSeek, and upsert keyword_abilities.
-
-    Always pulls a fresh copy from Wizards so we never drift behind the
-    published rules. Then uses DeepSeek to generate concise one-sentence
-    descriptions for better embedding matching.
-    insert_abilities uses ON CONFLICT to update descriptions
-    and null the embedding only when the description actually changed.
-    Returns names of keywords that didn't previously exist in the DB.
-    Does NOT generate embeddings — caller should run generate_ability_embeddings().
-    """
-    from scripts.seed_pg import insert_abilities
-
-    from .data_loader import parse_keyword_abilities
-
-    filepath = _download_ability_file(status_callback)
-    abilities = parse_keyword_abilities(filepath)
-
-    with conn.cursor() as cur:
-        cur.execute("SELECT id FROM keyword_abilities")
-        existing_ids = {row[0] for row in cur.fetchall()}
-
-    parsed_ids = {name.lower().replace(" ", "_"): name for name in abilities.keys()}
-    new_names = sorted(name for kid, name in parsed_ids.items() if kid not in existing_ids)
-
-    _emit_status(status_callback, "正在生成关键词摘要...")
-    insert_abilities(
-        conn,
-        abilities,
-        on_progress=_make_progress_callback(status_callback, "正在生成摘要"),
-    )
-
-    if new_names:
-        logger.info("[keyword-sync] %d new abilities from rules 702: %s", len(new_names), new_names)
-        _emit_status(status_callback, f"发现 {len(new_names)} 个新关键词")
-    else:
-        logger.info("[keyword-sync] No new abilities in rules 702.")
-    return new_names
 
 
 async def seed_cards_if_empty() -> None:
@@ -104,128 +21,15 @@ async def seed_cards_if_empty() -> None:
         return
 
     logger.info("No card data found. Running seed.")
-    await full_reseed(with_embeddings=True)
+    await full_reseed()
     logger.info("Seed complete.")
 
 
-async def seed_abilities_if_empty(status_callback: StatusCallback = None) -> None:
-    """If keyword_abilities is empty, download rules 702 and import."""
-    pool = await get_pool()
-    try:
-        count = await pool.fetchval("SELECT COUNT(*) FROM keyword_abilities")
-    except Exception:
-        count = 0
-
-    if count > 0:
-        logger.info("Database has %d keyword abilities, skipping seed.", count)
-        return
-
-    logger.info("No keyword abilities found. Downloading and importing...")
-    _emit_status(status_callback, "正在初始化关键词数据...")
-
-    def _do_seed() -> None:
-        from scripts.seed_pg import generate_ability_embeddings, get_conn
-
-        conn = get_conn()
-        try:
-            _refresh_abilities_from_rules(conn, status_callback)
-            _emit_status(status_callback, "正在生成关键词 embedding...")
-            generate_ability_embeddings(conn)
-        finally:
-            conn.close()
-
-    await asyncio.to_thread(_do_seed)
-    logger.info("Keyword abilities seed complete.")
-
-
-async def sync_abilities_incremental(status_callback: StatusCallback = None) -> dict:
-    """Re-download rules 702 and add any newly introduced keyword abilities.
-
-    Returns {"added": int, "added_names": list[str]}.
-    """
-    result = {"added": 0, "added_names": []}
-
-    def _do_sync() -> None:
-        from scripts.seed_pg import generate_ability_embeddings, get_conn
-
-        conn = get_conn()
-        try:
-            added = _refresh_abilities_from_rules(conn, status_callback)
-            result["added"] = len(added)
-            result["added_names"] = added
-            # Always run embedding generation: description edits null old embeddings.
-            _emit_status(status_callback, "正在生成关键词 embedding...")
-            generate_ability_embeddings(conn)
-        finally:
-            conn.close()
-
-    await asyncio.to_thread(_do_sync)
-    logger.info("[abilities-sync] Complete. %d added.", result["added"])
-    return result
-
-
-async def backfill_missing_embeddings(status_callback: StatusCallback = None) -> None:
-    pool = await get_pool()
-    card_total = await pool.fetchval("SELECT COUNT(*) FROM cards")
-    card_count = await pool.fetchval("SELECT COUNT(*) FROM cards WHERE name_embedding IS NULL")
-    ability_count = await pool.fetchval("SELECT COUNT(*) FROM keyword_abilities WHERE embedding IS NULL")
-    effect_total = await pool.fetchval("SELECT COUNT(*) FROM card_effects")
-    effect_count = await pool.fetchval("SELECT COUNT(*) FROM card_effects WHERE embedding IS NULL")
-    should_sync_effect_chunks = card_total > 0 and effect_total == 0
-
-    if card_count == 0 and ability_count == 0 and effect_count == 0 and not should_sync_effect_chunks:
-        logger.info("All embeddings present, nothing to backfill.")
-        return
-
-    logger.info(
-        "Backfilling embeddings: %d cards, %d effect chunks missing (%d existing), %d abilities missing.",
-        card_count,
-        effect_count,
-        effect_total,
-        ability_count,
-    )
-
-    def _do_backfill() -> None:
-        from scripts.seed_pg import (
-            generate_ability_embeddings,
-            generate_card_embeddings,
-            generate_effect_embeddings,
-            get_conn,
-            sync_card_effect_chunks,
-        )
-
-        conn = get_conn()
-        try:
-            _emit_status(status_callback, "正在同步卡牌效果分段...")
-            sync_card_effect_chunks(conn)
-            if card_count > 0:
-                _emit_status(status_callback, "正在补全卡牌 embedding...")
-                generate_card_embeddings(
-                    conn,
-                    on_progress=_make_progress_callback(status_callback, "正在补全卡牌 embedding"),
-                )
-            _emit_status(status_callback, "正在补全效果分段 embedding...")
-            generate_effect_embeddings(
-                conn,
-                on_progress=_make_progress_callback(status_callback, "正在补全效果分段 embedding"),
-            )
-            if ability_count > 0:
-                _emit_status(status_callback, "正在补全异能 embedding...")
-                generate_ability_embeddings(conn)
-        finally:
-            conn.close()
-
-    await asyncio.to_thread(_do_backfill)
-    logger.info("Embedding backfill complete.")
-
-
-async def full_reseed(with_embeddings: bool = True, status_callback: StatusCallback = None) -> int:
-    """完全重新导入卡牌数据（不影响关键词数据）。使用 all_cards 支持完整印刷版本。"""
+async def full_reseed(status_callback: StatusCallback = None) -> int:
+    """Rebuild local card and printing data from the configured Scryfall bulk file."""
     def _do_reseed() -> None:
         from scripts.seed_pg import (
             create_schema,
-            generate_card_embeddings,
-            generate_effect_embeddings,
             get_conn,
             insert_cards_and_prints,
         )
@@ -241,94 +45,16 @@ async def full_reseed(with_embeddings: bool = True, status_callback: StatusCallb
                 cur.execute("DELETE FROM cards")
             conn.commit()
 
-            _emit_status(status_callback, "正在下载并导入 Scryfall 数据...")
+            emit_status(status_callback, "正在下载并导入 Scryfall 数据...")
             insert_cards_and_prints(conn)
-
-            if with_embeddings:
-                _emit_status(status_callback, "正在生成卡牌 embedding...")
-                generate_card_embeddings(
-                    conn,
-                    on_progress=_make_progress_callback(status_callback, "正在生成卡牌 embedding"),
-                )
-                _emit_status(status_callback, "正在生成效果分段 embedding...")
-                generate_effect_embeddings(
-                    conn,
-                    on_progress=_make_progress_callback(status_callback, "正在生成效果分段 embedding"),
-                )
-            else:
-                logger.info("[reseed] Skipping embedding generation.")
         finally:
             conn.close()
 
     await asyncio.to_thread(_do_reseed)
     pool = await get_pool()
     count = await pool.fetchval("SELECT COUNT(*) FROM cards")
-    logger.info("[reseed] Complete. %d cards in database. embeddings=%s", count, with_embeddings)
+    logger.info("[reseed] Complete. %d cards in database.", count)
     return count
-
-
-async def regenerate_embeddings(status_callback: StatusCallback = None) -> None:
-    def _do_reembed() -> None:
-        from scripts.seed_pg import (
-            generate_ability_embeddings,
-            generate_card_embeddings,
-            generate_effect_embeddings,
-            get_conn,
-            sync_card_effect_chunks,
-        )
-
-        conn = get_conn()
-        try:
-            sync_card_effect_chunks(conn)
-            logger.info("[reembed] Clearing existing embeddings...")
-            with conn.cursor() as cur:
-                cur.execute("""
-                    UPDATE cards SET
-                        name_embedding = NULL,
-                        type_line_embedding = NULL,
-                        oracle_text_embedding = NULL
-                """)
-                cur.execute("UPDATE card_effects SET embedding = NULL")
-                cur.execute("UPDATE keyword_abilities SET embedding = NULL")
-            conn.commit()
-
-            _emit_status(status_callback, "正在生成卡牌 embedding...")
-            generate_card_embeddings(
-                conn,
-                on_progress=_make_progress_callback(status_callback, "正在生成卡牌 embedding"),
-            )
-            _emit_status(status_callback, "正在生成效果分段 embedding...")
-            generate_effect_embeddings(
-                conn,
-                on_progress=_make_progress_callback(status_callback, "正在生成效果分段 embedding"),
-            )
-            _emit_status(status_callback, "正在生成异能 embedding...")
-            generate_ability_embeddings(conn)
-        finally:
-            conn.close()
-
-    await asyncio.to_thread(_do_reembed)
-    logger.info("[reembed] Complete.")
-
-
-async def rebuild_effect_chunks(status_callback: StatusCallback = None) -> None:
-    def _do_rebuild() -> None:
-        from scripts.seed_pg import generate_effect_embeddings, get_conn, sync_card_effect_chunks
-
-        conn = get_conn()
-        try:
-            _emit_status(status_callback, "正在重建卡牌效果分段...")
-            sync_card_effect_chunks(conn)
-            _emit_status(status_callback, "正在生成效果分段 embedding...")
-            generate_effect_embeddings(
-                conn,
-                on_progress=_make_progress_callback(status_callback, "正在生成效果分段 embedding"),
-            )
-        finally:
-            conn.close()
-
-    await asyncio.to_thread(_do_rebuild)
-    logger.info("[effect_chunks] Complete.")
 
 
 def _get_scryfall_bulk_updated_at() -> str | None:
@@ -346,11 +72,10 @@ def _get_scryfall_bulk_updated_at() -> str | None:
     return None
 
 
-async def incremental_sync(status_callback: StatusCallback = None, force: bool = False, skip_embeddings: bool = False) -> dict:
+async def incremental_sync(status_callback: StatusCallback = None, force: bool = False) -> dict:
     """Download Scryfall all_cards data, upsert cards and prints.
 
     If force=True, skip the timestamp check and always sync.
-    If skip_embeddings=True, don't regenerate embeddings (only update card data).
 
     Returns {"new_cards": int, "updated_cards": int, "new_prints": int, "skipped": bool}.
     """
@@ -384,9 +109,6 @@ async def incremental_sync(status_callback: StatusCallback = None, force: bool =
     try:
         def _do_sync() -> None:
             from scripts.seed_pg import (
-                generate_ability_embeddings,
-                generate_card_embeddings,
-                generate_effect_embeddings,
                 get_conn,
                 insert_cards_and_prints,
             )
@@ -398,10 +120,8 @@ async def incremental_sync(status_callback: StatusCallback = None, force: bool =
                     cards_before = cur.fetchone()[0]
                     cur.execute("SELECT COUNT(*) FROM card_prints")
                     prints_before = cur.fetchone()[0]
-                    cur.execute("SELECT COUNT(*) FROM cards WHERE name_embedding IS NULL")
-                    stale_before = cur.fetchone()[0]
 
-                _emit_status(status_callback, "正在下载并同步卡牌数据...")
+                emit_status(status_callback, "正在下载并同步卡牌数据...")
                 insert_cards_and_prints(conn)
 
                 with conn.cursor() as cur:
@@ -409,33 +129,12 @@ async def incremental_sync(status_callback: StatusCallback = None, force: bool =
                     cards_after = cur.fetchone()[0]
                     cur.execute("SELECT COUNT(*) FROM card_prints")
                     prints_after = cur.fetchone()[0]
-                    cur.execute("SELECT COUNT(*) FROM cards WHERE name_embedding IS NULL")
-                    stale_after = cur.fetchone()[0]
                 conn.commit()
 
                 stats["new_cards"] = cards_after - cards_before
                 stats["new_prints"] = prints_after - prints_before
-                stats["updated_cards"] = max(0, stale_after - stale_before - stats["new_cards"])
-
-                if skip_embeddings:
-                    logger.info("[sync] Skipping embedding generation.")
-                    _emit_status(status_callback, "数据已更新（跳过 embedding）")
-                else:
-                    _emit_status(status_callback, "正在为新/变更卡牌生成 embedding...")
-                    generate_card_embeddings(
-                        conn,
-                        on_progress=_make_progress_callback(status_callback, "正在生成 embedding"),
-                    )
-                    _emit_status(status_callback, "正在生成效果分段 embedding...")
-                    generate_effect_embeddings(
-                        conn,
-                        on_progress=_make_progress_callback(status_callback, "正在生成效果分段 embedding"),
-                    )
-
-                    _emit_status(status_callback, "正在刷新规则 702 关键词...")
-                    _refresh_abilities_from_rules(conn, status_callback)
-                    _emit_status(status_callback, "正在生成关键词 embedding...")
-                    generate_ability_embeddings(conn)
+                stats["updated_cards"] = 0
+                emit_status(status_callback, "数据已更新")
             finally:
                 conn.close()
 

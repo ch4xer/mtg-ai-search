@@ -9,9 +9,11 @@ import logging
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from .agent import llm
+from .llm_provider import create_chat_llm
 
 logger = logging.getLogger(__name__)
+
+llm = create_chat_llm(temperature=0.3)
 
 _SYSTEM_PROMPT = (
     "You are a seasoned Magic: The Gathering player and coach. The user will give "

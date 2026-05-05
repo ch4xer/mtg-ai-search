@@ -38,6 +38,42 @@ const RARITY_OPTIONS_ZH = [
   { value: "mythic", label: "秘稀" },
 ];
 
+const EXACT_MATCH_FEATURES = [
+  {
+    icon: (
+      <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M4 5h16" />
+        <path d="M7 12h10" />
+        <path d="M10 19h4" />
+      </svg>
+    ),
+    titleKey: "exactFeatureFiltersTitle",
+    descKey: "exactFeatureFiltersDesc",
+  },
+  {
+    icon: (
+      <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <circle cx="12" cy="12" r="8" />
+        <path d="M12 8v4l3 2" />
+      </svg>
+    ),
+    titleKey: "exactFeatureDeterministicTitle",
+    descKey: "exactFeatureDeterministicDesc",
+  },
+  {
+    icon: (
+      <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M4 7h16" />
+        <path d="M4 12h10" />
+        <path d="M4 17h7" />
+        <path d="M17 14l3 3-3 3" />
+      </svg>
+    ),
+    titleKey: "exactFeatureFacetsTitle",
+    descKey: "exactFeatureFacetsDesc",
+  },
+];
+
 function DiscoverBrowser({ imageMode, onToggleImageMode, enabled = true }) {
   const { t, language } = useLanguage();
   const decks = useUserDecks();
@@ -98,6 +134,7 @@ function DiscoverBrowser({ imageMode, onToggleImageMode, enabled = true }) {
 
   // Use allKeywords for the dropdown options
   const keywordOptions = allKeywords.length > 0 ? allKeywords : keywordFacets.map((kw) => kw.name);
+  const showFeatureCards = !loading && results.length === 0 && !hasFilters;
 
   useEffect(() => {
     if (!keywordsOpen) return;
@@ -408,7 +445,18 @@ function DiscoverBrowser({ imageMode, onToggleImageMode, enabled = true }) {
 
       <div className="discover-results">
         {loading && <div className="loading"><div className="loading-spinner" /></div>}
-        {!loading && results.length === 0 && <div className="no-results"><p>{t('noCardsFound')}</p></div>}
+        {showFeatureCards && (
+          <div className="features-section exact-match-features">
+            {EXACT_MATCH_FEATURES.map((feature) => (
+              <div key={feature.titleKey} className="feature-card">
+                <div className="feature-icon">{feature.icon}</div>
+                <h3 className="feature-title">{t(feature.titleKey)}</h3>
+                <p className="feature-desc">{t(feature.descKey)}</p>
+              </div>
+            ))}
+          </div>
+        )}
+        {!loading && results.length === 0 && hasFilters && <div className="no-results"><p>{t('noCardsFound')}</p></div>}
         {!loading && results.length > 0 && (
           <>
             <CardGrid cards={results} imageMode={imageMode} decks={decks} />

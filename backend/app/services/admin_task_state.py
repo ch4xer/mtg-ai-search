@@ -15,9 +15,8 @@ class TaskStatus(str, Enum):
 
 _task_state: dict = {
     "reseed": {"status": TaskStatus.IDLE, "message": "", "started_at": None},
-    "reembed": {"status": TaskStatus.IDLE, "message": "", "started_at": None},
-    "effect_chunks": {"status": TaskStatus.IDLE, "message": "", "started_at": None},
     "seed_abilities": {"status": TaskStatus.IDLE, "message": "", "started_at": None},
+    "tag_sync": {"status": TaskStatus.IDLE, "message": "", "started_at": None},
 }
 
 

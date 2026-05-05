@@ -71,6 +71,67 @@ CREATE TABLE IF NOT EXISTS sync_logs (
 );
 CREATE INDEX IF NOT EXISTS idx_sync_logs_started_at ON sync_logs(started_at DESC);
 
+CREATE TABLE IF NOT EXISTS tag_sync_state (
+    source_url      TEXT PRIMARY KEY,
+    etag            TEXT,
+    content_hash    TEXT,
+    checked_at      TIMESTAMPTZ,
+    updated_at      TIMESTAMPTZ,
+    total_tags      INT NOT NULL DEFAULT 0,
+    art_tags        INT NOT NULL DEFAULT 0,
+    function_tags   INT NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS tagger_tags (
+    tag             TEXT NOT NULL,
+    tag_type        TEXT NOT NULL CHECK (tag_type IN ('art', 'function')),
+    label           TEXT NOT NULL,
+    normalized      TEXT NOT NULL,
+    aliases         JSONB NOT NULL DEFAULT '[]'::jsonb,
+    retrieval_phrases JSONB NOT NULL DEFAULT '[]'::jsonb,
+    description     TEXT NOT NULL DEFAULT '',
+    embedding_text  TEXT NOT NULL DEFAULT '',
+    expansion_generated_at TIMESTAMPTZ,
+    expansion_source TEXT,
+    expansion_model TEXT,
+    expansion_version INT NOT NULL DEFAULT 1,
+    embedding        halfvec(2560),
+    content_hash    TEXT NOT NULL,
+    first_seen_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    removed_at      TIMESTAMPTZ,
+    PRIMARY KEY (tag_type, tag)
+);
+CREATE INDEX IF NOT EXISTS idx_tagger_tags_type ON tagger_tags(tag_type) WHERE removed_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_tagger_tags_normalized ON tagger_tags(normalized) WHERE removed_at IS NULL;
+ALTER TABLE tagger_tags ADD COLUMN IF NOT EXISTS embedding halfvec(2560);
+ALTER TABLE tagger_tags ADD COLUMN IF NOT EXISTS expansion_generated_at TIMESTAMPTZ;
+ALTER TABLE tagger_tags ADD COLUMN IF NOT EXISTS expansion_source TEXT;
+ALTER TABLE tagger_tags ADD COLUMN IF NOT EXISTS expansion_model TEXT;
+ALTER TABLE tagger_tags ADD COLUMN IF NOT EXISTS expansion_version INT NOT NULL DEFAULT 1;
+CREATE INDEX IF NOT EXISTS idx_tagger_tags_missing_expansion
+ON tagger_tags(tag_type, tag)
+WHERE removed_at IS NULL AND tag_type = 'function' AND expansion_generated_at IS NULL;
+UPDATE tagger_tags
+SET expansion_generated_at = COALESCE(updated_at, now()),
+    expansion_source = COALESCE(expansion_source, 'legacy'),
+    expansion_version = COALESCE(expansion_version, 1)
+WHERE removed_at IS NULL
+  AND tag_type = 'function'
+  AND expansion_generated_at IS NULL
+  AND embedding_text <> ''
+  AND (
+      jsonb_array_length(COALESCE(aliases, '[]'::jsonb)) > 0
+      OR jsonb_array_length(COALESCE(retrieval_phrases, '[]'::jsonb)) > 0
+      OR COALESCE(description, '') <> ''
+  );
+UPDATE tagger_tags
+SET embedding = NULL
+WHERE removed_at IS NULL
+  AND tag_type = 'function'
+  AND expansion_generated_at IS NULL
+  AND embedding IS NOT NULL;
+
 CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_users_api_key_hash ON users(api_key_hash) WHERE api_key_hash IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_decks_user_id ON decks(user_id);
@@ -92,7 +153,36 @@ CREATE TABLE IF NOT EXISTS card_effects (
     UNIQUE(card_id, face_index, chunk_index)
 );
 CREATE INDEX IF NOT EXISTS idx_card_effects_card_id ON card_effects(card_id);
+ALTER TABLE card_prints DROP CONSTRAINT IF EXISTS card_prints_card_id_set_code_collector_num_key;
 CREATE INDEX IF NOT EXISTS idx_cards_is_unofficial ON cards(is_unofficial);
+
+CREATE TABLE IF NOT EXISTS card_tagger_tags (
+    tag_type           TEXT NOT NULL CHECK (tag_type IN ('art', 'function')),
+    tag                TEXT NOT NULL,
+    card_id            TEXT NOT NULL REFERENCES cards(id) ON DELETE CASCADE,
+    source_scryfall_id TEXT,
+    synced_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (tag_type, tag, card_id),
+    FOREIGN KEY (tag_type, tag) REFERENCES tagger_tags(tag_type, tag) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_card_tagger_tags_card_id ON card_tagger_tags(card_id);
+CREATE INDEX IF NOT EXISTS idx_card_tagger_tags_tag ON card_tagger_tags(tag_type, tag);
+
+CREATE TABLE IF NOT EXISTS tag_card_sync_state (
+    tag_type           TEXT NOT NULL CHECK (tag_type IN ('art', 'function')),
+    tag                TEXT NOT NULL,
+    status             TEXT NOT NULL DEFAULT 'idle',
+    api_card_count     INT NOT NULL DEFAULT 0,
+    linked_card_count  INT NOT NULL DEFAULT 0,
+    missing_card_count INT NOT NULL DEFAULT 0,
+    last_error         TEXT NOT NULL DEFAULT '',
+    synced_at          TIMESTAMPTZ,
+    updated_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (tag_type, tag),
+    FOREIGN KEY (tag_type, tag) REFERENCES tagger_tags(tag_type, tag) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_tag_card_sync_state_status ON tag_card_sync_state(status);
+
 UPDATE cards c
 SET is_unofficial = TRUE
 WHERE EXISTS (

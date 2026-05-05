@@ -1,10 +1,15 @@
 """Search and discovery HTTP endpoints."""
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 
-from .agent import SEARCH_RESULT_LIMIT
 from .dependencies import get_optional_user
-from .schemas.search import DiscoverRequest, SearchRequest, SearchResponse
+from .schemas.search import (
+    DiscoverRequest,
+    SearchRequest,
+    SearchResponse,
+    TagSearchRequest,
+    TagSearchResponse,
+)
 from .services.search_service import (
     discover as discover_service,
     get_client_ip,
@@ -12,6 +17,7 @@ from .services.search_service import (
     list_keywords as list_keywords_service,
     search_cards as search_cards_service,
 )
+from .services.tag_search_service import search_tags as search_tags_service
 
 search_router = APIRouter(tags=["search"])
 
@@ -28,9 +34,17 @@ async def search_cards(
         client_ip,
         user_id,
     )
-    return SearchResponse(
-        results=results[:SEARCH_RESULT_LIMIT]
-    )
+    return SearchResponse(results=results)
+
+
+@search_router.post("/api/tag-search", response_model=TagSearchResponse)
+async def tag_search(request: TagSearchRequest):
+    try:
+        return await search_tags_service(request.query, request.limit)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @search_router.post("/api/discover")

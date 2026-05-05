@@ -1,78 +1,25 @@
-import { useEffect, useRef, useState } from "react";
-import { fetchAdminSyncLogs, fetchAdminTaskStatus, runAdminTask } from "../../../api/admin.js";
+import { useState } from "react";
+import { downloadAdminCardExport, runAdminTask } from "../../../api/admin.js";
 import { useToast } from "../../../contexts/ToastContext.jsx";
 import { useLanguage } from "../../../contexts/LanguageContext.jsx";
 import SyncLogRow from "../components/SyncLogRow.jsx";
 import SyncTaskNotice from "../components/SyncTaskNotice.jsx";
 import TaskCard from "../components/TaskCard.jsx";
 import { StatusBadge } from "../components/StatusBadge.jsx";
+import { useAdminTaskPolling } from "../hooks/useAdminTaskPolling.js";
 
 export default function DatabaseSection() {
-  const [taskStatus, setTaskStatus] = useState({
-    reseed: { status: "idle" },
-    reembed: { status: "idle" },
-    effect_chunks: { status: "idle" },
-    seed_abilities: { status: "idle" },
-  });
-  const [syncLogs, setSyncLogs] = useState([]);
+  const [exportingCards, setExportingCards] = useState(false);
   const { showToast } = useToast();
   const { t } = useLanguage();
-  const pollRef = useRef(null);
-
-  const fetchSyncLogs = async () => {
-    try {
-      const res = await fetchAdminSyncLogs();
-      if (res.ok) setSyncLogs(await res.json());
-    } catch { /* ignore */ }
-  };
-
-  const lastTaskStatusJsonRef = useRef("");
-  const fetchTaskStatus = async () => {
-    try {
-      const res = await fetchAdminTaskStatus();
-      if (res.ok) {
-        const data = await res.json();
-        const serialized = JSON.stringify(data);
-        if (serialized !== lastTaskStatusJsonRef.current) {
-          lastTaskStatusJsonRef.current = serialized;
-          setTaskStatus(data);
-        }
-        return data;
-      }
-    } catch { /* ignore */ }
-    return null;
-  };
-
-  const startPolling = () => {
-    if (pollRef.current) return;
-    pollRef.current = setInterval(async () => {
-      const data = await fetchTaskStatus();
-      if (!data) return;
-      const anyRunning = Object.values(data).some((task) => task.status === "running");
-      if (!anyRunning) {
-        clearInterval(pollRef.current);
-        pollRef.current = null;
-        fetchSyncLogs();
-      }
-    }, 3000);
-  };
-
-  useEffect(() => {
-    fetchSyncLogs();
-    fetchTaskStatus().then((data) => {
-      if (data && Object.values(data).some((task) => task.status === "running")) {
-        startPolling();
-      }
-    });
-    return () => { if (pollRef.current) clearInterval(pollRef.current); };
-  }, []);
+  const { taskStatus, syncLogs, refreshTaskStatus, startPolling } = useAdminTaskPolling();
 
   const runAction = async (url, successMsg) => {
     try {
       const res = await runAdminTask(url);
       if (res.ok) {
         showToast(successMsg);
-        await fetchTaskStatus();
+        await refreshTaskStatus();
         startPolling();
       } else {
         const err = await res.json().catch(() => ({}));
@@ -81,22 +28,38 @@ export default function DatabaseSection() {
     } catch { showToast(t("adminActionFailed"), "error"); }
   };
 
-  const handleReembed = async () => {
-    if (!confirm(t("adminTaskReembedConfirm"))) return;
-    runAction("/api/admin/reembed", t("adminTaskReembedStarted"));
-  };
-  const handleRebuildEffectChunks = async () => {
-    if (!confirm(t("adminTaskEffectChunksConfirm"))) return;
-    runAction("/api/admin/rebuild-effect-chunks", t("adminTaskEffectChunksStarted"));
-  };
-  const handleSeedAbilities = () => {
-    if (!confirm(t("adminTaskAbilitiesForceConfirm"))) return;
-    runAction("/api/admin/seed-abilities", t("adminTaskAbilitiesForceStarted"));
-  };
   const handleSyncAbilities = () => runAction("/api/admin/sync-abilities", t("adminTaskAbilitiesIncrementalStarted"));
+  const handleSyncFunctionTags = () => runAction("/api/admin/sync-function-tags", t("adminTaskFunctionTagsStarted"));
   const handleSync = () => runAction("/api/admin/sync", t("adminSyncStartedManual"));
   const handleForceSync = () => runAction("/api/admin/sync?force=true", t("adminSyncStartedForce"));
-  const handleForceSyncDataOnly = () => runAction("/api/admin/sync?force=true&skip_embeddings=true", t("adminSyncStartedDataOnly"));
+  const handleExportCards = async () => {
+    setExportingCards(true);
+    try {
+      const res = await downloadAdminCardExport();
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        showToast(err.detail || t("adminCardExportFailed"), "error");
+        return;
+      }
+      const blob = await res.blob();
+      const disposition = res.headers.get("content-disposition") || "";
+      const match = disposition.match(/filename="?([^"]+)"?/i);
+      const filename = match?.[1] || "mtg-card-data.zip";
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      showToast(t("adminCardExportStarted"));
+    } catch {
+      showToast(t("adminCardExportFailed"), "error");
+    } finally {
+      setExportingCards(false);
+    }
+  };
 
   const anyRunning = Object.values(taskStatus).some((task) => task.status === "running");
   const syncStatus = taskStatus.reseed;
@@ -107,30 +70,28 @@ export default function DatabaseSection() {
       <h2 className="admin-title">{t("adminTitleDatabase")}</h2>
       <div className="admin-db-actions">
         <TaskCard
-          title={t("adminTaskReembedTitle")}
-          desc={t("adminTaskReembedDesc")}
-          status={taskStatus.reembed}
-          disabled={anyRunning}
-          onRun={handleReembed}
-          btnText={t("adminTaskReembedBtn")}
-        />
-        <TaskCard
-          title={t("adminTaskEffectChunksTitle")}
-          desc={t("adminTaskEffectChunksDesc")}
-          status={taskStatus.effect_chunks}
-          disabled={anyRunning}
-          onRun={handleRebuildEffectChunks}
-          btnText={t("adminTaskEffectChunksBtn")}
-        />
-        <TaskCard
           title={t("adminTaskAbilitiesTitle")}
           desc={t("adminTaskAbilitiesDesc")}
           status={taskStatus.seed_abilities}
           disabled={anyRunning}
-          actions={[
-            { label: t("adminTaskAbilitiesIncremental"), onClick: handleSyncAbilities },
-            { label: t("adminTaskAbilitiesForce"), onClick: handleSeedAbilities, variant: "secondary" },
-          ]}
+          onRun={handleSyncAbilities}
+          btnText={t("adminTaskAbilitiesIncremental")}
+        />
+        <TaskCard
+          title={t("adminTaskFunctionTagsTitle")}
+          desc={t("adminTaskFunctionTagsDesc")}
+          status={taskStatus.tag_sync}
+          disabled={anyRunning}
+          onRun={handleSyncFunctionTags}
+          btnText={t("adminTaskFunctionTagsBtn")}
+        />
+        <TaskCard
+          title={t("adminCardExportTitle")}
+          desc={t("adminCardExportDesc")}
+          status={{ status: exportingCards ? "running" : "idle", message: t("adminCardExportRunning") }}
+          disabled={exportingCards}
+          onRun={handleExportCards}
+          btnText={exportingCards ? t("adminCardExportRunning") : t("adminCardExportBtn")}
         />
       </div>
 
@@ -142,9 +103,6 @@ export default function DatabaseSection() {
             <StatusBadge status={syncStatus?.status} />
           </div>
           <div className="admin-sync-buttons">
-            <button className="btn-secondary" onClick={handleForceSyncDataOnly} disabled={anyRunning}>
-              {isSyncRunning ? t("adminSyncBtnInProgress") : t("adminSyncBtnDataOnly")}
-            </button>
             <button className="btn-secondary" onClick={handleForceSync} disabled={anyRunning}>
               {isSyncRunning ? t("adminSyncBtnInProgress") : t("adminSyncBtnForce")}
             </button>

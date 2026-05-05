@@ -1,4 +1,4 @@
-import { apiFetch } from "../utils/apiFetch.js";
+import { apiFetch, getAccessToken } from "../utils/apiFetch.js";
 
 export function fetchAdminStats() {
   return apiFetch("/api/admin/stats");
@@ -34,4 +34,11 @@ export function fetchAdminSettings() {
 
 export function updateAdminSettings(body) {
   return apiFetch("/api/admin/settings", { method: "PUT", body });
+}
+
+export function downloadAdminCardExport() {
+  const token = getAccessToken();
+  return fetch("/api/admin/export/cards", {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
 }
