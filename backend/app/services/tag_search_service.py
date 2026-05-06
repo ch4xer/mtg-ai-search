@@ -13,7 +13,6 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from difflib import SequenceMatcher
 from html import unescape
-from pathlib import Path
 from typing import Literal
 from urllib.parse import quote
 
@@ -35,9 +34,6 @@ REFRESH_INTERVAL = timedelta(hours=12)
 USER_AGENT = "MTG-AI-Search/1.0 (+https://github.com/ch4ser/MTG-AI-Search)"
 SAMPLE_CARDS_PER_TAG = 3
 SCRYFALL_SAMPLE_REQUEST_DELAY_SECONDS = float(os.getenv("SCRYFALL_SAMPLE_REQUEST_DELAY_SECONDS", "0.35"))
-DATA_DIR = Path(__file__).resolve().parents[2] / "data"
-TAG_EXPANSION_CACHE_PATH = DATA_DIR / "tag_expansions.json"
-TAG_EXPANSION_CACHE_VERSION = 1
 TAG_EXPANSION_DB_VERSION = 1
 TAG_VECTOR_SEARCH_LIMIT = 40
 RRF_K = 60
@@ -382,32 +378,6 @@ def _entry_content_hash(entry: TagEntry) -> str:
         "normalized": entry.normalized,
     }
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
-
-
-def _read_tag_expansion_payload() -> dict:
-    try:
-        with TAG_EXPANSION_CACHE_PATH.open("r", encoding="utf-8") as fh:
-            payload = json.load(fh)
-    except FileNotFoundError:
-        return {"version": TAG_EXPANSION_CACHE_VERSION, "items": {}}
-    except Exception:
-        logger.exception("Failed to load tag expansion cache")
-        return {"version": TAG_EXPANSION_CACHE_VERSION, "items": {}}
-
-    if not isinstance(payload, dict):
-        return {"version": TAG_EXPANSION_CACHE_VERSION, "items": {}}
-    if not isinstance(payload.get("items"), dict):
-        payload["items"] = {}
-    return payload
-
-
-def _write_tag_expansion_payload(payload: dict) -> None:
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    tmp_path = TAG_EXPANSION_CACHE_PATH.with_suffix(".json.tmp")
-    with tmp_path.open("w", encoding="utf-8") as fh:
-        json.dump(payload, fh, ensure_ascii=False, indent=2, sort_keys=True)
-        fh.write("\n")
-    tmp_path.replace(TAG_EXPANSION_CACHE_PATH)
 
 
 async def _persist_generated_expansions(generated: dict[str, dict]) -> None:
@@ -2220,19 +2190,8 @@ async def build_tag_expansion_cache(
     sample_size: int = SAMPLE_CARDS_PER_TAG,
     scryfall_delay_seconds: float = SCRYFALL_SAMPLE_REQUEST_DELAY_SECONDS,
     print_embedding_text: bool = False,
-    write_json_cache: bool = False,
 ) -> dict:
     snapshot = await catalog_store.get_snapshot()
-    payload: dict | None = None
-    items: dict[str, dict] = {}
-    if write_json_cache:
-        payload = _read_tag_expansion_payload()
-        payload["version"] = TAG_EXPANSION_CACHE_VERSION
-        payload["source_url"] = TAGGER_TAGS_URL
-        payload["source_content_hash"] = snapshot.content_hash
-        payload["generated_at"] = datetime.now(timezone.utc).isoformat()
-        items = payload.setdefault("items", {})
-        items.update(await _load_generated_expansion_items_from_db())
     pending, existing_count = await _load_expansion_work_from_db(
         limit=limit,
         force=force,
@@ -2242,11 +2201,9 @@ async def build_tag_expansion_cache(
     if limit is not None and limit <= 0:
         return {
             "status": "ok",
-            "cache_path": str(TAG_EXPANSION_CACHE_PATH) if write_json_cache else None,
             "total_tags": len(snapshot.entries),
             "existing_items": existing_count,
             "source_of_truth": "database",
-            "write_json_cache": write_json_cache,
             "pending_selected": 0,
             "generated": 0,
             "failed_batches": 0,
@@ -2269,9 +2226,6 @@ async def build_tag_expansion_cache(
             failed_batches += 1
             continue
         await _persist_generated_expansions(generated)
-        if write_json_cache and payload is not None:
-            items.update(generated)
-            _write_tag_expansion_payload(payload)
         if print_embedding_text:
             for item in generated.values():
                 print(
@@ -2280,15 +2234,11 @@ async def build_tag_expansion_cache(
                 )
         generated_count += len(generated)
 
-    if write_json_cache and payload is not None:
-        _write_tag_expansion_payload(payload)
     return {
         "status": "ok",
-        "cache_path": str(TAG_EXPANSION_CACHE_PATH) if write_json_cache else None,
         "total_tags": len(snapshot.entries),
         "existing_items": existing_count,
         "source_of_truth": "database",
-        "write_json_cache": write_json_cache,
         "pending_selected": len(pending),
         "generated": generated_count,
         "failed_batches": failed_batches,

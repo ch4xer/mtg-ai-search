@@ -27,11 +27,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--print-text", action="store_true", help="Print generated embedding_text lines.")
     parser.add_argument("--force", action="store_true", help="Regenerate existing cache entries.")
     parser.add_argument(
-        "--write-json-cache",
-        action="store_true",
-        help="Also write backend/data/tag_expansions.json for debugging/export. DB remains the source of truth.",
-    )
-    parser.add_argument(
         "--type",
         choices=("function",),
         action="append",
@@ -53,7 +48,6 @@ async def main() -> None:
             args.scryfall_delay if args.scryfall_delay is not None else SCRYFALL_SAMPLE_REQUEST_DELAY_SECONDS
         ),
         print_embedding_text=args.print_text,
-        write_json_cache=args.write_json_cache,
     )
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
