@@ -31,10 +31,7 @@ to Scryfall Tagger function tags, then returns cards linked to those tags.
 - **External API.** API-key protected endpoints are available for AI Search and
   Exact Match.
 
-## Current Search Model
-
-The current AI Search path does **not** use the old card/keyword/effect
-embedding pipeline.
+## Search Model
 
 At runtime:
 
@@ -45,8 +42,7 @@ At runtime:
 4. Matched tags are resolved to cards through `card_tagger_tags`.
 5. The final card list is returned to the frontend.
 
-`/api/tag-search` still exists as a compatibility/debug endpoint, but the
-frontend default entry is `/api/search` and is labeled **AI Search**.
+The frontend default entry is `/api/search` and is labeled **AI Search**.
 
 `keyword_abilities` is only used as Exact Match filter data. Keyword sync does
 not generate embeddings.
@@ -115,7 +111,7 @@ Tag bootstrap settings:
 
 On first launch the backend:
 
-- runs database migrations,
+- prepares the database schema,
 - creates/promotes the optional built-in admin user,
 - imports Scryfall bulk card data if `cards` is empty,
 - initializes `keyword_abilities` if it is empty,
@@ -145,9 +141,6 @@ The database maintenance screen currently exposes:
   Scryfall changed.
 - **Force refresh**: bypasses the Scryfall timestamp check and refreshes card
   data.
-
-The old card/keyword/effect embedding regeneration admin tasks have been
-removed.
 
 ## Scheduled Jobs
 
@@ -182,8 +175,8 @@ Both processes read environment variables from the project-root `.env`.
 Common endpoints:
 
 - `POST /api/search`: AI Search card results.
-- `POST /api/tag-search`: compatibility/debug tag-search response with matched
-  tags and catalog metadata.
+- `POST /api/tag-search`: tag-search response with matched tags and catalog
+  metadata.
 - `POST /api/discover`: Exact Match / faceted card search.
 - `GET /api/keywords`: keyword ability list for Exact Match filters.
 - `GET /api/cards/{oracle_id}/prints`: all local printings for a card.
