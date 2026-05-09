@@ -54,6 +54,10 @@
   border-radius: 12px 12px 0 0;
 }
 
+.card-item:not(.art-crop) .card-image-wrapper {
+  border-radius: inherit;
+}
+
 .card-image-wrapper.art-crop {
   aspect-ratio: 626 / 457;
 }
