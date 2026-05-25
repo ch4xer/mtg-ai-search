@@ -11,6 +11,9 @@ DECKLIST_ENTRY_RE = re.compile(
     r"^(\d+)\s+(.+?)(?:\s+\(([A-Za-z0-9]{2,6})\)\s+(\S+))?(?:\s+\*\w+\*)*\s*$"
 )
 
+MAINBOARD_HEADERS = {"DECK", "MAINDECK", "MAIN DECK", "MAINBOARD", "MAIN BOARD"}
+SIDEBOARD_HEADERS = {"SIDEBOARD", "SIDE BOARD"}
+
 
 def extract_front_face_name(name: str) -> str:
     name = name.strip()
@@ -18,6 +21,15 @@ def extract_front_face_name(name: str) -> str:
         if sep in name:
             return name.split(sep)[0].strip()
     return name
+
+
+def parse_board_header(line: str) -> str | None:
+    header = re.sub(r"\s*\(\d+\)\s*$", "", line).strip().rstrip(":").strip().upper()
+    if header in SIDEBOARD_HEADERS:
+        return "sideboard"
+    if header in MAINBOARD_HEADERS:
+        return "mainboard"
+    return None
 
 
 def parse_decklist(text: str) -> list[tuple[int, str, str, str | None, str | None]]:
@@ -29,10 +41,13 @@ def parse_decklist(text: str) -> list[tuple[int, str, str, str | None, str | Non
         line = raw_line.strip()
         if line.startswith("#") or line.startswith("//"):
             continue
-        if "SIDEBOARD" in line.upper():
-            board = "sideboard"
+
+        board_header = parse_board_header(line)
+        if board_header:
+            board = board_header
             has_sideboard_cards = False
             continue
+
         if not line:
             if board == "sideboard" and has_sideboard_cards:
                 board = "mainboard"
@@ -80,7 +95,7 @@ async def import_owned_deck(deck_id: str, user_id: str, req: ImportDeckRequest) 
             selected_print = await get_card_print_by_set_cn(card_id, set_code, collector_num or "")
             if selected_print:
                 selected_print_id = selected_print["id"]
-                image_url = selected_print.get("image_large") or selected_print.get("image_png")
+                image_url = selected_print.get("image_png") or selected_print.get("image_large")
                 display_url = selected_print.get("image_art_crop")
 
         if not card_id:
