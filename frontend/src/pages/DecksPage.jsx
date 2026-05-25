@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { apiFetch } from "../utils/apiFetch.js";
+import { createDeck, fetchUserDecks } from "../api/decks.js";
 import { useToast } from "../contexts/ToastContext.jsx";
 import { useLanguage } from "../contexts/LanguageContext.jsx";
 import { FORMATS, getFormatLabel } from "../utils/formats.js";
@@ -18,10 +18,7 @@ function DecksPage() {
 
   const fetchDecks = async () => {
     try {
-      const res = await apiFetch("/api/decks");
-      if (res.ok) {
-        setDecks(await res.json());
-      }
+      setDecks(await fetchUserDecks());
     } catch (err) {
       console.error("Failed to fetch decks:", err);
     } finally {
@@ -38,10 +35,7 @@ function DecksPage() {
     if (!newDeckName.trim()) return;
     setCreating(true);
     try {
-      const res = await apiFetch("/api/decks", {
-        method: "POST",
-        body: { name: newDeckName.trim(), format: newDeckFormat },
-      });
+      const res = await createDeck({ name: newDeckName.trim(), format: newDeckFormat });
       if (res.ok) {
         const deck = await res.json();
         setDecks((prev) => [{ ...deck, card_count: 0 }, ...prev]);

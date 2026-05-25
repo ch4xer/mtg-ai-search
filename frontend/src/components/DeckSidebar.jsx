@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { apiFetch } from "../utils/apiFetch.js";
+import { createDeck, fetchUserDecks } from "../api/decks.js";
 import { useToast } from "../contexts/ToastContext.jsx";
 import { useLanguage } from "../contexts/LanguageContext.jsx";
 import { FORMATS, getFormatLabel } from "../utils/formats.js";
@@ -14,8 +14,7 @@ function DeckSidebar({ collapsed, onToggle }) {
 
   const fetchDecks = async () => {
     try {
-      const res = await apiFetch("/api/decks");
-      if (res.ok) setDecks(await res.json());
+      setDecks(await fetchUserDecks());
     } catch {}
   };
 
@@ -28,10 +27,7 @@ function DeckSidebar({ collapsed, onToggle }) {
     if (!newName.trim()) return;
     setCreating(true);
     try {
-      const res = await apiFetch("/api/decks", {
-        method: "POST",
-        body: { name: newName.trim(), format: newFormat },
-      });
+      const res = await createDeck({ name: newName.trim(), format: newFormat });
       if (res.ok) {
         const deck = await res.json();
         setDecks((prev) => [{ ...deck, card_count: 0 }, ...prev]);

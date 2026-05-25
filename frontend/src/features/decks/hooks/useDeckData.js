@@ -2,8 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import {
   analyzeDeck,
   deleteDeck,
-  fetchSharedDeck,
-  fetchSharedDeckCards,
+  fetchSharedDeckCardsData,
+  fetchSharedDeckData,
   updateDeck,
 } from "../../../api/decks.js";
 import {
@@ -24,22 +24,19 @@ export function useDeckData({ id, navigate, showToast, t, language }) {
 
   const fetchDeck = async () => {
     try {
-      const [deckRes, cardsRes] = await Promise.all([
-        fetchSharedDeck(id),
-        fetchSharedDeckCards(id),
+      const [deckData, deckCards] = await Promise.all([
+        fetchSharedDeckData(id),
+        fetchSharedDeckCardsData(id),
       ]);
-      if (deckRes.status === 404) {
+      setDeck(deckData);
+      setEditName(deckData.name);
+      setCards(deckCards);
+    } catch (error) {
+      if (error.status === 404) {
         showToast(t("deckNotFound"), "error");
         navigate("/");
         return;
       }
-      if (deckRes.ok && cardsRes.ok) {
-        const deckData = await deckRes.json();
-        setDeck(deckData);
-        setEditName(deckData.name);
-        setCards(await cardsRes.json());
-      }
-    } catch {
       showToast(t("loadFailed"), "error");
     } finally {
       setLoading(false);

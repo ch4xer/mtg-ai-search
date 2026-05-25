@@ -1,4 +1,4 @@
-import { getImageUri } from "../../utils/cardImage.js";
+import { getExactImageUri, getImageUri } from "../../utils/cardImage.js";
 import { getCardLegality, legalityLabel } from "../../utils/formats.js";
 
 export const TYPE_ORDER = [
@@ -293,9 +293,9 @@ export function getCardDisplayImage(item) {
 }
 
 export function getCardFullImage(item) {
-  return item.image_url
-    || getImageUri(item.card.image_uris, "png")
-    || getImageUri(item.card.card_faces?.[0]?.image_uris, "png");
+  return getExactImageUri(item.card.image_uris, "png")
+    || getExactImageUri(item.card.card_faces?.[0]?.image_uris, "png")
+    || item.image_url;
 }
 
 export function getCardFaces(item) {
@@ -317,10 +317,8 @@ export function getPreviewData(item, flipped = false) {
   const backFace = faces[1];
   const getField = (field) => activeFace ? activeFace[field] : (item.card[field] ?? frontFace?.[field]);
   const frontImage = getCardFullImage(item)
-    || getImageUri(frontFace?.image_uris, "png")
-    || getImageUri(frontFace?.image_uris, "normal");
-  const backImage = getImageUri(backFace?.image_uris, "png")
-    || getImageUri(backFace?.image_uris, "normal");
+    || getExactImageUri(frontFace?.image_uris, "png");
+  const backImage = getExactImageUri(backFace?.image_uris, "png");
 
   return {
     isDoubleFaced,

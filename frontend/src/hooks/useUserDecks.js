@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useAuth } from "../contexts/AuthContext.jsx";
-import { apiFetch } from "../utils/apiFetch.js";
+import { fetchUserDecks } from "../api/decks.js";
 
 export function useUserDecks() {
   const [decks, setDecks] = useState([]);
@@ -14,8 +14,7 @@ export function useUserDecks() {
 
     let cancelled = false;
 
-    apiFetch("/api/decks")
-      .then((res) => (res.ok ? res.json() : []))
+    fetchUserDecks()
       .then((data) => {
         if (!cancelled) setDecks(data);
       })

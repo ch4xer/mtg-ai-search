@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { fetchCardPrints, normalizePrints } from "../../../api/cards.js";
+import { fetchNormalizedCardPrints } from "../../../api/cards.js";
 import { patchDeckCard } from "../../../api/decks.js";
-import { getImageUri } from "../../../utils/cardImage.js";
+import { getExactImageUri, getImageUri } from "../../../utils/cardImage.js";
 import { DOUBLE_FACED_LAYOUTS, getPreviewData } from "../deckModel.js";
 
 export function useDeckSelection({ id, cards, setCards, showToast, t }) {
@@ -44,10 +44,7 @@ export function useDeckSelection({ id, cards, setCards, showToast, t }) {
     setLoadingPrints(true);
     setShowArtPicker(true);
     try {
-      const res = await fetchCardPrints(selectedCard.card_id);
-      if (!res.ok) return;
-      const data = await res.json();
-      setArtPrints(normalizePrints(data));
+      setArtPrints(await fetchNormalizedCardPrints(selectedCard.card_id));
     } catch {
       showToast(t("fetchVersionsFailed"), "error");
     } finally {
@@ -59,7 +56,8 @@ export function useDeckSelection({ id, cards, setCards, showToast, t }) {
     if (!selectedCard) return;
     const displayUrl = getImageUri(print.image_uris, "art_crop")
       || getImageUri(print.card_faces?.[0]?.image_uris, "art_crop");
-    const imageUrl = print.normal || getImageUri(print.card_faces?.[0]?.image_uris, "normal");
+    const imageUrl = getExactImageUri(print.image_uris, "png")
+      || getExactImageUri(print.card_faces?.[0]?.image_uris, "png");
     try {
       const res = await patchDeckCard(id, selectedCard.card_id, {
         print_id: print.id,
@@ -79,6 +77,7 @@ export function useDeckSelection({ id, cards, setCards, showToast, t }) {
                   card: {
                     ...card.card,
                     rarity: print.rarity || card.card.rarity,
+                    image_uris: print.image_uris || card.card.image_uris,
                     card_faces: print.card_faces || card.card.card_faces,
                   },
                 }
@@ -93,6 +92,7 @@ export function useDeckSelection({ id, cards, setCards, showToast, t }) {
           card: {
             ...prev.card,
             rarity: print.rarity || prev.card.rarity,
+            image_uris: print.image_uris || prev.card.image_uris,
             card_faces: print.card_faces || prev.card.card_faces,
           },
         }));
@@ -108,6 +108,7 @@ export function useDeckSelection({ id, cards, setCards, showToast, t }) {
 
   const handleResetArt = async () => {
     if (!selectedCard) return;
+    const defaultPrint = artPrints[0];
     try {
       const res = await patchDeckCard(id, selectedCard.card_id, {
         print_id: null,
@@ -119,11 +120,33 @@ export function useDeckSelection({ id, cards, setCards, showToast, t }) {
         setCards((prev) =>
           prev.map((card) =>
             card.card_id === selectedCard.card_id && card.board === selectedCard.board
-              ? { ...card, print_id: null, image_url: null, display_url: null }
+              ? {
+                  ...card,
+                  print_id: null,
+                  image_url: null,
+                  display_url: null,
+                  card: {
+                    ...card.card,
+                    rarity: defaultPrint?.rarity || card.card.rarity,
+                    image_uris: defaultPrint?.image_uris || card.card.image_uris,
+                    card_faces: defaultPrint?.card_faces || card.card.card_faces,
+                  },
+                }
               : card
           )
         );
-        setSelectedCard((prev) => ({ ...prev, print_id: null, image_url: null, display_url: null }));
+        setSelectedCard((prev) => ({
+          ...prev,
+          print_id: null,
+          image_url: null,
+          display_url: null,
+          card: {
+            ...prev.card,
+            rarity: defaultPrint?.rarity || prev.card.rarity,
+            image_uris: defaultPrint?.image_uris || prev.card.image_uris,
+            card_faces: defaultPrint?.card_faces || prev.card.card_faces,
+          },
+        }));
         showToast(t("artResetSuccess"));
       }
     } catch {
@@ -146,10 +169,7 @@ export function useDeckSelection({ id, cards, setCards, showToast, t }) {
     let cancelled = false;
     const hydrateFaces = async () => {
       try {
-        const res = await fetchCardPrints(selectedCard.card_id);
-        if (!res.ok) return;
-        const data = await res.json();
-        const prints = data.prints || [];
+        const prints = await fetchNormalizedCardPrints(selectedCard.card_id);
         const selectedPrint = prints.find((print) => print.id === selectedCard.print_id && print.card_faces?.length >= 2);
         const fallbackPrint = prints.find((print) => print.card_faces?.length >= 2);
         const faces = (selectedPrint || fallbackPrint)?.card_faces;

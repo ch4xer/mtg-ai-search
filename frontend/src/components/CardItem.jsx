@@ -1,17 +1,19 @@
 import React, { useState, useRef, useEffect } from "react";
 import { createPortal } from "react-dom";
-import { addDeckCard } from "../api/decks.js";
-import { fetchCardPrints, normalizePrints } from "../api/cards.js";
+import { addDeckCard, fetchUserDecks } from "../api/decks.js";
+import { fetchNormalizedCardPrints } from "../api/cards.js";
 import { useAuth } from "../contexts/AuthContext.jsx";
-import { apiFetch, getAccessToken } from "../utils/apiFetch.js";
+import { getAccessToken } from "../utils/apiFetch.js";
 import { useToast } from "../contexts/ToastContext.jsx";
 import { useLanguage } from "../contexts/LanguageContext.jsx";
 import { getFormatLabel, getCardLegality, legalityLabel } from "../utils/formats.js";
 import { getImageUri } from "../utils/cardImage.js";
+import { cacheImage, isImageCached } from "../utils/imageCache.js";
 import { getSetIconClass } from "../utils/keyrune.js";
 import { parseManaCost, parseOracleText } from "../utils/manaSymbols.js";
 
 const DOUBLE_FACED_LAYOUTS = new Set(["transform", "modal_dfc", "double_faced_token", "reversible_card"]);
+const ART_PICKER_SKELETON_COUNT = 18;
 
 function CardItem({ card, imageMode, decks: propDecks }) {
   const [imgError, setImgError] = useState(false);
@@ -89,10 +91,7 @@ function CardItem({ card, imageMode, decks: propDecks }) {
     setLoadingPrints(true);
     setShowArtPicker(true);
     try {
-      const res = await fetchCardPrints(card.id);
-      if (!res.ok) return;
-      const data = await res.json();
-      setPrints(normalizePrints(data));
+      setPrints(await fetchNormalizedCardPrints(card.id));
     } catch {
       showToast("获取版本列表失败", "error");
     } finally {
@@ -112,12 +111,7 @@ function CardItem({ card, imageMode, decks: propDecks }) {
     setLoadingDecks(true);
     setShowDeckMenu(true);
     try {
-      const res = await apiFetch("/api/decks");
-      if (res.ok) {
-        setLocalDecks(await res.json());
-      } else {
-        setLocalDecks([]);
-      }
+      setLocalDecks(await fetchUserDecks());
     } catch {
       setLocalDecks([]);
     } finally {
@@ -320,21 +314,33 @@ function CardItem({ card, imageMode, decks: propDecks }) {
                 <button className="art-picker-close" onClick={() => setShowArtPicker(false)}>&times;</button>
               </div>
             </div>
-            {loadingPrints ? (
-              <div className="art-picker-loading">加载中...</div>
+            {loadingPrints && prints.length === 0 ? (
+              <div className="art-picker-grid" aria-busy="true">
+                {Array.from({ length: ART_PICKER_SKELETON_COUNT }, (_, index) => (
+                  <div key={index} className="art-picker-item art-picker-skeleton" />
+                ))}
+              </div>
             ) : (
               <div className="art-picker-grid">
-                {prints.map((p) => (
-                  <div
-                    key={p.id}
-                    className={`art-picker-item ${selectedArt?.id === p.id ? "selected" : ""}`}
-                    onClick={() => handleSelectArt(p)}
-                    title={`${p.label} - ${p.artist}`}
-                  >
-                    <img src={p.normal} alt={p.label} loading="lazy" />
-                    <span className="art-picker-label">{p.label}</span>
-                  </div>
-                ))}
+                {prints.map((p) => {
+                  const pickerImage = p.thumbnail || p.normal;
+                  return (
+                    <div
+                      key={p.id}
+                      className={`art-picker-item ${selectedArt?.id === p.id ? "selected" : ""}`}
+                      onClick={() => handleSelectArt(p)}
+                      title={`${p.label} - ${p.artist}`}
+                    >
+                      <img
+                        src={pickerImage}
+                        alt={p.label}
+                        loading={isImageCached(pickerImage) ? "eager" : "lazy"}
+                        onLoad={() => cacheImage(pickerImage)}
+                      />
+                      <span className="art-picker-label">{p.label}</span>
+                    </div>
+                  );
+                })}
               </div>
             )}
           </div>
