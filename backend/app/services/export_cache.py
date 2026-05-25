@@ -1,5 +1,6 @@
 """Short-lived in-memory export cache."""
 
+import os
 import time
 from uuid import uuid4
 
@@ -7,7 +8,15 @@ from fastapi import HTTPException
 
 ExportCache = dict[str, tuple[bytes, str, float]]
 
-EXPORT_CACHE_TTL = 300
+
+def _int_env(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
+EXPORT_CACHE_TTL = max(300, _int_env("MTG_EXPORT_CACHE_TTL_SECONDS", 12 * 60 * 60))
 
 
 def put_export(cache: ExportCache, data: bytes, filename: str) -> str:
@@ -23,6 +32,7 @@ def get_export(cache: ExportCache, export_id: str) -> tuple[bytes, str]:
     if not entry:
         raise HTTPException(status_code=404, detail="Export not found or expired")
     data, filename, _ = entry
+    cache[export_id] = (data, filename, time.time())
     return data, filename
 
 
