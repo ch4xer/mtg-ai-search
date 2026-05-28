@@ -1,5 +1,8 @@
 """Search and discovery HTTP endpoints."""
 
+import logging
+import time
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from .dependencies import get_optional_user
@@ -15,11 +18,12 @@ from .services.search_service import (
     get_client_ip,
     list_card_prints as list_card_prints_service,
     list_keywords as list_keywords_service,
-    search_cards as search_cards_service,
+    search_cards_result as search_cards_service,
 )
 from .services.tag_search_service import search_tags as search_tags_service
 
 search_router = APIRouter(tags=["search"])
+logger = logging.getLogger(__name__)
 
 
 @search_router.post("/api/search", response_model=SearchResponse)
@@ -28,13 +32,32 @@ async def search_cards(
     raw_request: Request,
     user_id: str | None = Depends(get_optional_user),
 ):
+    started = time.perf_counter()
     client_ip = get_client_ip(raw_request)
+    logger.debug(
+        ">>> /api/search query=%r limit=%d offset=%d search_id=%s user=%s ip=%s",
+        request.query,
+        request.limit,
+        request.offset,
+        request.search_id or "-",
+        user_id or "anonymous",
+        client_ip,
+    )
     results = await search_cards_service(
         request.query,
         client_ip,
         user_id,
+        card_limit=request.limit,
+        card_offset=request.offset,
+        search_id=request.search_id,
+        include_zh=request.include_zh,
     )
-    return SearchResponse(results=results)
+    logger.debug(
+        "<<< /api/search returned %d cards in %.2fs",
+        len(results["results"]),
+        time.perf_counter() - started,
+    )
+    return SearchResponse(**results)
 
 
 @search_router.post("/api/tag-search", response_model=TagSearchResponse)

@@ -18,8 +18,9 @@ async def external_ai_search(req: ApiAiSearchRequest, raw_request: Request):
         user["id"],
         rerank_enabled=req.rerank_enabled,
         rerank_top_n=req.rerank_top_n,
+        card_limit=req.limit,
     )
-    return SearchResponse(results=results[:req.limit])
+    return SearchResponse(results=results)
 
 
 @api_router.post("/exact-match", response_model=SearchResponse)

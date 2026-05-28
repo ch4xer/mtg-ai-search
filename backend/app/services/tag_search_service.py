@@ -11,7 +11,7 @@ import re
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from difflib import SequenceMatcher
+
 from html import unescape
 from typing import Literal
 from urllib.parse import quote
@@ -19,11 +19,12 @@ from urllib.parse import quote
 import httpx
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from ..embedding import encode_batch_safe, encode_query
+from ..embedding import encode_batch_or_none, encode_queries
 from ..llm_provider import create_chat_llm, is_chat_provider_configured
-from ..repositories.cards import filter_cards, get_cards_by_ids
+from ..repositories.cards import get_cards_by_ids
 from ..repositories.database import get_pool
 from .card_query_constraints import build_structured_card_filters, extract_card_search_constraints
+from .llm_json import parse_llm_json_object
 
 logger = logging.getLogger(__name__)
 
@@ -36,79 +37,13 @@ SAMPLE_CARDS_PER_TAG = 3
 SCRYFALL_SAMPLE_REQUEST_DELAY_SECONDS = float(os.getenv("SCRYFALL_SAMPLE_REQUEST_DELAY_SECONDS", "0.35"))
 TAG_EXPANSION_DB_VERSION = 1
 TAG_VECTOR_SEARCH_LIMIT = 40
-RRF_K = 60
 
-ART_HINTS = (
-    "art",
-    "artist",
-    "illustration",
-    "picture",
-    "scene",
-    "visual",
-    "画",
-    "插画",
-    "图",
-    "画面",
-    "背景",
-    "构图",
-    "人物",
-)
-FUNCTION_HINTS = (
-    "function",
-    "effect",
-    "oracle",
-    "ability",
-    "gameplay",
-    "mechanic",
-    "规则",
-    "功能",
-    "效果",
-    "异能",
-    "机制",
-    "能力",
-    "检索",
-    "加速",
-    "清场",
-    "去除",
-    "抓牌",
-    "弃牌",
-)
+RERANK_SKIP_LEAD_RATIO = float(os.getenv("AI_SEARCH_RERANK_SKIP_LEAD_RATIO", "1.45"))
+RERANK_SKIP_MIN_GAP = float(os.getenv("AI_SEARCH_RERANK_SKIP_MIN_GAP", "0.006"))
+
 SUPPORTED_TAG_TYPES: set[Literal["function"]] = {"function"}
 
-PHRASE_EXPANSIONS: dict[str, list[str]] = {
-    "清场": ["wipe", "wrath of god", "mass removal"],
-    "全场去除": ["wipe", "wrath of god", "mass removal"],
-    "去除": ["removal", "destroy", "exile"],
-    "解牌": ["removal", "destroy", "exile"],
-    "抓牌": ["draw", "draw cards", "card advantage"],
-    "过牌": ["draw", "draw cards"],
-    "弃牌": ["discard"],
-    "加速": ["ramp", "acceleration", "adds mana"],
-    "反击": ["counterspell", "counter"],
-    "墓地": ["graveyard", "cemetery", "tomb"],
-    "坟场": ["graveyard", "cemetery", "tomb"],
-    "牺牲": ["sacrifice"],
-    "回血": ["lifegain", "gain life", "life gain"],
-    "吸血": ["lifelink"],
-    "飞行": ["flying"],
-    "先攻": ["first strike"],
-    "警戒": ["vigilance"],
-    "践踏": ["trample"],
-    "龙": ["dragon"],
-    "天使": ["angel"],
-    "恶魔": ["demon"],
-    "乌鸦": ["raven", "crow"],
-    "骷髅": ["skeleton", "skull"],
-    "僵尸": ["zombie"],
-    "吸血鬼": ["vampire"],
-    "猫": ["cat"],
-    "狼": ["wolf"],
-    "火焰": ["fire", "flame"],
-    "森林": ["forest", "tree", "woods"],
-    "阴森": ["dark", "gloom", "spooky"],
-}
-
-TAG_SELECTION_PROMPT = (
+TAG_RERANK_PROMPT = (
     "You map Magic: The Gathering natural-language requests to Scryfall Tagger tags.\n"
     "Pick only from the provided candidates. Never invent a tag.\n"
     "Prefer the smallest set of tags that directly satisfies the request.\n"
@@ -118,35 +53,6 @@ TAG_SELECTION_PROMPT = (
     "Treat art tags as visual/illustration concepts and function tags as Oracle/gameplay concepts.\n"
     "Return JSON only in this shape: "
     '{"selected":[{"id":1,"reason":"short reason"}]}.'
-)
-
-QUERY_REWRITE_PROMPT = (
-    "You rewrite multilingual Magic: The Gathering tag-search requests into English retrieval intent.\n"
-    "The search index contains only Scryfall functional/Oracle tags, not artwork tags.\n"
-    "Rewrite the query toward MTG rules text, Oracle text, mechanics, gameplay effects, deck roles, and card behavior.\n"
-    "Strict meaning preservation rules:\n"
-    "- Do not weaken, broaden, simplify, or summarize away gameplay qualifiers from the user request.\n"
-    "- Preserve actor, target, quantity, plurality, frequency, repeatability, duration, trigger condition, zone, timing, and restrictions.\n"
-    "- A repeated/recurring/repeatable/each-turn/whenever effect is materially different from a one-shot effect. Never rewrite it as a one-shot effect.\n"
-    "- If the user has a typo such as repeatly, infer repeatedly but keep the repeated/repeatable meaning.\n"
-    "- If unsure whether a qualifier matters, keep it in intent and expanded_queries.\n"
-    "Return JSON only with exactly these keys: "
-    "intent_type, intent, core_concepts, expanded_queries, excluded_concepts, targets, logic.\n"
-    "intent_type must always be function.\n"
-    "intent must be one concise English sentence.\n"
-    "core_concepts, expanded_queries, and excluded_concepts must be English string arrays.\n"
-    "targets must be an array of focused functional retrieval goals. Each target must have: slot, type, intent, expanded_queries.\n"
-    "Each target type must be function.\n"
-    "Create multiple targets when the user asks for multiple gameplay concepts.\n"
-    "logic must be a Boolean tree that preserves the user's requested relationship between targets.\n"
-    "logic operator nodes use {'op':'and'|'or','children':[...]}.\n"
-    "logic leaf nodes are self-contained targets using {'slot':'short_snake_case','type':'function','intent':'...','expanded_queries':[...]}.\n"
-    "Use and when all concepts must be true. Use or when any alternative effect may satisfy the user.\n"
-    "Never combine alternatives connected by or/或者/任一 into one leaf. Use an or node with one child per alternative.\n"
-    "Example: 'from graveyard and discard or lose life' must become and(graveyard, or(discard, life_loss)).\n"
-    "expanded_queries should contain 4 to 10 short English retrieval phrases suitable for semantic search over tag descriptions.\n"
-    "Keep expansions faithful to the user's wording. If the user only asks for visual/art concepts, describe the closest functional intent as empty or broad, but do not create artwork targets.\n"
-    "Example: 'repeatly create token and discards opponent card' must preserve repeatability as repeated/repeatable token creation, not just create a token.\n"
 )
 
 TAG_EXPANSION_PROMPT = (
@@ -168,7 +74,6 @@ TAG_EXPANSION_PROMPT = (
 
 @dataclass(frozen=True)
 class QueryTarget:
-    type_hint: Literal["function"]
     intent: str
     expansions: tuple[str, ...]
     slot: str = "target_1"
@@ -184,11 +89,8 @@ class QueryLogicNode:
 
 @dataclass(frozen=True)
 class QueryAnalysis:
-    type_hint: Literal["art", "function", "mixed"]
     intent: str
     expansions: tuple[str, ...]
-    excluded_concepts: tuple[str, ...]
-    rewrite_used: bool
     targets: tuple[QueryTarget, ...] = ()
     logic: QueryLogicNode | None = None
 
@@ -1003,7 +905,7 @@ async def _fetch_function_tag_cards_from_scryfall(
 ) -> list[dict]:
     url: str | None = SCRYFALL_API_CARDS_SEARCH_URL
     params: dict[str, str] | None = {
-        "q": _single_tag_search_expr("function", tag),
+        "q": _single_tag_search_expr(tag),
         "unique": "cards",
         "order": "name",
     }
@@ -1221,38 +1123,6 @@ def _tokenize(text: str) -> list[str]:
     return re.findall(r"[a-z0-9]+|[\u4e00-\u9fff]+", text.lower())
 
 
-def _detect_type_hint(query: str) -> Literal["art", "function", "mixed"]:
-    return "function"
-
-
-def _expand_query(query: str) -> list[str]:
-    normalized = _normalize(query)
-    expansions = [normalized]
-    for phrase, mapped in PHRASE_EXPANSIONS.items():
-        if phrase in query or phrase in normalized:
-            expansions.extend(mapped)
-    return list(dict.fromkeys(item for item in expansions if item))
-
-
-def _fallback_query_analysis(query: str) -> QueryAnalysis:
-    expansions = tuple(_expand_query(query))
-    target = QueryTarget(
-        type_hint="function",
-        intent=_normalize(query),
-        expansions=expansions,
-        slot="target_1",
-    )
-    return QueryAnalysis(
-        type_hint="function",
-        intent=_normalize(query),
-        expansions=expansions,
-        excluded_concepts=(),
-        rewrite_used=False,
-        targets=(target,),
-        logic=QueryLogicNode(op="target", slot=target.slot, target_index=0),
-    )
-
-
 def _as_string_list(value, *, max_items: int = 12) -> list[str]:
     if isinstance(value, str):
         try:
@@ -1279,22 +1149,22 @@ def _sanitize_slot(value: object, fallback: str) -> str:
 
 
 def _target_from_payload(item: dict, *, fallback_slot: str) -> QueryTarget | None:
-    raw_target_type = str(item.get("type", "")).strip().lower()
-    if raw_target_type != "function":
-        return None
-
     target_intent = " ".join(str(item.get("intent", "")).split())
-    target_expanded = _as_string_list(item.get("expanded_queries"), max_items=10)
-    target_expansions = [target_intent, *target_expanded]
-    if not any(target_expansions):
+    if not target_intent:
         return None
 
     return QueryTarget(
-        type_hint="function",
         intent=target_intent,
-        expansions=tuple(dict.fromkeys(item for item in target_expansions if item)),
+        expansions=(target_intent,),
         slot=_sanitize_slot(item.get("slot"), fallback_slot),
     )
+
+
+def _target_index_by_slot(targets: list[QueryTarget], slot: str) -> int | None:
+    for index, target in enumerate(targets):
+        if target.slot == slot:
+            return index
+    return None
 
 
 def _parse_logic_node(
@@ -1303,10 +1173,18 @@ def _parse_logic_node(
     *,
     path: str = "target",
 ) -> QueryLogicNode | None:
+    if isinstance(value, str):
+        slot = _sanitize_slot(value, f"{path}_{len(targets) + 1}")
+        return QueryLogicNode(op="target", slot=slot, target_index=_target_index_by_slot(targets, slot))
+
     if not isinstance(value, dict):
         return None
 
     op = str(value.get("op", "")).strip().lower()
+    if op == "target":
+        slot = _sanitize_slot(value.get("slot"), f"{path}_{len(targets) + 1}")
+        return QueryLogicNode(op="target", slot=slot, target_index=_target_index_by_slot(targets, slot))
+
     if op in {"and", "or"}:
         children = []
         raw_children = value.get("children", [])
@@ -1345,12 +1223,7 @@ def _logic_node_to_dict(node: QueryLogicNode | None, targets: tuple[QueryTarget,
     if node is None:
         return None
     if node.op == "target":
-        target = targets[node.target_index] if node.target_index is not None and node.target_index < len(targets) else None
-        return {
-            "op": "target",
-            "slot": node.slot,
-            "intent": target.intent if target else "",
-        }
+        return node.slot
     return {
         "op": node.op,
         "children": [
@@ -1361,36 +1234,72 @@ def _logic_node_to_dict(node: QueryLogicNode | None, targets: tuple[QueryTarget,
     }
 
 
-def _analyze_query_with_llm(query: str) -> QueryAnalysis:
-    fallback = _fallback_query_analysis(query)
-    if not is_chat_provider_configured():
-        return fallback
+def _logic_node_from_plan(value: object) -> QueryLogicNode | None:
+    if isinstance(value, str):
+        return QueryLogicNode(op="target", slot=_sanitize_slot(value, "target_1"))
 
-    try:
-        llm = create_chat_llm(temperature=0)
-        response = llm.invoke(
-            [
-                SystemMessage(content=QUERY_REWRITE_PROMPT),
-                HumanMessage(content=query),
-            ]
-        )
-        content = response.content if isinstance(response.content, str) else str(response.content)
-        payload = _extract_json(content)
-    except Exception:
-        logger.exception("Failed to rewrite tag-search query with LLM")
-        return fallback
+    if not isinstance(value, dict):
+        return None
 
-    type_hint: Literal["art", "function", "mixed"] = "function"
+    op = str(value.get("op", "")).strip().lower()
+    if op == "target":
+        slot = _sanitize_slot(value.get("slot"), "target_1")
+        return QueryLogicNode(op="target", slot=slot)
 
-    intent = " ".join(str(payload.get("intent", "")).split())
-    core_concepts = _as_string_list(payload.get("core_concepts"), max_items=8)
-    expanded_queries = _as_string_list(payload.get("expanded_queries"), max_items=12)
-    excluded_concepts = _as_string_list(payload.get("excluded_concepts"), max_items=8)
+    if op not in {"and", "or"}:
+        return None
+
+    raw_children = value.get("children", [])
+    if not isinstance(raw_children, list):
+        return None
+    children = tuple(
+        child
+        for child in (_logic_node_from_plan(item) for item in raw_children[:8])
+        if child is not None
+    )
+    if not children:
+        return None
+    if len(children) == 1:
+        return children[0]
+    return QueryLogicNode(op=op, children=children)
+
+
+def _clean_plan_query_part(value: object) -> str:
+    return " ".join(str(value or "").split()).strip(" .")
+
+
+def _collect_plan_target_intents(value: object, output: list[str]) -> None:
+    if not isinstance(value, dict):
+        return
+
+    op = str(value.get("op", "")).strip().lower()
+    if op in {"and", "or"}:
+        children = value.get("children", [])
+        if isinstance(children, list):
+            for child in children[:8]:
+                _collect_plan_target_intents(child, output)
+        return
+
+    intent = _clean_plan_query_part(value.get("intent"))
+    if intent:
+        output.append(intent)
+
+
+def _tag_retrieval_query_from_plan(plan: dict) -> str:
+    parts: list[str] = []
+    raw_targets = plan.get("targets", [])
+    if isinstance(raw_targets, list):
+        for item in raw_targets[:8]:
+            _collect_plan_target_intents(item, parts)
+    _collect_plan_target_intents(plan.get("logic"), parts)
+
+    return ". ".join(dict.fromkeys(item for item in parts if item))
+
+
+def _analysis_from_search_plan(query: str, plan: dict, tag_retrieval_query: str) -> QueryAnalysis:
     targets: list[QueryTarget] = []
-    logic = _parse_logic_node(payload.get("logic"), targets)
-
-    raw_targets = payload.get("targets", [])
-    if logic is None and isinstance(raw_targets, list):
+    raw_targets = plan.get("targets", [])
+    if isinstance(raw_targets, list):
         for item in raw_targets[:8]:
             if not isinstance(item, dict):
                 continue
@@ -1398,141 +1307,44 @@ def _analyze_query_with_llm(query: str) -> QueryAnalysis:
             if target is None:
                 continue
             targets.append(target)
+    logic = _parse_logic_node(plan.get("logic"), targets)
 
-    target_tuple = tuple(targets) or fallback.targets
-    logic = logic or _logic_from_targets(target_tuple) or fallback.logic
+    if not tag_retrieval_query:
+        tag_retrieval_query = ". ".join(
+            dict.fromkeys(_clean_plan_query_part(item.intent) for item in targets if item.intent)
+        )
 
-    expansions = [query]
-    if intent:
-        expansions.append(intent)
-    expansions.extend(core_concepts)
-    expansions.extend(expanded_queries)
-    expansions.extend(fallback.expansions)
+    if not tag_retrieval_query and not targets:
+        return QueryAnalysis(
+            intent="",
+            expansions=(),
+            targets=(),
+            logic=None,
+        )
+
+    target_tuple = tuple(targets)
+    logic = logic or _logic_from_targets(target_tuple)
 
     return QueryAnalysis(
-        type_hint=type_hint,
-        intent=intent or fallback.intent,
-        expansions=tuple(dict.fromkeys(item for item in expansions if item)),
-        excluded_concepts=tuple(dict.fromkeys(excluded_concepts)),
-        rewrite_used=True,
+        intent=tag_retrieval_query,
+        expansions=(tag_retrieval_query,) if tag_retrieval_query else (),
         targets=target_tuple,
         logic=logic,
     )
 
 
-def _build_query_terms(expansions: list[str]) -> tuple[set[str], list[str]]:
-    tokens: set[str] = set()
-    phrases: list[str] = []
-    for item in expansions:
-        normalized = _normalize(item)
-        if not normalized:
-            continue
-        phrases.append(normalized)
-        tokens.update(token for token in _tokenize(normalized) if len(token) >= 2)
-    return tokens, phrases
-
-
-def _score_entry(entry: TagEntry, query_tokens: set[str], phrases: list[str], type_hint: str) -> tuple[float, str]:
-    semantic_tokens = entry.semantic_tokens or entry.tokens
-    searchable_text = _normalize(
-        " ".join(
-            item
-            for item in (
-                entry.normalized,
-                entry.embedding_text,
-                " ".join(entry.aliases),
-                " ".join(entry.retrieval_phrases),
-                entry.description,
-            )
-            if item
-        )
-    )
-
-    canonical_overlap = len(entry.tokens & query_tokens)
-    semantic_overlap = len(semantic_tokens & query_tokens)
-    overlap = canonical_overlap + max(0, semantic_overlap - canonical_overlap) * 0.55
-    substring_hits = sum(1 for token in query_tokens if len(token) >= 3 and token in searchable_text)
-    exact_hits = sum(1 for phrase in phrases if phrase and phrase == entry.normalized)
-    phrase_hits = sum(1 for phrase in phrases if phrase and phrase != entry.normalized and phrase in searchable_text)
-
-    score = overlap * 6.0 + substring_hits * 2.5 + exact_hits * 12.0 + phrase_hits * 4.0
-
-    if type_hint == entry.tag_type:
-        score += 1.5
-    elif type_hint != "mixed":
-        score -= 0.75
-
-    if score <= 0:
-        similarity = SequenceMatcher(None, " ".join(sorted(query_tokens)), entry.normalized).ratio()
-        if similarity >= 0.58:
-            score = similarity * 5.0
-
-    if exact_hits:
-        reason = "Exact concept match"
-    elif canonical_overlap >= 2:
-        reason = "Shares multiple query terms"
-    elif canonical_overlap == 1 or substring_hits:
-        reason = "Matches a key query term"
-    elif phrase_hits:
-        reason = "Matches an expanded concept"
-    elif semantic_overlap:
-        reason = "Matches cached semantic expansion"
-    else:
-        reason = "Semantic fallback match"
-
-    return score, reason
 
 
 def _build_search_targets(analysis: QueryAnalysis) -> tuple[QueryTarget, ...]:
     if analysis.targets:
         return analysis.targets
     return (
-        QueryTarget(type_hint="function", intent=analysis.intent, expansions=analysis.expansions),
+        QueryTarget(intent=analysis.intent, expansions=analysis.expansions),
     )
 
 
-def _single_tag_search_expr(tag_type: str, tag: str) -> str:
-    return f"{tag_type}:{tag}"
-
-
-def _score_entries_for_target(
-    entries: tuple[TagEntry, ...],
-    target: QueryTarget,
-) -> tuple[list[dict], dict]:
-    query_tokens, phrases = _build_query_terms(list(target.expansions))
-    searchable_entries = tuple(entry for entry in entries if entry.tag_type == target.type_hint)
-    scored: list[dict] = []
-
-    for entry in searchable_entries:
-        score, reason = _score_entry(entry, query_tokens, phrases, target.type_hint)
-        if score <= 0:
-            continue
-        search_query = _single_tag_search_expr(entry.tag_type, entry.tag)
-        scored.append(
-            {
-                "tag": entry.tag,
-                "tag_type": entry.tag_type,
-                "label": entry.label,
-                "score": round(score, 3),
-                "reason": reason,
-                "search_query": search_query,
-                "search_url": f"{SCRYFALL_SEARCH_URL}{quote(search_query)}",
-                "target_type": target.type_hint,
-                "target_intent": target.intent,
-                "target_slot": target.slot,
-                "retrieval_source": "lexical",
-            }
-        )
-
-    scored.sort(key=lambda item: (-item["score"], item["tag_type"], item["tag"]))
-    return scored, {
-        "type": target.type_hint,
-        "slot": target.slot,
-        "intent": target.intent,
-        "expanded_queries": list(target.expansions),
-        "searched_tags": len(searchable_entries),
-        "candidate_count": len(scored),
-    }
+def _single_tag_search_expr(tag: str) -> str:
+    return f"function:{tag}"
 
 
 def _target_embedding_query_text(target: QueryTarget) -> str:
@@ -1546,12 +1358,26 @@ async def _vector_search_entries_for_target(
     *,
     limit: int = TAG_VECTOR_SEARCH_LIMIT,
 ) -> list[dict]:
-    if target.type_hint != "function":
-        return []
+    results = await _vector_search_entries_for_targets((target,), limit=limit)
+    return results[0] if results else []
 
-    query_text = _target_embedding_query_text(target)
-    if not query_text:
-        return []
+
+async def _vector_search_entries_for_targets(
+    targets: tuple[QueryTarget, ...],
+    *,
+    limit: int = TAG_VECTOR_SEARCH_LIMIT,
+) -> list[list[dict]]:
+    results: list[list[dict]] = [[] for _ in targets]
+    indexed_queries: list[tuple[int, QueryTarget, str]] = []
+    for index, target in enumerate(targets):
+        query_text = _target_embedding_query_text(target)
+        if not query_text:
+            continue
+
+        indexed_queries.append((index, target, query_text))
+
+    if not indexed_queries:
+        return results
 
     pool = await get_pool()
     try:
@@ -1568,121 +1394,99 @@ async def _vector_search_entries_for_target(
             """
         )
     except Exception as exc:
-        logger.warning("Tag vector availability check failed; falling back to lexical tag search: %s", exc)
-        return []
+        logger.warning("Tag vector availability check failed: %s", exc)
+        return results
     if not has_embeddings:
-        return []
+        return results
 
+    unique_query_texts = list(dict.fromkeys(query_text for _, _, query_text in indexed_queries))
     try:
-        vectors = await asyncio.to_thread(encode_query, [query_text])
+        vectors = await asyncio.to_thread(encode_queries, unique_query_texts)
     except Exception as exc:
-        logger.warning("Tag vector query embedding failed; falling back to lexical tag search: %s", exc)
-        return []
+        logger.warning("Tag vector query embedding failed: %s", exc)
+        return results
 
     if not vectors:
-        return []
+        return results
 
-    try:
-        rows = await pool.fetch(
-            """
-            SELECT
-                tag,
-                tag_type,
-                label,
-                aliases,
-                retrieval_phrases,
-                description,
-                embedding_text,
-                embedding <=> $1::halfvec AS distance
-            FROM tagger_tags
-            WHERE removed_at IS NULL
-              AND tag_type = 'function'
-              AND expansion_generated_at IS NOT NULL
-              AND embedding IS NOT NULL
-            ORDER BY distance ASC
-            LIMIT $2
-            """,
-            _vector_literal(vectors[0]),
-            limit,
-        )
-    except Exception as exc:
-        logger.warning("Tag vector search failed; falling back to lexical tag search: %s", exc)
-        return []
+    vector_by_query_text = dict(zip(unique_query_texts, vectors))
 
-    scored: list[dict] = []
-    for row in rows:
-        distance = float(row["distance"])
-        search_query = _single_tag_search_expr(row["tag_type"], row["tag"])
-        scored.append(
-            {
-                "tag": row["tag"],
-                "tag_type": row["tag_type"],
-                "label": row["label"],
-                "score": round(1.0 - distance, 6),
-                "reason": "Vector semantic match",
-                "search_query": search_query,
-                "search_url": f"{SCRYFALL_SEARCH_URL}{quote(search_query)}",
-                "target_type": target.type_hint,
-                "target_intent": target.intent,
-                "target_slot": target.slot,
-                "retrieval_source": "vector",
-                "vector_distance": round(distance, 6),
-                "aliases": _as_string_list(row["aliases"], max_items=5),
-                "retrieval_phrases": _as_string_list(row["retrieval_phrases"], max_items=8),
-                "description": row["description"] or "",
-                "embedding_text": row["embedding_text"] or "",
-            }
-        )
-    return scored
+    async def fetch_target_matches(index: int, target: QueryTarget, query_text: str) -> tuple[int, list[dict]]:
+        vector = vector_by_query_text.get(query_text)
+        if vector is None:
+            return index, []
+        try:
+            rows = await pool.fetch(
+                """
+                SELECT
+                    tag,
+                    tag_type,
+                    label,
+                    aliases,
+                    retrieval_phrases,
+                    description,
+                    embedding_text,
+                    embedding <=> $1::halfvec AS distance
+                FROM tagger_tags
+                WHERE removed_at IS NULL
+                  AND tag_type = 'function'
+                  AND expansion_generated_at IS NOT NULL
+                  AND embedding IS NOT NULL
+                ORDER BY distance ASC
+                LIMIT $2
+                """,
+                _vector_literal(vector),
+                limit,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Tag vector search failed for target %s: %s",
+                target.slot,
+                exc,
+            )
+            return index, []
 
-
-def _merge_target_candidates(target_results: list[list[dict]], per_target_limit: int = 24) -> list[dict]:
-    merged: dict[tuple[str, str], dict] = {}
-    for result in target_results:
-        for rank, item in enumerate(result[:per_target_limit], start=1):
-            key = (item["tag_type"], item["tag"])
-            rrf_score = 1.0 / (RRF_K + rank)
-            existing = merged.get(key)
-            if existing is None:
-                candidate = dict(item)
-                candidate["score"] = rrf_score
-                candidate["retrieval_sources"] = [item.get("retrieval_source", "unknown")]
-                candidate["source_scores"] = {
-                    item.get("retrieval_source", "unknown"): item.get("score", 0.0),
-                    "best_raw_score": item.get("score", 0.0),
+        scored: list[dict] = []
+        for row in rows:
+            distance = float(row["distance"])
+            search_query = _single_tag_search_expr(row["tag"])
+            scored.append(
+                {
+                    "tag": row["tag"],
+                    "label": row["label"],
+                    "score": round(1.0 - distance, 6),
+                    "reason": "Vector semantic match",
+                    "search_query": search_query,
+                    "search_url": f"{SCRYFALL_SEARCH_URL}{quote(search_query)}",
+                    "target_intent": target.intent,
+                    "target_slot": target.slot,
+                    "retrieval_source": "vector",
+                    "vector_distance": round(distance, 6),
+                    "aliases": _as_string_list(row["aliases"], max_items=5),
+                    "retrieval_phrases": _as_string_list(row["retrieval_phrases"], max_items=8),
+                    "description": row["description"] or "",
+                    "embedding_text": row["embedding_text"] or "",
                 }
-                merged[key] = candidate
-                continue
+            )
+        return index, scored
 
-            existing["score"] += rrf_score
-            source = item.get("retrieval_source", "unknown")
-            if source not in existing["retrieval_sources"]:
-                existing["retrieval_sources"].append(source)
-            source_scores = existing.setdefault("source_scores", {})
-            source_scores[source] = max(source_scores.get(source, float("-inf")), item.get("score", 0.0))
-            if item.get("score", 0.0) > source_scores.get("best_raw_score", float("-inf")):
-                existing["reason"] = item.get("reason", existing["reason"])
-                source_scores["best_raw_score"] = item.get("score", 0.0)
-    candidates = list(merged.values())
-    candidates.sort(key=lambda item: (-item["score"], item["tag_type"], item["tag"]))
-    return candidates
+    fetched = await asyncio.gather(
+        *(fetch_target_matches(index, target, query_text) for index, target, query_text in indexed_queries)
+    )
+    for index, scored in fetched:
+        results[index] = scored
+    return results
 
 
 def _tag_search_expr(match: dict) -> str:
-    return _single_tag_search_expr(match["tag_type"], match["tag"])
+    return _single_tag_search_expr(match["tag"])
 
 
 def _compose_flat_search_query(matches: list[dict]) -> list[str]:
-    grouped: dict[str, list[str]] = {"art": [], "function": []}
-    for match in matches:
-        grouped[match["tag_type"]].append(match["tag"])
-
-    queries: list[str] = []
-    if grouped["art"]:
-        queries.append(" or ".join(_single_tag_search_expr("art", tag) for tag in grouped["art"][:4]))
-    if grouped["function"]:
-        queries.append(" or ".join(_single_tag_search_expr("function", tag) for tag in grouped["function"][:4]))
-    return queries
+    tags = [match["tag"] for match in matches if match.get("tag")]
+    if not tags:
+        return []
+    return [" or ".join(_single_tag_search_expr(tag) for tag in tags[:4])]
 
 
 def _compose_logic_expr(node: QueryLogicNode, matches_by_slot: dict[str, list[dict]], *, top: bool = False) -> str:
@@ -1724,120 +1528,136 @@ def _compose_search_query(matches: list[dict], logic: QueryLogicNode | None = No
     return _compose_flat_search_query(matches)
 
 
-def _preserve_tag_effect_qualifiers(original_query: str, effect_query: str) -> str:
-    original = _normalize(original_query)
-    effect = " ".join(effect_query.split())
-    effect_normalized = _normalize(effect)
-    if not effect:
-        return effect
-
-    has_repeatability = bool(
-        re.search(r"\brepeat(?:ly|edly|able|ing)?\b", original)
-        or "each turn" in original
-        or "every turn" in original
-        or "whenever" in original
-        or any(term in original_query for term in ("反复", "重复", "每回合", "每个回合", "每当"))
-    )
-    has_repeatability_in_effect = bool(
-        re.search(r"\brepeat(?:ly|edly|able|ing)?\b", effect_normalized)
-        or "each turn" in effect_normalized
-        or "every turn" in effect_normalized
-        or "whenever" in effect_normalized
-    )
-    mentions_token_creation = (
-        "token" in original
-        and any(verb in original for verb in ("create", "creates", "created", "make", "makes", "produce", "produces"))
-    ) or (
-        "token" in effect_normalized
-        and any(verb in effect_normalized for verb in ("create", "creates", "created", "make", "makes", "produce", "produces"))
-    )
-
-    if has_repeatability and not has_repeatability_in_effect and mentions_token_creation:
-        effect = re.sub(r"\bcreate a token\b", "repeatedly create tokens", effect, flags=re.IGNORECASE)
-        effect = re.sub(r"\bcreates a token\b", "repeatedly creates tokens", effect, flags=re.IGNORECASE)
-        effect = re.sub(r"\bcreate token\b", "repeatedly create tokens", effect, flags=re.IGNORECASE)
-        effect = re.sub(r"\bcreates token\b", "repeatedly creates tokens", effect, flags=re.IGNORECASE)
-        if "repeat" not in _normalize(effect):
-            effect = f"repeatedly {effect}"
-
-    return " ".join(effect.split())
+def _parse_filter_condition(expr: str) -> tuple[str, str]:
+    match = re.match(r"^(>=|<=|>|<|=)\s*(.+)$", str(expr or "").strip())
+    if not match:
+        return "=", str(expr or "").strip()
+    return match.group(1), match.group(2).strip()
 
 
-def _evaluate_tag_logic(
-    logic: QueryLogicNode | None,
-    cards_by_slot: dict[str, set[str]],
-    all_card_ids: set[str],
-) -> set[str]:
-    if logic is None:
-        return set(all_card_ids)
-
-    if logic.op == "target":
-        return set(cards_by_slot.get(logic.slot, set()))
-
-    child_sets = [
-        _evaluate_tag_logic(child, cards_by_slot, all_card_ids)
-        for child in logic.children
-    ]
-    if not child_sets:
-        return set()
-
-    if logic.op == "and":
-        eligible = set(child_sets[0])
-        for child_set in child_sets[1:]:
-            eligible &= child_set
-        return eligible
-
-    eligible: set[str] = set()
-    for child_set in child_sets:
-        eligible |= child_set
-    return eligible
+def _parse_color_filter(value: str) -> tuple[str, list[str]]:
+    raw = str(value or "").strip()
+    if raw.startswith("="):
+        raw = raw[1:].strip()
+        return "exact", raw.split()
+    if raw.lower().startswith("any:"):
+        raw = raw[4:].strip()
+        return "any", raw.split()
+    return "all", raw.split()
 
 
-async def _card_filters_for_tag_query(query: str) -> tuple[list[str] | None, dict]:
-    started = time.perf_counter()
-    try:
-        constraints, tokens_prompt, tokens_completion = await asyncio.to_thread(
-            extract_card_search_constraints,
-            query,
+def _color_filter_column(key: str, card_alias: str) -> str:
+    return f"{card_alias}.colors"
+
+
+def _append_structured_filter_clause(
+    clauses: list[str],
+    params: list,
+    key: str,
+    value: object,
+    *,
+    card_alias: str,
+) -> None:
+    idx = len(params) + 1
+    if key == "colors":
+        column = _color_filter_column(key, card_alias)
+        mode, symbols = _parse_color_filter(str(value or ""))
+        if not symbols:
+            return
+        operator = "&&" if mode == "any" else "@>"
+        clauses.append(f"COALESCE({column}, ARRAY[]::text[]) {operator} ${idx}::text[]")
+        params.append(symbols)
+        if mode == "exact":
+            clauses.append(f"cardinality(COALESCE({column}, ARRAY[]::text[])) = ${len(params) + 1}")
+            params.append(len(symbols))
+        return
+
+    if key == "excluded_colors":
+        column = _color_filter_column(key.removeprefix("excluded_"), card_alias)
+        _, symbols = _parse_color_filter(str(value or ""))
+        if not symbols:
+            return
+        clauses.append(f"NOT (COALESCE({column}, ARRAY[]::text[]) && ${idx}::text[])")
+        params.append(symbols)
+        return
+
+    if key == "type":
+        for word in str(value or "").split():
+            clauses.append(f"{card_alias}.type_line ILIKE ${len(params) + 1}")
+            params.append(f"%{word}%")
+        return
+
+    if key == "layout":
+        clauses.append(f"{card_alias}.layout = ${idx}")
+        params.append(value)
+        return
+
+    if key not in ("cmc", "power", "toughness", "released_at"):
+        return
+
+    op, val = _parse_filter_condition(str(value or ""))
+    if not val:
+        return
+    idx = len(params) + 1
+    if key == "cmc":
+        clauses.append(f"{card_alias}.cmc {op} ${idx}::real")
+        params.append(float(val))
+    elif key in ("power", "toughness"):
+        clauses.append(
+            f"{card_alias}.{key} ~ '^[0-9]+\\.?[0-9]*$' "
+            f"AND CAST({card_alias}.{key} AS real) {op} ${idx}::real"
         )
-    except Exception as exc:
-        logger.warning("Tag-search card constraint extraction failed: %s", exc)
-        return None, {
-            "card_filter_used": False,
-            "card_filters": {},
-            "card_filter_error": f"{type(exc).__name__}: {exc}",
-        }
+        params.append(float(val))
+    elif key == "released_at":
+        from datetime import date as date_type
 
-    tag_retrieval_query = _preserve_tag_effect_qualifiers(
+        clauses.append(
+            "EXISTS ("
+            "SELECT 1 FROM card_prints cp_filter "
+            f"WHERE cp_filter.card_id = {card_alias}.id "
+            f"AND cp_filter.released_at {op} ${idx}::date"
+            ")"
+        )
+        params.append(date_type.fromisoformat(val))
+
+def _build_structured_filter_where(filters: dict | None, params: list, *, card_alias: str = "c") -> str:
+    if not filters:
+        return ""
+
+    clauses = [f"NOT COALESCE({card_alias}.is_unofficial, FALSE)"]
+    for key, value in filters.items():
+        if value is None or value == "":
+            continue
+        _append_structured_filter_clause(clauses, params, key, value, card_alias=card_alias)
+    return " AND ".join(clauses)
+
+
+async def _card_filters_for_tag_query(query: str) -> tuple[dict, dict, QueryAnalysis]:
+    started = time.perf_counter()
+    constraints, tokens_prompt, tokens_completion = await asyncio.to_thread(
+        extract_card_search_constraints,
         query,
-        " ".join(str(constraints.get("oracle_text") or "").split()) or query,
     )
+
+    tag_retrieval_query = _tag_retrieval_query_from_plan(constraints)
+    analysis = _analysis_from_search_plan(query, constraints, tag_retrieval_query)
     logged_constraints = {
         key: value
         for key, value in constraints.items()
-        if value and key not in ("oracle_text", "name")
+        if value and key not in {"targets", "logic"}
     }
-    if logged_constraints:
-        logger.info("<<< AI Search parsed card filters: %s", logged_constraints)
-
     filters = build_structured_card_filters(constraints)
     meta = {
         "card_filter_used": bool(filters),
         "card_filters": filters,
         "card_filter_tokens_prompt": tokens_prompt,
         "card_filter_tokens_completion": tokens_completion,
+        "card_filter_plan_llm_used": True,
         "tag_retrieval_query": tag_retrieval_query,
     }
-    if not filters:
-        logger.info("<<< AI Search no card filters, skipping structured filtering in %.2fs", time.perf_counter() - started)
-        return None, meta
-
-    filter_started = time.perf_counter()
-    card_ids = await filter_cards(filters)
-    meta["card_filter_count"] = len(card_ids)
-    logger.info("<<< AI Search filtered to %d cards in %.2fs", len(card_ids), time.perf_counter() - filter_started)
-    logger.info("<<< AI Search card filter extraction took %.2fs", time.perf_counter() - started)
-    return card_ids, meta
+    if logged_constraints:
+        logger.info("<<< AI Search card filters: %s (%.2fs)", logged_constraints, time.perf_counter() - started)
+    return filters, meta, analysis
 
 
 async def _cards_for_tag_matches(
@@ -1845,19 +1665,18 @@ async def _cards_for_tag_matches(
     *,
     logic: QueryLogicNode | None = None,
     filtered_card_ids: list[str] | None = None,
-) -> list[dict]:
+    card_filters: dict | None = None,
+    card_limit: int | None = None,
+    card_offset: int = 0,
+) -> dict:
     started = time.perf_counter()
-    function_matches = [
-        match
-        for match in matches
-        if match.get("tag_type") == "function" and str(match.get("tag") or "").strip()
-    ]
+    function_matches = [match for match in matches if str(match.get("tag") or "").strip()]
     if not function_matches:
-        logger.info("<<< AI Search card lookup skipped: no function tag matches")
-        return []
+        logger.info("<<< AI Search card lookup skipped: no tag matches")
+        return {"cards": [], "total": 0}
     if filtered_card_ids is not None and not filtered_card_ids:
         logger.info("<<< AI Search card lookup skipped: filters matched 0 cards")
-        return []
+        return {"cards": [], "total": 0}
 
     tags = [str(match["tag"]) for match in function_matches]
     scores = [float(match.get("score") or 0.0) for match in function_matches]
@@ -1867,11 +1686,24 @@ async def _cards_for_tag_matches(
     slots = [str(match.get("target_slot") or "target_1") for match in function_matches]
 
     pool = await get_pool()
-    filter_clause = ""
+    ctt_filter_clause = ""
+    card_filter_clause = ""
     params: list = [tags, scores, ranks, reasons, labels, slots]
     if filtered_card_ids is not None:
-        filter_clause = "AND ctt.card_id = ANY($7::text[])"
+        ctt_filter_clause = "AND ctt.card_id = ANY($7::text[])"
         params.append(filtered_card_ids)
+    structured_where = _build_structured_filter_where(card_filters, params, card_alias="c")
+    if structured_where:
+        card_filter_clause = f"WHERE {structured_where}"
+    having_clause = _logic_to_sql_having(logic, params)
+    limit_clause = ""
+    if card_limit is not None:
+        params.append(max(0, card_limit))
+        limit_clause = f"LIMIT ${len(params)}"
+    offset_clause = ""
+    if card_offset > 0:
+        params.append(max(0, card_offset))
+        offset_clause = f"OFFSET ${len(params)}"
 
     try:
         rows = await pool.fetch(
@@ -1886,76 +1718,76 @@ async def _cards_for_tag_matches(
                     $5::text[],
                     $6::text[]
                 ) AS item(tag, tag_score, tag_rank, reason, label, slot)
+            ),
+            matched AS (
+                SELECT
+                    ctt.card_id,
+                    c.name,
+                    selected.tag,
+                    selected.tag_score,
+                    selected.tag_rank,
+                    selected.reason,
+                    selected.label,
+                    selected.slot
+                FROM selected
+                JOIN card_tagger_tags ctt
+                  ON ctt.tag_type = 'function'
+                 AND ctt.tag = selected.tag
+                 {ctt_filter_clause}
+                JOIN cards c ON c.id = ctt.card_id
+                {card_filter_clause}
+            ),
+            aggregated AS (
+                SELECT
+                    card_id,
+                    name,
+                    COUNT(*) AS matched_tag_count,
+                    SUM(tag_score) AS tag_score_sum,
+                    MIN(tag_rank) AS best_tag_rank,
+                    jsonb_agg(
+                        jsonb_build_object(
+                            'tag', tag,
+                            'tag_type', 'function',
+                            'label', label,
+                            'score', tag_score,
+                            'reason', reason,
+                            'slot', slot
+                        )
+                        ORDER BY tag_score DESC, tag
+                    ) AS matched_tags
+                FROM matched
+                GROUP BY card_id, name
+                HAVING {having_clause}
+            ),
+            ranked AS (
+                SELECT
+                    *,
+                    COUNT(*) OVER () AS total_ranked
+                FROM aggregated
+                ORDER BY
+                    matched_tag_count DESC,
+                    tag_score_sum DESC,
+                    best_tag_rank ASC,
+                    name ASC
+                {limit_clause}
+                {offset_clause}
             )
             SELECT
-                ctt.card_id,
-                c.name,
-                selected.tag,
-                selected.tag_score,
-                selected.tag_rank,
-                selected.reason,
-                selected.label,
-                selected.slot
-            FROM selected
-            JOIN card_tagger_tags ctt
-              ON ctt.tag_type = 'function'
-             AND ctt.tag = selected.tag
-             {filter_clause}
-            JOIN cards c ON c.id = ctt.card_id
+                card_id,
+                matched_tag_count,
+                tag_score_sum,
+                matched_tags,
+                total_ranked
+            FROM ranked
             """,
             *params,
         )
     except Exception as exc:
         logger.warning("Tag-card relation lookup failed; returning tag matches only: %s", exc)
-        return []
+        return {"cards": [], "total": 0}
 
-    card_rows: dict[str, dict] = {}
-    cards_by_slot: dict[str, set[str]] = {}
-    for row in rows:
-        card_id = row["card_id"]
-        slot = str(row["slot"] or "target_1")
-        cards_by_slot.setdefault(slot, set()).add(card_id)
-        card = card_rows.setdefault(
-            card_id,
-            {
-                "card_id": card_id,
-                "name": row["name"] or "",
-                "matched_tag_count": 0,
-                "tag_score_sum": 0.0,
-                "best_tag_rank": 10**9,
-                "matched_tags": [],
-            },
-        )
-        card["matched_tag_count"] += 1
-        card["tag_score_sum"] += float(row["tag_score"] or 0.0)
-        card["best_tag_rank"] = min(card["best_tag_rank"], int(row["tag_rank"] or 10**9))
-        card["matched_tags"].append(
-            {
-                "tag": row["tag"],
-                "tag_type": "function",
-                "label": row["label"],
-                "score": float(row["tag_score"] or 0.0),
-                "reason": row["reason"],
-                "slot": slot,
-            }
-        )
-
-    all_card_ids = set(card_rows)
-    eligible_card_ids = _evaluate_tag_logic(logic, cards_by_slot, all_card_ids)
-    ranked = [
-        item
-        for item in card_rows.values()
-        if item["card_id"] in eligible_card_ids
-    ]
-    ranked.sort(
-        key=lambda item: (
-            -int(item["matched_tag_count"]),
-            -float(item["tag_score_sum"]),
-            int(item["best_tag_rank"]),
-            item["name"],
-        )
-    )
-
+    ranked = [dict(row) for row in rows]
+    total_ranked = int(ranked[0]["total_ranked"] or 0) if ranked else 0
     card_ids = [item["card_id"] for item in ranked]
     cards = await get_cards_by_ids(card_ids)
     meta_by_id = {item["card_id"]: item for item in ranked}
@@ -1963,21 +1795,207 @@ async def _cards_for_tag_matches(
         meta = meta_by_id.get(card.get("id"))
         if not meta:
             continue
-        matched_tags = meta["matched_tags"]
-        matched_tags.sort(key=lambda item: (-float(item.get("score") or 0.0), str(item.get("tag") or "")))
-        card["_matched_tags"] = matched_tags or []
+        matched_tags = _as_json_list(meta.get("matched_tags"))
+        card["_matched_tags"] = matched_tags
         card["_matched_tag_count"] = int(meta["matched_tag_count"] or 0)
         card["_tag_score"] = float(meta["tag_score_sum"] or 0.0)
     logger.info(
-        "<<< AI Search card relation lookup returned %d cards from %d tag matches, eligible=%d/%d, logic=%s in %.2fs",
+        "<<< AI Search card relation lookup returned %d/%d cards from %d tag matches, offset=%d, logic=%s in %.2fs",
         len(cards),
+        total_ranked,
         len(function_matches),
-        len(eligible_card_ids),
-        len(all_card_ids),
+        card_offset,
         logic.op if logic else "flat-or",
         time.perf_counter() - started,
     )
-    return cards
+    return {"cards": cards, "total": total_ranked}
+
+
+async def _cards_for_structured_filters(
+    card_filters: dict,
+    *,
+    card_limit: int | None = 60,
+    card_offset: int = 0,
+) -> dict:
+    started = time.perf_counter()
+    params: list = []
+    where = _build_structured_filter_where(card_filters, params, card_alias="c")
+    if not where:
+        logger.info("<<< AI Search structured card lookup skipped: no structured filters")
+        return {"cards": [], "total": 0}
+
+    pool = await get_pool()
+    try:
+        total = await pool.fetchval(
+            f"""
+            SELECT COUNT(*)
+            FROM cards c
+            WHERE {where}
+            """,
+            *params,
+        )
+
+        page_params = list(params)
+        limit_clause = ""
+        if card_limit is not None:
+            page_params.append(max(0, card_limit))
+            limit_clause = f"LIMIT ${len(page_params)}"
+        offset_clause = ""
+        if card_offset > 0:
+            page_params.append(max(0, card_offset))
+            offset_clause = f"OFFSET ${len(page_params)}"
+
+        rows = await pool.fetch(
+            f"""
+            SELECT c.id
+            FROM cards c
+            WHERE {where}
+            ORDER BY c.name ASC
+            {limit_clause}
+            {offset_clause}
+            """,
+            *page_params,
+        )
+    except Exception as exc:
+        logger.warning("Structured card lookup failed: %s", exc)
+        return {"cards": [], "total": 0}
+
+    card_ids = [row["id"] for row in rows]
+    cards = await get_cards_by_ids(card_ids)
+    total_cards = int(total or 0)
+    logger.info(
+        "<<< AI Search structured card lookup returned %d/%d cards, offset=%d in %.2fs",
+        len(cards),
+        total_cards,
+        card_offset,
+        time.perf_counter() - started,
+    )
+    return {"cards": cards, "total": total_cards}
+
+
+def _plan_matches(value: object) -> list[dict]:
+    if not isinstance(value, list):
+        return []
+    return [dict(item) for item in value if isinstance(item, dict)]
+
+
+def _plan_string_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item) for item in value if str(item).strip()]
+
+
+async def search_tags_from_plan(
+    query: str,
+    plan: dict,
+    *,
+    card_limit: int | None = 60,
+    card_offset: int = 0,
+) -> dict:
+    started = time.perf_counter()
+    if plan.get("mode") == "structured_filters":
+        card_filters = dict(plan.get("card_filters") or {})
+        card_result = await _cards_for_structured_filters(
+            card_filters,
+            card_limit=card_limit,
+            card_offset=card_offset,
+        )
+        cards = card_result["cards"]
+        total_cards = int(card_result["total"] or 0)
+        catalog = dict(plan.get("catalog") if isinstance(plan.get("catalog"), dict) else {})
+        catalog.update(
+            {
+                "card_count": len(cards),
+                "total_card_count": total_cards,
+                "card_limit": card_limit,
+                "card_offset": max(0, card_offset),
+                "search_session_hit": True,
+            }
+        )
+        logger.info(
+            "<<< AI Search structured session page: %d/%d cards, offset=%d, total took %.2fs",
+            len(cards),
+            total_cards,
+            card_offset,
+            time.perf_counter() - started,
+        )
+        return {
+            "query": query,
+            "suggested_queries": _plan_string_list(plan.get("suggested_queries")),
+            "matches": [],
+            "cards": cards,
+            "catalog": catalog,
+        }
+
+    chosen = _plan_matches(plan.get("chosen"))
+    logic = _logic_node_from_plan(plan.get("logic"))
+    raw_filtered_card_ids = plan.get("filtered_card_ids")
+    filtered_card_ids = _plan_string_list(raw_filtered_card_ids) if raw_filtered_card_ids is not None else None
+    card_filters = dict(plan.get("card_filters") or {})
+
+    card_result = await _cards_for_tag_matches(
+        chosen,
+        logic=logic,
+        filtered_card_ids=filtered_card_ids,
+        card_filters=card_filters,
+        card_limit=card_limit,
+        card_offset=card_offset,
+    )
+    cards = card_result["cards"]
+    total_cards = int(card_result["total"] or 0)
+    catalog = dict(plan.get("catalog") if isinstance(plan.get("catalog"), dict) else {})
+    catalog.update(
+        {
+            "card_count": len(cards),
+            "total_card_count": total_cards,
+            "card_limit": card_limit,
+            "card_offset": max(0, card_offset),
+            "search_session_hit": True,
+        }
+    )
+    logger.info(
+        "<<< AI Search session page: %d/%d cards, offset=%d, total took %.2fs",
+        len(cards),
+        total_cards,
+        card_offset,
+        time.perf_counter() - started,
+    )
+    return {
+        "query": query,
+        "suggested_queries": _plan_string_list(plan.get("suggested_queries")),
+        "matches": chosen[: int(plan.get("tag_limit") or len(chosen))],
+        "cards": cards,
+        "catalog": catalog,
+    }
+
+
+def _logic_to_sql_having(node: QueryLogicNode | None, params: list) -> str:
+    if node is None:
+        return "TRUE"
+
+    if node.op == "target":
+        params.append(node.slot)
+        return f"bool_or(slot = ${len(params)})"
+
+    child_exprs = [_logic_to_sql_having(child, params) for child in node.children]
+    child_exprs = [expr for expr in child_exprs if expr]
+    if not child_exprs:
+        return "TRUE"
+
+    separator = " AND " if node.op == "and" else " OR "
+    return "(" + separator.join(child_exprs) + ")"
+
+
+def _as_json_list(value) -> list:
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return []
+        return parsed if isinstance(parsed, list) else []
+    if isinstance(value, list):
+        return value
+    return []
 
 
 def _ensure_target_coverage(
@@ -1989,7 +2007,7 @@ def _ensure_target_coverage(
     if not targets or limit <= 0:
         return chosen[:limit]
 
-    selected_keys = {(item["tag_type"], item["tag"]) for item in chosen}
+    selected_keys = {item["tag"] for item in chosen}
     covered_slots = {str(item.get("target_slot") or "") for item in chosen}
     expanded = list(chosen)
 
@@ -2001,7 +2019,7 @@ def _ensure_target_coverage(
                 item
                 for item in candidates
                 if item.get("target_slot") == target.slot
-                and (item["tag_type"], item["tag"]) not in selected_keys
+                and item["tag"] not in selected_keys
             ),
             None,
         )
@@ -2023,37 +2041,71 @@ def _ensure_target_coverage(
             if replace_index < 0:
                 continue
             removed = expanded.pop(replace_index)
-            selected_keys.discard((removed["tag_type"], removed["tag"]))
+            selected_keys.discard(removed["tag"])
         expanded.append(fallback)
-        selected_keys.add((fallback["tag_type"], fallback["tag"]))
+        selected_keys.add(fallback["tag"])
         covered_slots.add(target.slot)
 
     return expanded[:limit]
 
 
 def _extract_json(text: str) -> dict:
-    cleaned = text.strip()
-    if cleaned.startswith("```"):
-        cleaned = re.sub(r"^```(?:json)?|```$", "", cleaned, flags=re.MULTILINE).strip()
-    return json.loads(cleaned)
+    return parse_llm_json_object(text)
+
+
+def _score_has_clear_lead(first: dict, second: dict | None) -> bool:
+    if second is None:
+        return True
+    first_score = float(first.get("score") or 0.0)
+    second_score = float(second.get("score") or 0.0)
+    if first_score <= 0:
+        return False
+    if second_score <= 0:
+        return True
+    return (
+        first_score >= second_score * RERANK_SKIP_LEAD_RATIO
+        and first_score - second_score >= RERANK_SKIP_MIN_GAP
+    )
+
+
+def _select_confident_target_leaders(
+    target_candidates: dict[str, list[dict]],
+    targets: tuple[QueryTarget, ...],
+    limit: int,
+) -> tuple[list[dict], str] | None:
+    if limit <= 0 or not targets or len(targets) > limit:
+        return None
+
+    chosen: list[dict] = []
+    for target in targets:
+        candidates = target_candidates.get(target.slot, [])
+        if not candidates:
+            return None
+        if not _score_has_clear_lead(candidates[0], candidates[1] if len(candidates) > 1 else None):
+            return None
+        chosen.append(dict(candidates[0]))
+
+    return chosen[:limit], "top_score_lead"
 
 
 def _rerank_with_llm(query: str, candidates: list[dict], limit: int) -> tuple[list[dict], bool]:
     if not candidates or not is_chat_provider_configured():
+        return candidates[:limit], False
+    if len(candidates) == 1:
         return candidates[:limit], False
 
     lines = []
     for idx, candidate in enumerate(candidates, start=1):
         slot = candidate.get("target_slot") or "target"
         lines.append(
-            f'{idx}. [slot: {slot}] [{candidate["tag_type"]}] {candidate["tag"]} '
+            f'{idx}. [slot: {slot}] [function] {candidate["tag"]} '
             f'(label: {candidate["label"]}; heuristic: {candidate["reason"]})'
         )
 
     llm = create_chat_llm(temperature=0)
     response = llm.invoke(
         [
-            SystemMessage(content=TAG_SELECTION_PROMPT),
+            SystemMessage(content=TAG_RERANK_PROMPT),
             HumanMessage(
                 content=(
                     f"User query: {query}\n"
@@ -2092,7 +2144,7 @@ def _rerank_with_llm(query: str, candidates: list[dict], limit: int) -> tuple[li
     seen = set()
     deduped: list[dict] = []
     for candidate in chosen:
-        key = (candidate["tag_type"], candidate["tag"])
+        key = candidate["tag"]
         if key in seen:
             continue
         seen.add(key)
@@ -2286,7 +2338,7 @@ async def generate_missing_tag_embeddings(
             for row in batch:
                 logger.info("[tag-embedding-text] %s:%s -> %s", row["tag_type"], row["tag"], row["embedding_text"])
 
-        vectors = await asyncio.to_thread(encode_batch_safe, texts)
+        vectors = await asyncio.to_thread(encode_batch_or_none, texts)
         if vectors is None:
             failed_batches += 1
             continue
@@ -2312,61 +2364,113 @@ async def generate_missing_tag_embeddings(
     }
 
 
-async def search_tags(query: str, limit: int = 12) -> dict:
+async def search_tags(
+    query: str,
+    limit: int = 12,
+    card_limit: int | None = 60,
+    card_offset: int = 0,
+) -> dict:
     started = time.perf_counter()
     query = query.strip()
     if not query:
         raise ValueError("Query must not be empty")
 
     logger.info(">>> AI Search query: %s", query)
-    snapshot_task = asyncio.create_task(catalog_store.get_snapshot())
-    card_filter_task = asyncio.create_task(_card_filters_for_tag_query(query))
+    card_filters, card_filter_meta, analysis = await _card_filters_for_tag_query(query)
+    tag_retrieval_query = str(card_filter_meta.get("tag_retrieval_query") or "").strip()
 
-    snapshot = await snapshot_task
-    filtered_card_ids, card_filter_meta = await card_filter_task
-    tag_retrieval_query = str(card_filter_meta.get("tag_retrieval_query") or query).strip() or query
-    if tag_retrieval_query != query:
-        logger.info("<<< AI Search effect query after filters: %s", tag_retrieval_query)
-    analysis = await asyncio.to_thread(_analyze_query_with_llm, tag_retrieval_query)
-    logger.info(
-        "<<< AI Search analysis: type_hint=%s rewrite=%s intent=%r targets=%d excluded=%s",
-        analysis.type_hint,
-        analysis.rewrite_used,
-        analysis.intent,
-        len(analysis.targets),
-        list(analysis.excluded_concepts),
-    )
+    if not tag_retrieval_query:
+        card_result = await _cards_for_structured_filters(
+            card_filters,
+            card_limit=card_limit,
+            card_offset=card_offset,
+        )
+        cards = card_result["cards"]
+        total_cards = int(card_result["total"] or 0)
+        catalog = {
+            "total_tags": 0,
+            "art_tags": 0,
+            "function_tags": 0,
+            "card_count": len(cards),
+            "total_card_count": total_cards,
+            "card_limit": card_limit,
+            "card_offset": card_offset,
+            **card_filter_meta,
+            "searched_tags": 0,
+            "etag": None,
+            "loaded_at": None,
+            "checked_at": None,
+            "llm_used": bool(card_filter_meta.get("card_filter_plan_llm_used")),
+            "type_hint": "function",
+            "targets": [],
+            "logic": None,
+            "structured_only": True,
+        }
+        search_plan = {
+            "mode": "structured_filters",
+            "card_filters": card_filters,
+            "suggested_queries": [],
+            "catalog": catalog,
+        }
+        logger.info(
+            "<<< AI Search final: %d/%d cards, offset=%d, structured_only=True, total took %.2fs",
+            len(cards),
+            total_cards,
+            card_offset,
+            time.perf_counter() - started,
+        )
+        return {
+            "query": query,
+            "suggested_queries": [],
+            "matches": [],
+            "cards": cards,
+            "catalog": catalog,
+            "search_plan": search_plan,
+        }
+
+    snapshot = await catalog_store.get_snapshot()
     targets = _build_search_targets(analysis)
-    logger.info("<<< AI Search retrieval targets: %s", [target.intent for target in targets])
+    target_details = ", ".join(f"[{t.slot}] {t.intent}" for t in targets) if targets else "none"
+    logic_dict = _logic_node_to_dict(analysis.logic, targets) if len(targets) > 1 else None
+    if logic_dict:
+        logger.info("<<< AI Search targets: %s | logic=%s", target_details, json.dumps(logic_dict, ensure_ascii=False))
+    else:
+        logger.info("<<< AI Search targets: %s", target_details)
+    vector_started = time.perf_counter()
+    vector_results_by_target = await _vector_search_entries_for_targets(targets)
     target_results: list[list[dict]] = []
     target_meta: list[dict] = []
-    for target in targets:
-        target_started = time.perf_counter()
-        lexical_scored, meta = _score_entries_for_target(snapshot.entries, target)
-        vector_scored = await _vector_search_entries_for_target(target)
+    target_candidates: dict[str, list[dict]] = {}
+    for target_index, target in enumerate(targets):
+        vector_scored = (
+            vector_results_by_target[target_index]
+            if target_index < len(vector_results_by_target)
+            else []
+        )
         target_results.append(vector_scored)
-        target_results.append(lexical_scored)
-        unique_candidates = {
-            (item["tag_type"], item["tag"])
-            for result in (vector_scored, lexical_scored)
-            for item in result
-        }
-        meta["vector_candidate_count"] = len(vector_scored)
-        meta["lexical_candidate_count"] = len(lexical_scored)
-        meta["candidate_count"] = len(unique_candidates)
-        target_meta.append(meta)
-        logger.info(
-            "  AI Search target [%s:%s]: lexical=%d vector=%d unique=%d in %.2fs",
-            target.slot,
-            target.type_hint,
-            len(lexical_scored),
-            len(vector_scored),
-            len(unique_candidates),
-            time.perf_counter() - target_started,
+        target_candidates[target.slot] = vector_scored
+        target_meta.append(
+            {
+                "slot": target.slot,
+                "intent": target.intent,
+                "candidate_count": len(vector_scored),
+            }
         )
 
-    candidates = _merge_target_candidates(target_results)[:40]
-    logger.info("<<< AI Search merged candidates: %d", len(candidates))
+    merged: dict[str, dict] = {}
+    for result in target_results:
+        for item in result:
+            key = item["tag"]
+            existing = merged.get(key)
+            if existing is None or item["score"] > existing["score"]:
+                merged[key] = item
+    candidates = sorted(merged.values(), key=lambda item: -item["score"])
+    logger.info(
+        "<<< AI Search vector retrieval: %d total, %d unique, %.2fs",
+        sum(len(result) for result in target_results),
+        len(candidates),
+        time.perf_counter() - vector_started,
+    )
     rerank_query = analysis.intent or query
     if target_meta:
         target_summary = "; ".join(
@@ -2374,35 +2478,43 @@ async def search_tags(query: str, limit: int = 12) -> dict:
         )
         if target_summary:
             rerank_query = f"{rerank_query}. Retrieval targets: {target_summary}"
-    if analysis.excluded_concepts:
-        rerank_query = f"{rerank_query}. Exclude: {', '.join(analysis.excluded_concepts)}"
     rerank_started = time.perf_counter()
-    chosen, llm_used = await asyncio.to_thread(_rerank_with_llm, rerank_query, candidates, limit)
+    rerank_skip_reason = ""
+    confident_selection = _select_confident_target_leaders(target_candidates, targets, limit)
+    if confident_selection is not None:
+        chosen, rerank_skip_reason = confident_selection
+        llm_used = False
+    else:
+        chosen, llm_used = await asyncio.to_thread(_rerank_with_llm, rerank_query, candidates[:20], limit)
     chosen = _ensure_target_coverage(chosen, candidates, targets, limit)
     logger.info(
-        "<<< AI Search rerank selected %d tags from %d candidates, llm_used=%s in %.2fs",
+        "<<< AI Search rerank selected %d tags from %d candidates, llm_used=%s skip=%s in %.2fs",
         len(chosen),
         len(candidates),
         llm_used,
+        rerank_skip_reason or "none",
         time.perf_counter() - rerank_started,
     )
-    for index, match in enumerate(chosen[:limit], start=1):
-        logger.info(
-            "  AI Search selected [%d] %s:%s score=%.4f reason=%s",
-            index,
-            match.get("tag_type"),
-            match.get("tag"),
-            float(match.get("score") or 0.0),
-            match.get("reason"),
-        )
-    cards = await _cards_for_tag_matches(
+    selected_parts = [
+        "[%d] %s score=%.4f slot=%s"
+        % (i, m.get("tag"), float(m.get("score") or 0.0), m.get("target_slot", "?"))
+        for i, m in enumerate(chosen[:limit], start=1)
+    ]
+    logger.info("<<< AI Search selected %d tags: %s", len(chosen[:limit]), " | ".join(selected_parts))
+    card_result = await _cards_for_tag_matches(
         chosen,
         logic=analysis.logic,
-        filtered_card_ids=filtered_card_ids,
+        card_filters=card_filters,
+        card_limit=card_limit,
+        card_offset=card_offset,
     )
+    cards = card_result["cards"]
+    total_cards = int(card_result["total"] or 0)
     logger.info(
-        "<<< AI Search final: %d cards, filters_used=%s, total took %.2fs",
+        "<<< AI Search final: %d/%d cards, offset=%d, filters_used=%s, total took %.2fs",
         len(cards),
+        total_cards,
+        card_offset,
         card_filter_meta.get("card_filter_used"),
         time.perf_counter() - started,
     )
@@ -2410,27 +2522,41 @@ async def search_tags(query: str, limit: int = 12) -> dict:
     total_tags = len(snapshot.entries)
     art_tags = sum(1 for entry in snapshot.entries if entry.tag_type == "art")
     function_tags = total_tags - art_tags
+    suggested_queries = _compose_search_query(chosen, analysis.logic)
+    catalog = {
+        "total_tags": total_tags,
+        "art_tags": art_tags,
+        "function_tags": function_tags,
+        "card_count": len(cards),
+        "total_card_count": total_cards,
+        "card_limit": card_limit,
+        "card_offset": card_offset,
+        **card_filter_meta,
+        "searched_tags": sum(item["candidate_count"] for item in target_meta),
+        "etag": snapshot.etag,
+        "loaded_at": snapshot.loaded_at,
+        "checked_at": snapshot.checked_at,
+        "llm_used": llm_used,
+        "type_hint": "function",
+        "targets": target_meta,
+        "logic": logic_dict,
+        "rerank_skipped": bool(rerank_skip_reason),
+        "rerank_skip_reason": rerank_skip_reason,
+    }
+    search_plan = {
+        "chosen": chosen,
+        "logic": logic_dict,
+        "card_filters": card_filters,
+        "suggested_queries": suggested_queries,
+        "catalog": catalog,
+        "tag_limit": limit,
+    }
 
     return {
         "query": query,
-        "suggested_queries": _compose_search_query(chosen, analysis.logic),
+        "suggested_queries": suggested_queries,
         "matches": chosen[:limit],
         "cards": cards,
-        "catalog": {
-            "total_tags": total_tags,
-            "art_tags": art_tags,
-            "function_tags": function_tags,
-            "card_count": len(cards),
-            **card_filter_meta,
-            "searched_tags": sum(item["searched_tags"] for item in target_meta),
-            "etag": snapshot.etag,
-            "loaded_at": snapshot.loaded_at,
-            "checked_at": snapshot.checked_at,
-            "llm_used": llm_used,
-            "query_rewrite_used": analysis.rewrite_used,
-            "rewritten_intent": analysis.intent,
-            "type_hint": analysis.type_hint,
-            "targets": target_meta,
-            "logic": _logic_node_to_dict(analysis.logic, targets),
-        },
+        "catalog": catalog,
+        "search_plan": search_plan,
     }

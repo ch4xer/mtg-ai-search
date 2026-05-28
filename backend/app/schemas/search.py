@@ -3,10 +3,19 @@ from pydantic import BaseModel, Field
 
 class SearchRequest(BaseModel):
     query: str
+    limit: int = Field(default=60, ge=1, le=500)
+    offset: int = Field(default=0, ge=0)
+    search_id: str | None = None
+    include_zh: bool = False
 
 
 class SearchResponse(BaseModel):
+    search_id: str | None = None
     results: list[dict]
+    total: int | None = None
+    limit: int | None = None
+    offset: int = 0
+    has_more: bool = False
 
 
 class TagSearchRequest(BaseModel):
@@ -39,6 +48,9 @@ class TagSearchCatalogMeta(BaseModel):
     targets: list[dict] = Field(default_factory=list)
     logic: dict | None = None
     card_count: int = 0
+    total_card_count: int = 0
+    card_limit: int | None = None
+    card_offset: int = 0
     card_filter_used: bool = False
     card_filters: dict = Field(default_factory=dict)
     card_filter_count: int | None = None
@@ -96,3 +108,4 @@ class DiscoverRequest(BaseModel):
     toughness_max: float | None = None
     page: int = 1
     page_size: int = 60
+    include_zh: bool = False

@@ -8,65 +8,82 @@ import logging
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from ..llm_provider import create_chat_llm
+from .llm_json import parse_llm_json_object
 
 logger = logging.getLogger(__name__)
 
 FILTER_KEYS = (
     "colors",
+    "excluded_colors",
     "type",
     "released_at",
     "layout",
-    "mana_cost",
     "cmc",
     "power",
     "toughness",
 )
 
-QUERY_OPTIMIZER_PROMPT = (
-    "Extract MTG card-search constraints. Return ONLY JSON with exactly these keys: "
-    "oracle_text,name,type,colors,released_at,layout,mana_cost,cmc,power,toughness. Empty string means unspecified.\n"
+CONSTRAINT_EXTRACTION_PROMPT = (
+    "Create a MTG AI Search plan.\n\n"
+    "Return ONLY a sparse JSON object using these allowed keys:\n"
+    "type,colors,excluded_colors,released_at,layout,cmc,power,toughness,"
+    "targets,logic\n"
+    "Omit every unspecified key. Do not return empty strings, empty arrays, or null values.\n\n"
     "Field rules:\n"
-    "oracle_text: English effect/gameplay intent only, not card titles.\n"
-    "name: English card-title query. If input is a short title-like noun phrase, put its literal English title here and leave oracle_text empty.\n"
-    "type: supertypes/types/subtypes, space-separated, e.g. Legendary Creature Dragon.\n"
-    "colors: W U B R G C, space-separated. released_at: date condition like >2020-01-01.\n"
-    "layout: layout word like transform, modal_dfc, adventure. mana_cost: condition on mana cost if explicit.\n"
-    "cmc,power,toughness: numeric conditions using >,>=,<,<=,=.\n"
+    "- type: supertypes/types/subtypes, space-separated, e.g. Legendary Creature Dragon.\n"
+    "- colors: actual card colors W U B R G C.\n"
+    "- released_at: date condition like >2020-01-01.\n"
+    "- layout: layout word like transform, modal_dfc, adventure.\n"
+    "- cmc,power,toughness: numeric conditions using >,>=,<,<=,=.\n\n"
     "Type allocation rules:\n"
     "- If a token/word is a card supertype, type, creature type, planeswalker type, or any MTG subtype, put it in type first.\n"
-    "- Do not repeat the same semantic token in multiple fields. If a word is already captured in type, do not repeat it in name.\n"
-    "- When a query mixes a kind/category word with a title-like word, keep only the non-type/title-distinguishing remainder in name.\n"
+    "- Do not repeat the same semantic token in multiple fields.\n\n"
+    "Color DSL:\n"
+    "- 'R W': all listed colors are required.\n"
+    "- 'any:R W': any listed color is allowed.\n"
+    "- '=R W': exactly those colors only.\n\n"
     "Color rules:\n"
-    "- Only set colors when the user's original query explicitly mentions a color, color combination, mana symbol, or colorless.\n"
-    "- Never infer colors from creature race, subtype, faction, lore, or common MTG knowledge.\n"
-    "- If the query does not explicitly mention color, leave colors empty.\n"
-    "Strict meaning preservation rules:\n"
-    "- Do not weaken, broaden, summarize away, or normalize away gameplay qualifiers from the original request.\n"
-    "- Preserve actor, target, quantity, plurality, frequency, repeatability, duration, trigger condition, zone, timing, and restrictions in oracle_text.\n"
-    "- A repeated/recurring/repeatable/each-turn/whenever effect is materially different from a one-shot effect. Never rewrite it as a one-shot effect.\n"
-    "- If the user has a typo such as repeatly, infer the intended word repeatedly but keep the repeated/repeatable meaning.\n"
-    "- If unsure whether a qualifier matters, keep it in oracle_text.\n"
-    "Be faithful to the original wording. Do not add unstated constraints.\n"
-    "Do not map a localized/translated title to a different known card by guesswork.\n"
-    'Example full: "2020年后的红蓝双面传奇龙，法术力值小于5，力量大于3，能抓牌" -> '
-    '{"oracle_text":"draw cards","name":"","type":"Legendary Creature Dragon","colors":"U R","released_at":">2020-01-01",'
-    '"layout":"transform","mana_cost":"","cmc":"<5","power":">3","toughness":""}\n'
-    'Example discard: "能让对手弃牌的黑色生物" -> '
-    '{"oracle_text":"target opponent discards a card","name":"","type":"Creature","colors":"B","released_at":"","layout":"","mana_cost":"","cmc":"","power":"","toughness":""}\n'
-    'Example repeatable tag effect: "blue creatures that repeatly create token and discards opponent card" -> '
-    '{"oracle_text":"repeatedly create tokens and target opponent discards a card","name":"","type":"Creature","colors":"U","released_at":"","layout":"","mana_cost":"","cmc":"","power":"","toughness":""}\n'
-    'Example faithful typing: "奥扎奇泰坦" -> '
-    '{"oracle_text":"","name":"Titan","type":"Creature Eldrazi","colors":"","released_at":"","layout":"","mana_cost":"","cmc":"","power":"","toughness":""}'
+    "- Use color symbols only when explicitly mentioned; never infer colors from type, lore, or faction.\n"
+    "- Convert named color groups such as Boros, Esper, Sultai, 艾斯波, or 苏勒台 to symbols.\n"
+    "- and / A-B / 红白色 / 红色和白色 -> 'R W'; or / either / 红色或白色 / 任一红白色 -> 'any:R W'; exactly / only / 正好 / 仅 / 只有 -> '=R W'.\n"
+    "- not / excluding / 不含 / 不包括 / 排除 -> excluded_colors, e.g. excluded_colors='R W'.\n\n"
+    "Meaning preservation rules:\n"
+    "- Each atomic target must independently preserve the explicit gameplay qualifiers that apply to it: actor, target, quantity, plurality, zone, timing, trigger condition, duration, restrictions, and recurrence.\n"
+    "- When splitting into atomic targets, repeat shared qualifiers (e.g. actor) in every target they apply to. Repetition is expected and correct.\n"
+    "- Do not convert recurring/repeatable/each-turn/whenever effects into one-shot effects.\n"
+    "- Correct obvious typos only when the intended gameplay meaning is clear; keep the original qualifier's meaning.\n"
+    "- Do not add inferred constraints, card names, targets, colors, timing, or restrictions that the user did not state.\n"
+    "- If unsure whether a qualifier matters, keep it in a target intent instead of dropping it.\n\n"
+    "Card title rules:\n"
+    "- AI Search does not search by card name. Ignore card titles completely.\n"
+    "- Do not put card titles in targets or filters.\n"
+    "- If the query is only a card title with no gameplay intent, return {}.\n\n"
+    "Tag retrieval rules:\n"
+    "- If no gameplay effect is requested, omit targets and logic.\n"
+    "- targets is an array of focused functional retrieval goals; each target has slot and intent.\n"
+    "- Create multiple targets when the user asks for multiple gameplay concepts.\n"
+    "- Each target must describe exactly ONE atomic gameplay effect. Never merge multiple effects into one target.\n"
+    "- Split conjunctive phrases like 'does A and B' into two separate targets, one per effect, even when they share the same actor, subject, or target.\n"
+    "- logic is required only when there are multiple targets; omit it for zero or one target.\n"
+    "- logic is a Boolean tree preserving the user's relationship between targets.\n"
+    "- logic operator nodes use {'op':'and'|'or','children':[...]}.\n"
+    "- logic children are target slot strings or nested operator nodes.\n"
+    "- Use and when all concepts must be true. Use or when any alternative effect may satisfy the user.\n\n"
+    "Examples:\n"
+    '- "能让对手弃牌并失去生命值的黑色生物" -> '
+    '{"type":"Creature","colors":"B",'
+    '"targets":[{"slot":"opponent_discard","intent":"Target opponent discards a card."},'
+    '{"slot":"opponent_life_loss","intent":"Target opponent loses life."}],'
+    '"logic":{"op":"and","children":["opponent_discard","opponent_life_loss"]}}\n'
+    '- "必须包含弃牌和烧血，或者必须包含回血和抽卡" -> '
+    '{"targets":[{"slot":"discard","intent":"Discard a card."},{"slot":"damage_opponent","intent":"Deal damage or cause life loss."},'
+    '{"slot":"gain_life","intent":"Gain life."},{"slot":"draw_cards","intent":"Draw cards."}],'
+    '"logic":{"op":"or","children":[{"op":"and","children":["discard","damage_opponent"]},{"op":"and","children":["gain_life","draw_cards"]}]}}\n'
+    '- "2020年后的红蓝龙，法术力值小于5" -> '
+    '{"type":"Creature Dragon","colors":"U R","released_at":">2020-01-01","cmc":"<5"}\n'
+    '- "红色或白色生物，排除黑色" -> '
+    '{"type":"Creature","colors":"any:R W","excluded_colors":"B"}'
 )
-
-
-def _extract_json(text: str) -> dict:
-    text = text.strip()
-    if text.startswith("```"):
-        lines = text.split("\n")
-        lines = [line for line in lines if not line.strip().startswith("```")]
-        text = "\n".join(lines).strip()
-    return json.loads(text)
 
 
 def _get_token_usage(response) -> tuple[int, int]:
@@ -76,33 +93,41 @@ def _get_token_usage(response) -> tuple[int, int]:
     return getattr(usage, "input_tokens", 0), getattr(usage, "output_tokens", 0)
 
 
-def _parse_optimizer_response(content: str) -> dict[str, str]:
+def _has_plan_value(value: object) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, (list, dict)):
+        return bool(value)
+    return True
+
+
+def _parse_optimizer_response(content: str) -> dict:
     try:
-        data = _extract_json(content)
+        data = parse_llm_json_object(content)
     except (json.JSONDecodeError, TypeError):
         logger.warning("Failed to parse LLM response as JSON: %s", content)
         data = {}
 
-    return {
-        "oracle_text": data.get("oracle_text", ""),
-        "name": data.get("name", ""),
-        "type": data.get("type", ""),
-        "colors": data.get("colors", ""),
-        "released_at": data.get("released_at", ""),
-        "layout": data.get("layout", ""),
-        "mana_cost": data.get("mana_cost", ""),
-        "cmc": data.get("cmc", ""),
-        "power": data.get("power", ""),
-        "toughness": data.get("toughness", ""),
+    result = {
+        key: data[key]
+        for key in FILTER_KEYS
+        if key in data and _has_plan_value(data.get(key))
     }
+    if isinstance(data.get("targets"), list) and data["targets"]:
+        result["targets"] = data["targets"]
+    if isinstance(data.get("logic"), dict) and data["logic"]:
+        result["logic"] = data["logic"]
+    return result
 
 
-def extract_card_search_constraints(query: str) -> tuple[dict[str, str], int, int]:
+def extract_card_search_constraints(query: str) -> tuple[dict, int, int]:
     """Extract structured card filters and effect text without invoking old AI Search."""
     llm = create_chat_llm(temperature=0.3)
     response = llm.invoke(
         [
-            SystemMessage(content=QUERY_OPTIMIZER_PROMPT),
+            SystemMessage(content=CONSTRAINT_EXTRACTION_PROMPT),
             HumanMessage(content=query),
         ]
     )
@@ -112,8 +137,12 @@ def extract_card_search_constraints(query: str) -> tuple[dict[str, str], int, in
     if isinstance(content, str):
         content = content.strip()
 
-    logger.info(">>> Original query: %s", query)
-    logger.info(">>> Token usage: prompt=%d, completion=%d", tokens_prompt, tokens_completion)
+    logger.debug("Card constraint query: %s", query)
+    logger.debug(
+        "Card constraint token usage: prompt=%d, completion=%d",
+        tokens_prompt,
+        tokens_completion,
+    )
 
     result = _parse_optimizer_response(content)
     return result, tokens_prompt, tokens_completion
