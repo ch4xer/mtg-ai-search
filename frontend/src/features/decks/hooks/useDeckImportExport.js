@@ -38,6 +38,7 @@ async function streamExport(fetcher, onProgress) {
     buffer = parseSseChunk(buffer, (data) => {
       if (data.type === "progress") onProgress(data);
       if (data.type === "complete") exportId = data.export_id;
+      if (data.type === "error") throw new Error(data.message || "Export failed");
     });
   }
 

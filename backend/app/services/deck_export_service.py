@@ -22,6 +22,10 @@ _image_export_cache: ExportCache = {}
 logger = logging.getLogger(__name__)
 
 
+def _sse_event(data: dict) -> str:
+    return f"data: {json.dumps(data)}\n\n"
+
+
 def build_attachment_headers(filename: str, content_length: int | None = None) -> dict[str, str]:
     headers = {
         "Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}",
@@ -85,6 +89,19 @@ def build_export_download_response(
 async def _prepare_export(deck_id: str, deck: dict, suffix: str) -> tuple[list[ImageSlot], str]:
     started = perf_counter()
     cards = await get_deck_card_images(deck_id)
+    missing_png_cards = [card["name"] for card in cards if not card.get("png_url")]
+    missing_png_cards.extend(
+        card["back_name"]
+        for card in cards
+        if card.get("back_name") and not card.get("back_png_url")
+    )
+    if missing_png_cards:
+        sample = ", ".join(missing_png_cards[:5])
+        suffix_text = "..." if len(missing_png_cards) > 5 else ""
+        raise HTTPException(
+            status_code=400,
+            detail=f"Missing PNG card images for {len(missing_png_cards)} cards: {sample}{suffix_text}",
+        )
     slots = expand_card_image_slots(cards)
     if not slots:
         raise HTTPException(status_code=400, detail="No card images to export")
@@ -107,9 +124,24 @@ async def _load_export_input(deck_id: str, user_id: str | None, suffix: str) -> 
 async def _download_for_sse(slots: list[ImageSlot]) -> AsyncIterator[tuple[str | None, list[bytes | None] | None, list[int] | None]]:
     async for progress, data, index in download_unique_images(slots):
         if progress:
-            yield f"data: {json.dumps(progress)}\n\n", None, None
+            yield _sse_event(progress), None, None
         else:
             yield None, data, index
+
+
+def _missing_image_count(unique_data: list[bytes | None]) -> int:
+    return sum(1 for data in unique_data if data is None)
+
+
+def _download_error_event(deck_id: str, kind: str, unique_data: list[bytes | None]) -> str | None:
+    missing = _missing_image_count(unique_data)
+    if not missing:
+        return None
+    logger.warning("[deck-export] %s abort deck_id=%s missing_png_images=%d", kind, deck_id, missing)
+    return _sse_event({
+        "type": "error",
+        "message": f"{missing} PNG card images failed to download after retries",
+    })
 
 
 async def stream_pdf_export(deck_id: str, user_id: str | None = None) -> AsyncIterator[str]:
@@ -128,6 +160,10 @@ async def stream_pdf_export(deck_id: str, user_id: str | None = None) -> AsyncIt
             unique_data, slot_url_index = data, index
 
     assert unique_data is not None and slot_url_index is not None
+    error_event = _download_error_event(deck_id, "pdf", unique_data)
+    if error_event:
+        yield error_event
+        return
     logger.info(
         "[deck-export] pdf download deck_id=%s unique=%d slots=%d took %.2fs",
         deck_id,
@@ -135,7 +171,7 @@ async def stream_pdf_export(deck_id: str, user_id: str | None = None) -> AsyncIt
         total,
         perf_counter() - download_started,
     )
-    yield f"data: {json.dumps({'type': 'progress', 'phase': 'pdf', 'current': total, 'total': total})}\n\n"
+    yield _sse_event({"type": "progress", "phase": "pdf", "current": total, "total": total})
     build_started = perf_counter()
     pdf_buf = await asyncio.to_thread(build_pdf, unique_data, slot_url_index)
     pdf_bytes = pdf_buf.getvalue()
@@ -147,7 +183,7 @@ async def stream_pdf_export(deck_id: str, user_id: str | None = None) -> AsyncIt
     )
     export_id = put_export(_pdf_export_cache, pdf_bytes, filename)
     logger.info("[deck-export] pdf complete deck_id=%s took %.2fs", deck_id, perf_counter() - started)
-    yield f"data: {json.dumps({'type': 'complete', 'export_id': export_id})}\n\n"
+    yield _sse_event({"type": "complete", "export_id": export_id})
 
 
 async def stream_image_export(deck_id: str, user_id: str | None = None) -> AsyncIterator[str]:
@@ -166,6 +202,10 @@ async def stream_image_export(deck_id: str, user_id: str | None = None) -> Async
             unique_data, slot_url_index = data, index
 
     assert unique_data is not None and slot_url_index is not None
+    error_event = _download_error_event(deck_id, "zip", unique_data)
+    if error_event:
+        yield error_event
+        return
     logger.info(
         "[deck-export] zip download deck_id=%s unique=%d slots=%d took %.2fs",
         deck_id,
@@ -173,7 +213,7 @@ async def stream_image_export(deck_id: str, user_id: str | None = None) -> Async
         total,
         perf_counter() - download_started,
     )
-    yield f"data: {json.dumps({'type': 'progress', 'phase': 'zip', 'current': total, 'total': total})}\n\n"
+    yield _sse_event({"type": "progress", "phase": "zip", "current": total, "total": total})
     build_started = perf_counter()
     zip_buf = await asyncio.to_thread(build_zip, unique_data, slots, slot_url_index)
     zip_bytes = zip_buf.getvalue()
@@ -185,7 +225,7 @@ async def stream_image_export(deck_id: str, user_id: str | None = None) -> Async
     )
     export_id = put_export(_image_export_cache, zip_bytes, filename)
     logger.info("[deck-export] zip complete deck_id=%s took %.2fs", deck_id, perf_counter() - started)
-    yield f"data: {json.dumps({'type': 'complete', 'export_id': export_id})}\n\n"
+    yield _sse_event({"type": "complete", "export_id": export_id})
 
 
 def pop_pdf_export(export_id: str) -> tuple[bytes, str]:

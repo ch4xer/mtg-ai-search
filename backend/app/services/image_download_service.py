@@ -28,6 +28,8 @@ IMAGE_CACHE_DIR = Path(os.environ.get("MTG_IMAGE_CACHE_DIR", Path(tempfile.gette
 IMAGE_CACHE_TTL_SECONDS = _int_env("MTG_IMAGE_CACHE_TTL_SECONDS", 7 * 24 * 60 * 60)
 IMAGE_CACHE_MAX_BYTES = _int_env("MTG_IMAGE_CACHE_MAX_BYTES", 512 * 1024 * 1024)
 IMAGE_CACHE_CLEANUP_INTERVAL = 60
+DOWNLOAD_RETRIES = 3
+DOWNLOAD_RETRY_BASE_DELAY = 0.5
 _image_cache_cleanup_lock = asyncio.Lock()
 _image_cache_last_cleanup = 0.0
 
@@ -35,7 +37,7 @@ _image_cache_last_cleanup = 0.0
 def expand_card_image_slots(cards: list[dict]) -> list[ImageSlot]:
     slots: list[ImageSlot] = []
     for card in cards:
-        url = card["png_url"]
+        url = card.get("png_url")
         if url:
             for _ in range(card["quantity"]):
                 slots.append((card["name"], url))
@@ -173,6 +175,22 @@ async def download_unique_images(slots: list[ImageSlot]) -> AsyncIterator[Downlo
         len(slots),
     )
 
+    async def download_url(client: httpx.AsyncClient, url: str) -> bytes | None:
+        for attempt in range(DOWNLOAD_RETRIES):
+            try:
+                resp = await client.get(url)
+                if resp.status_code == 200:
+                    return resp.content
+                if resp.status_code < 500:
+                    logger.warning("Failed to download %s: HTTP %d", url, resp.status_code)
+                    break
+                logger.warning("Failed to download %s: HTTP %d attempt=%d", url, resp.status_code, attempt + 1)
+            except Exception as exc:
+                logger.warning("Failed to download %s: %s attempt=%d", url, exc, attempt + 1)
+            if attempt < DOWNLOAD_RETRIES - 1:
+                await asyncio.sleep(DOWNLOAD_RETRY_BASE_DELAY * (attempt + 1))
+        return None
+
     async def fetch_one(client: httpx.AsyncClient, url: str, uid: int):
         nonlocal cached_bytes, cache_hit_count, downloaded_bytes, failed_count, success_count
         cached = await asyncio.to_thread(_read_cached_image, url)
@@ -184,20 +202,16 @@ async def download_unique_images(slots: list[ImageSlot]) -> AsyncIterator[Downlo
             return
 
         async with sem:
-            try:
-                resp = await client.get(url)
-                if resp.status_code == 200:
-                    content = resp.content
-                    unique_data[uid] = content
-                    downloaded_bytes += len(content)
-                    success_count += 1
-                    await asyncio.to_thread(_write_cached_image, url, content)
-                else:
-                    failed_count += 1
-                    logger.warning("Failed to download %s: HTTP %d", url, resp.status_code)
-            except Exception as exc:
+            content = await download_url(client, url)
+            if content is None:
                 failed_count += 1
-                logger.warning("Failed to download %s: %s", url, exc)
+                await progress_queue.put(uid)
+                return
+
+            unique_data[uid] = content
+            downloaded_bytes += len(content)
+            success_count += 1
+            await asyncio.to_thread(_write_cached_image, url, content)
         await progress_queue.put(uid)
 
     async def download_all():
@@ -216,12 +230,14 @@ async def download_unique_images(slots: list[ImageSlot]) -> AsyncIterator[Downlo
         yield {"type": "progress", "phase": "download", "current": completed, "total": unique_count}, None, None
 
     await download_task
+    missing_count = sum(1 for data in unique_data if data is None)
     logger.info(
-        "[deck-export] image download complete unique=%d success=%d cache_hits=%d failed=%d downloaded=%.2fMiB cached=%.2fMiB took %.2fs",
+        "[deck-export] image download complete unique=%d success=%d cache_hits=%d failed=%d missing=%d downloaded=%.2fMiB cached=%.2fMiB took=%.2fs",
         unique_count,
         success_count,
         cache_hit_count,
         failed_count,
+        missing_count,
         downloaded_bytes / (1024 * 1024),
         cached_bytes / (1024 * 1024),
         perf_counter() - started,

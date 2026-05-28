@@ -1,25 +1,17 @@
 import json
 
+from ...card_rules import deck_type_order_sql
 from .connection import get_pool
 
 DOUBLE_FACED_LAYOUTS = frozenset({"transform", "modal_dfc", "double_faced_token", "reversible_card"})
 
-DECK_FRONTEND_ORDER_SQL = """
+DECK_FRONTEND_ORDER_SQL = f"""
            ORDER BY
                   CASE WHEN dc.board = 'sideboard' THEN 1 ELSE 0 END,
+                  {deck_type_order_sql("c.type_line")},
+                  (COALESCE(c.mana_cost, '') ~* '\\{{[XYZ]\\}}') ASC,
                   CASE
-                    WHEN POSITION('Planeswalker' IN COALESCE(c.type_line, '')) > 0 THEN 0
-                    WHEN POSITION('Creature' IN COALESCE(c.type_line, '')) > 0 THEN 1
-                    WHEN POSITION('Sorcery' IN COALESCE(c.type_line, '')) > 0 THEN 2
-                    WHEN POSITION('Instant' IN COALESCE(c.type_line, '')) > 0 THEN 3
-                    WHEN POSITION('Artifact' IN COALESCE(c.type_line, '')) > 0 THEN 4
-                    WHEN POSITION('Enchantment' IN COALESCE(c.type_line, '')) > 0 THEN 5
-                    WHEN POSITION('Land' IN COALESCE(c.type_line, '')) > 0 THEN 6
-                    ELSE 7
-                  END,
-                  (COALESCE(c.mana_cost, '') ~* '\\{[XYZ]\\}') ASC,
-                  CASE
-                    WHEN COALESCE(c.mana_cost, '') ~* '\\{[XYZ]\\}' THEN 0
+                    WHEN COALESCE(c.mana_cost, '') ~* '\\{{[XYZ]\\}}' THEN 0
                     ELSE COALESCE(c.cmc, 0)
                   END,
                   CASE
@@ -68,26 +60,13 @@ async def get_deck_card_images(deck_id: str) -> list[dict]:
     rows = await pool.fetch(
         f"""SELECT dc.quantity, c.name,
                   c.layout,
-                  CASE
-                    WHEN dc.print_id IS NOT NULL THEN COALESCE(
-                        cp.image_png,
-                        cp.image_normal,
-                        cp.image_large,
-                        dc.image_url
-                    )
-                    ELSE COALESCE(
-                        dp.image_png,
-                        dp.image_normal,
-                        dp.image_large,
-                        dc.image_url
-                    )
-                  END AS png_url,
+                  CASE WHEN dc.print_id IS NOT NULL THEN cp.image_png ELSE dp.image_png END AS image_png,
                   COALESCE(cp.card_faces, dp.card_faces, c.card_faces) AS card_faces
            FROM deck_cards dc
            JOIN cards c ON c.id = dc.card_id
            LEFT JOIN card_prints cp ON cp.id = dc.print_id
            LEFT JOIN LATERAL (
-               SELECT image_normal, image_large, image_png, card_faces
+               SELECT image_png, card_faces
                FROM card_prints
                WHERE card_id = dc.card_id
                ORDER BY released_at DESC NULLS LAST
@@ -108,12 +87,7 @@ def _decode_faces(raw_value) -> list[dict]:
 
 def _pick_face_image(face: dict) -> str | None:
     image_uris = face.get("image_uris") or {}
-    return (
-        image_uris.get("png")
-        or image_uris.get("normal")
-        or image_uris.get("large")
-        or image_uris.get("small")
-    )
+    return image_uris.get("png")
 
 
 def _serialize_deck_card_image_row(row) -> dict:
@@ -122,12 +96,11 @@ def _serialize_deck_card_image_row(row) -> dict:
     front_face = faces[0] if faces else None
     back_face = faces[1] if len(faces) >= 2 and card.get("layout") in DOUBLE_FACED_LAYOUTS else None
     front_name = (front_face or {}).get("name") or card["name"].split(" // ", 1)[0]
-    front_url = card.get("png_url") or _pick_face_image(front_face or {})
 
     return {
         "quantity": card["quantity"],
         "name": front_name,
-        "png_url": front_url,
+        "png_url": card.get("image_png") or _pick_face_image(front_face or {}),
         "back_name": (back_face or {}).get("name"),
         "back_png_url": _pick_face_image(back_face or {}),
     }
