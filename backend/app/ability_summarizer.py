@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 MAX_RETRIES = 3
 RATE_LIMIT_DELAY = 0.5  # seconds between requests
 
-SYSTEM_PROMPT = (
+ABILITY_SUMMARIZATION_PROMPT = (
     "You are a Magic: The Gathering rules expert. Given a keyword ability name and its full rules description, "
     "write a concise one-sentence summary focusing on the core game effect. "
     "Do NOT mention rule numbers or redundancy notes. "
@@ -49,7 +49,7 @@ def summarize_ability(name: str, description: str) -> str | None:
                 json={
                     "model": config.model,
                     "messages": [
-                        {"role": "system", "content": SYSTEM_PROMPT},
+                        {"role": "system", "content": ABILITY_SUMMARIZATION_PROMPT},
                         {"role": "user", "content": f"{name} - \"{description}\""},
                     ],
                     "temperature": 0.1,

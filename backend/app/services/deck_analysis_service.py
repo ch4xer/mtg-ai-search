@@ -21,7 +21,7 @@ async def analyze_owned_deck(deck_id: str, user_id: str) -> dict:
         raise HTTPException(status_code=400, detail="Deck is empty")
 
     try:
-        analysis = await analyze_deck(deck["name"], deck.get("format", "undefined"), cards)
+        analysis = await analyze_deck(deck["name"], deck.get("format", "undefined"), mainboard)
     except ValueError as exc:
         logger.warning("Deck analysis failed for %s: %s", deck_id, exc)
         raise HTTPException(status_code=502, detail="Analysis failed, please try again") from exc

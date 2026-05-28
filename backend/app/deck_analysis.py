@@ -15,9 +15,9 @@ logger = logging.getLogger(__name__)
 
 llm = create_chat_llm(temperature=0.3)
 
-_SYSTEM_PROMPT = (
+DECK_ANALYSIS_PROMPT = (
     "You are a seasoned Magic: The Gathering player and coach. The user will give "
-    "you a decklist where each entry includes the card name, type line, mana cost, "
+    "you a mainboard decklist where each entry includes the card name, type line, mana cost, "
     "oracle text and quantity. Read the whole deck and analyse its overall strategy, "
     "core gameplan, curve, key interactions, and typical weaknesses.\n\n"
     "Return STRICTLY a JSON object with this exact shape and no extra text:\n"
@@ -56,14 +56,9 @@ def _format_card_line(card: dict) -> str:
 
 def build_deck_payload(deck_name: str, deck_format: str, cards: list[dict]) -> str:
     mainboard = [c for c in cards if c.get("board") != "sideboard"]
-    sideboard = [c for c in cards if c.get("board") == "sideboard"]
 
     lines = [f"Deck: {deck_name}    Format: {deck_format}", "", "MAINBOARD"]
     lines.extend(_format_card_line(c) for c in mainboard)
-    if sideboard:
-        lines.append("")
-        lines.append("SIDEBOARD")
-        lines.extend(_format_card_line(c) for c in sideboard)
     return "\n".join(lines)
 
 
@@ -84,7 +79,7 @@ async def analyze_deck(deck_name: str, deck_format: str, cards: list[dict]) -> d
     """
     payload = build_deck_payload(deck_name, deck_format, cards)
 
-    messages = [SystemMessage(content=_SYSTEM_PROMPT), HumanMessage(content=payload)]
+    messages = [SystemMessage(content=DECK_ANALYSIS_PROMPT), HumanMessage(content=payload)]
     try:
         bound = llm.bind(response_format={"type": "json_object"})
         response = await bound.ainvoke(messages)

@@ -49,7 +49,7 @@ def _call_api_batch(batch: list[str]) -> list[list[float]] | None:
     return None
 
 
-def encode_query(texts: list[str]) -> list[list[float]]:
+def encode_queries(texts: list[str]) -> list[list[float]]:
     """Encode queries into embedding vectors."""
     all_embeddings: list[list[float]] = []
     for i in range(0, len(texts), MAX_BATCH_SIZE):
@@ -61,6 +61,6 @@ def encode_query(texts: list[str]) -> list[list[float]]:
     return all_embeddings
 
 
-def encode_batch_safe(texts: list[str]) -> list[list[float]] | None:
+def encode_batch_or_none(texts: list[str]) -> list[list[float]] | None:
     """Encode a batch, returning None on failure instead of raising."""
     return _call_api_batch(texts)

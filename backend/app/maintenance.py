@@ -168,7 +168,6 @@ async def _write_sync_log(pool, status: str, *, message: str = "") -> str:
     )
     return str(row["id"])
 
-
 async def _update_sync_log(
     pool, log_id: str, status: str, new_cards: int, updated_cards: int, message: str,
 ) -> None:

@@ -26,6 +26,11 @@ def get_startup_retry_config() -> dict[str, int]:
     }
 
 
+def get_log_level() -> str:
+    """Return the application log level name from the environment."""
+    return os.getenv("LOG_LEVEL", "INFO").upper()
+
+
 def get_tag_bootstrap_config() -> dict:
     """Return startup tag expansion/embedding settings."""
     return {

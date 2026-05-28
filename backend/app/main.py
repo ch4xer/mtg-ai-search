@@ -5,7 +5,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from .config import get_allowed_origins
+from .config import get_allowed_origins, get_log_level
 from .routes_api import api_router
 from .routes_admin import admin_router
 from .routes_auth import auth_router
@@ -16,10 +16,10 @@ from .startup import get_startup_state, lifespan
 
 class HealthCheckAccessFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
-        return not self._is_normal_health_check(record)
+        return not self._is_suppressible_health_check(record)
 
     @staticmethod
-    def _is_normal_health_check(record: logging.LogRecord) -> bool:
+    def _is_suppressible_health_check(record: logging.LogRecord) -> bool:
         args = record.args
         if isinstance(args, tuple) and len(args) >= 5:
             method = str(args[1]).upper()
@@ -34,6 +34,19 @@ class HealthCheckAccessFilter(logging.Filter):
         return bool(re.search(r'"GET\s+/api/health(?:\?[^ ]*)?\s+HTTP/[^"]+"\s+200\b', record.getMessage()))
 
 
+def configure_logging() -> None:
+    level_name = get_log_level()
+    level = getattr(logging, level_name, logging.INFO)
+    logging.basicConfig(
+        level=level,
+        format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+    )
+    logging.getLogger().setLevel(level)
+    logging.getLogger("app").setLevel(level)
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+
+
+configure_logging()
 logging.getLogger("uvicorn.access").addFilter(HealthCheckAccessFilter())
 
 app = FastAPI(title="MTG AI Card Search", lifespan=lifespan, redirect_slashes=False)
