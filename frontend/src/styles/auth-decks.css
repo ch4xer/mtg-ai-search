@@ -156,7 +156,8 @@
 
 /* ===== Decks Page ===== */
 .decks-page {
-  max-width: 900px;
+  width: 100%;
+  max-width: 1400px;
   margin: 0 auto;
 }
 
@@ -249,6 +250,9 @@
   border-radius: 8px;
   cursor: pointer;
   transition: all 0.2s;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
 }
 
 .btn-danger:hover {
@@ -293,13 +297,43 @@
 }
 
 .deck-card {
+  position: relative;
   background: var(--bg-card);
   border: 1px solid var(--border-subtle);
   border-radius: 12px;
-  padding: 1.5rem;
+  padding: 1.35rem 0.675rem 0.2rem;
+  aspect-ratio: 626 / 457;
+  min-height: 0;
   cursor: pointer;
   transition: all 0.25s ease;
   box-shadow: 0 2px 8px var(--shadow);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.deck-card.has-cover {
+  background: var(--bg-card);
+  border-color: color-mix(in srgb, var(--accent) 36%, var(--border-subtle));
+}
+
+.deck-card.has-cover::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(180deg, rgba(0, 0, 0, 0.18), rgba(0, 0, 0, 0.58)),
+    var(--deck-cover-image);
+  background-size: cover;
+  background-position: center 22%;
+  opacity: 0.92;
+  transition: transform 0.25s ease, opacity 0.25s ease;
+  z-index: 0;
+}
+
+.deck-card.has-cover:hover::before {
+  transform: scale(1.03);
+  opacity: 1;
 }
 
 .deck-card:hover {
@@ -308,29 +342,85 @@
   border-color: var(--accent);
 }
 
-.deck-card-header {
+.deck-card-main {
+  position: relative;
+  z-index: 1;
   display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  margin-bottom: 0.5rem;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.45rem;
+  min-width: 0;
 }
 
 .deck-card-name {
-  font-family: "Cinzel", serif;
+  font-family: "Crimson Text", Georgia, serif;
   font-size: 1.1rem;
+  line-height: 1.25;
   color: var(--text-primary);
+  word-break: break-word;
+  text-transform: none;
+}
+
+.deck-card.has-cover .deck-card-name {
+  color: #fff;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.65);
+}
+
+.deck-card-format {
+  align-self: flex-start;
+}
+
+.deck-card.has-cover .deck-card-format {
+  background: var(--bg-card);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.28);
+}
+
+.deck-card-footer {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-top: auto;
+  padding-top: 0;
+}
+
+.deck-card-colors {
+  display: flex;
+  align-items: center;
+  min-height: 24px;
+  color: var(--text-secondary);
+}
+
+.deck-card-mana-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.18rem;
+}
+
+.deck-card-mana-row .ms {
+  font-size: 0.85rem;
+  line-height: 1;
+}
+
+.deck-card-mana-row .ms-cost::before {
+  position: relative;
+  top: 0.04em;
 }
 
 .deck-card-count {
   font-size: 0.95rem;
   color: var(--accent);
   font-weight: 600;
-  margin-bottom: 0.25rem;
+  margin: 0;
+  text-align: right;
+  white-space: nowrap;
 }
 
-.deck-card-date {
-  font-size: 0.8rem;
-  color: var(--text-muted);
+.deck-card.has-cover .deck-card-count {
+  color: #fff;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.7);
 }
 
 /* Mobile: icon-only buttons for deck creation */
@@ -394,4 +484,3 @@
     flex-shrink: 0;
   }
 }
-

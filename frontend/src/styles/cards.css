@@ -439,12 +439,25 @@
 }
 
 .card-name {
-  font-family: "Cinzel", serif;
+  font-family: "Crimson Text", Georgia, serif;
   font-size: 1.05rem;
   font-weight: 600;
   color: var(--text-primary);
   margin-bottom: 0.4rem;
   line-height: 1.3;
+  text-transform: none;
+}
+
+.card-name span {
+  display: block;
+}
+
+.card-name-secondary {
+  margin-top: 0.1rem;
+  font-size: 0.72rem;
+  font-weight: 400;
+  color: var(--text-muted);
+  line-height: 1.25;
 }
 
 .card-meta {
@@ -794,6 +807,11 @@
   gap: 0.5rem;
   min-width: 0;
   flex: 1;
+}
+
+.sidebar-deck-name {
+  font-family: "Crimson Text", Georgia, serif;
+  text-transform: none;
 }
 
 .deck-dropdown-empty {

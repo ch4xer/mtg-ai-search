@@ -40,10 +40,11 @@
 }
 
 .deck-detail-title h2 {
-  font-family: "Cinzel", serif;
+  font-family: "Crimson Text", Georgia, serif;
   font-size: 1.4rem;
   color: var(--accent);
   cursor: pointer;
+  text-transform: none;
 }
 
 .deck-detail-title h2:hover {
@@ -198,10 +199,15 @@
 }
 
 .deck-preview-name {
-  font-family: "Cinzel", serif;
+  font-family: "Crimson Text", Georgia, serif;
   font-size: 1rem;
   color: var(--text-primary);
   line-height: 1.3;
+  text-transform: none;
+}
+
+.deck-preview-name span {
+  display: block;
 }
 
 .deck-preview-mana {
@@ -445,6 +451,7 @@
 .move-panel-card-name {
   font-weight: 600;
   color: var(--text);
+  text-transform: none;
 }
 
 .move-panel-card-qty {
@@ -638,10 +645,11 @@
   top: 50%;
   transform: translateY(-50%);
   color: #fff;
-  font-family: "Cinzel", serif;
+  font-family: "Crimson Text", Georgia, serif;
   font-size: 0.92rem;
   font-weight: 700;
   line-height: 1.2;
+  text-transform: none;
   text-shadow: 0 2px 8px rgba(0, 0, 0, 0.9);
   white-space: nowrap;
   overflow: hidden;
@@ -1037,6 +1045,11 @@
   transition: box-shadow 0.25s ease;
 }
 
+.analyze-card:not(.has-analysis) {
+  padding: 0;
+  overflow: hidden;
+}
+
 .analyze-card.has-analysis {
   padding: 0.85rem 1rem 1rem;
 }
@@ -1061,11 +1074,13 @@
 
 .analyze-btn-primary {
   width: 100%;
-  padding: 0.7rem 0.9rem;
+  min-height: 3.25rem;
+  padding: 0.85rem 1rem;
   font-size: 0.95rem;
   color: var(--ctp-mauve);
   background: transparent;
-  border: 1px solid var(--ctp-mauve);
+  border: 0;
+  border-radius: 0;
 }
 
 .analyze-btn-primary:hover:not(:disabled) {

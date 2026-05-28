@@ -641,6 +641,34 @@
   font-style: italic;
 }
 
+.load-more-row {
+  display: flex;
+  justify-content: center;
+  margin: 1.75rem 0 0;
+}
+
+.load-more-btn {
+  min-width: 180px;
+  padding: 0.65rem 1.2rem;
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  color: var(--text-primary);
+  font: inherit;
+  cursor: pointer;
+  transition: border-color 0.2s, color 0.2s, opacity 0.2s;
+}
+
+.load-more-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.load-more-btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
 @media (max-width: 640px) {
   .search-input-wrapper {
     flex-wrap: wrap;
