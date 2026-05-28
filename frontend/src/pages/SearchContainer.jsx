@@ -44,8 +44,10 @@ const AI_SEARCH_FEATURES = [
   },
 ];
 
+const AI_PAGE_SIZE = 60;
+
 function SearchContainer({ imageMode, onToggleImageMode }) {
-  const { t } = useLanguage();
+  const { t, language } = useLanguage();
   const location = useLocation();
   const navigate = useNavigate();
   const { user } = useAuth();
@@ -58,35 +60,93 @@ function SearchContainer({ imageMode, onToggleImageMode }) {
   // AI search state
   const [aiResults, setAiResults] = useState([]);
   const [aiLoading, setAiLoading] = useState(false);
+  const [aiLoadingMore, setAiLoadingMore] = useState(false);
   const [aiSearched, setAiSearched] = useState(false);
+  const [aiQuery, setAiQuery] = useState("");
+  const [aiSearchId, setAiSearchId] = useState(null);
+  const [aiTotal, setAiTotal] = useState(0);
+  const [aiHasMore, setAiHasMore] = useState(false);
 
   const handleAiSearch = async (query) => {
-    if (!query.trim()) return;
+    const trimmedQuery = query.trim();
+    if (!trimmedQuery) return;
     setAiLoading(true);
     setAiSearched(true);
+    setAiQuery(trimmedQuery);
+    setAiSearchId(null);
+    setAiTotal(0);
+    setAiHasMore(false);
     try {
-      const res = await searchCards(query);
+      const res = await searchCards(trimmedQuery, {
+        limit: AI_PAGE_SIZE,
+        offset: 0,
+        includeZh: language === "zh",
+      });
       if (res.status === 429) {
         const err = await res.json().catch(() => ({}));
         showToast(err.detail || t('searchLimitReached'), "error");
         if (!user) navigate("/login");
         setAiResults([]);
+        setAiSearchId(null);
+        setAiTotal(0);
+        setAiHasMore(false);
         return;
       }
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         showToast(err.detail || t('searchFailed'), "error");
         setAiResults([]);
+        setAiSearchId(null);
+        setAiTotal(0);
+        setAiHasMore(false);
         return;
       }
       const data = await res.json();
       setAiResults(data.results || []);
+      setAiSearchId(data.search_id || null);
+      setAiTotal(data.total || 0);
+      setAiHasMore(Boolean(data.has_more && data.search_id));
     } catch (err) {
       console.error("Search failed:", err);
       showToast(t('searchFailed'), "error");
       setAiResults([]);
+      setAiSearchId(null);
+      setAiTotal(0);
+      setAiHasMore(false);
     } finally {
       setAiLoading(false);
+    }
+  };
+
+  const handleLoadMoreAi = async () => {
+    if (!aiQuery || !aiSearchId || aiLoadingMore || aiLoading) return;
+    setAiLoadingMore(true);
+    try {
+      const res = await searchCards(aiQuery, {
+        limit: AI_PAGE_SIZE,
+        offset: aiResults.length,
+        searchId: aiSearchId,
+        includeZh: language === "zh",
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        showToast(err.detail || t('searchFailed'), "error");
+        if ([400, 404, 410].includes(res.status)) {
+          setAiHasMore(false);
+          setAiSearchId(null);
+        }
+        return;
+      }
+      const data = await res.json();
+      setAiResults((prev) => [...prev, ...(data.results || [])]);
+      setAiSearchId(data.search_id || aiSearchId);
+      setAiTotal(data.total || aiTotal);
+      setAiHasMore(Boolean(data.has_more && (data.search_id || aiSearchId)));
+    } catch (err) {
+      console.error("Load more failed:", err);
+      showToast(t('searchFailed'), "error");
+    } finally {
+      setAiLoadingMore(false);
     }
   };
 
@@ -156,7 +216,20 @@ function SearchContainer({ imageMode, onToggleImageMode }) {
           </div>
         )}
         {!aiLoading && aiResults.length > 0 && (
-          <CardGrid cards={aiResults} imageMode={imageMode} decks={decks} />
+          <>
+            <CardGrid cards={aiResults} imageMode={imageMode} decks={decks} />
+            {aiHasMore && (
+              <div className="load-more-row">
+                <button className="load-more-btn" onClick={handleLoadMoreAi} disabled={aiLoadingMore}>
+                  {aiLoadingMore
+                    ? t('loadingMore')
+                    : t('loadMoreCards')
+                        .replace("{shown}", aiResults.length)
+                        .replace("{total}", aiTotal)}
+                </button>
+              </div>
+            )}
+          </>
         )}
         {!aiLoading && !aiSearched && (
           <div className="features-section">

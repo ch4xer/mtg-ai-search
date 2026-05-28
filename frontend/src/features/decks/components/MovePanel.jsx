@@ -1,7 +1,9 @@
 import { createPortal } from "react-dom";
+import { getLocalizedCardName } from "../deckModel.js";
 
 export default function MovePanel({ card, language, onMove, onClose }) {
   if (!card) return null;
+  const displayName = getLocalizedCardName(card.card, language);
 
   const move = (fromBoard, toBoard, quantity) => {
     onMove(card.card_id, fromBoard, toBoard, quantity);
@@ -17,7 +19,7 @@ export default function MovePanel({ card, language, onMove, onClose }) {
           <button className="move-panel-close" onClick={onClose}>&times;</button>
         </div>
         <div className="move-panel-card-info">
-          <span className="move-panel-card-name">{card.card.name}</span>
+          <span className="move-panel-card-name">{displayName}</span>
           <span className="move-panel-card-qty">{card.quantity}x</span>
         </div>
         <div className="move-panel-options">

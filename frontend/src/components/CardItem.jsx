@@ -34,6 +34,9 @@ function CardItem({ card, imageMode, decks: propDecks }) {
   const canUsePropDecks = Boolean(user && propDecks);
   const decks = localDecks ?? (canUsePropDecks ? propDecks : []);
 
+  const isArtCrop = imageMode === "art_crop";
+  const zhCard = language === "zh" ? card.zh : null;
+  const zhFaces = zhCard?.card_faces || [];
   const selectedCardFaces = selectedArt?.card_faces || card.card_faces || [];
   const isDoubleFaced =
     selectedCardFaces.length >= 2 &&
@@ -53,12 +56,17 @@ function CardItem({ card, imageMode, decks: propDecks }) {
     frontImageUri = getImageUri(card.card_faces[0].image_uris, imageMode);
   }
 
-  const isArtCrop = imageMode === "art_crop";
-
-  const activeFace = isDoubleFaced ? selectedCardFaces[flipped ? 1 : 0] : null;
+  const activeFaceIndex = isDoubleFaced ? (flipped ? 1 : 0) : 0;
+  const activeFace = isDoubleFaced ? selectedCardFaces[activeFaceIndex] : null;
+  const activeZhFace = zhFaces[activeFaceIndex] || null;
   const frontFace = selectedCardFaces?.[0];
-  const getDisplayField = (field) => activeFace ? activeFace[field] : (card[field] ?? frontFace?.[field]);
-  const displayName = activeFace?.name || card.name || frontFace?.name;
+  const getEnglishField = (field) => activeFace ? activeFace[field] : (card[field] ?? frontFace?.[field]);
+  const getTranslatedField = (field) => activeZhFace?.[field] || (!isDoubleFaced ? zhCard?.[field] : null);
+  const getDisplayField = (field) => getTranslatedField(field) || getEnglishField(field);
+  const englishName = activeFace?.name || card.name || frontFace?.name;
+  const translatedName = activeZhFace?.name || (!isDoubleFaced ? zhCard?.name : null);
+  const displayName = translatedName || englishName;
+  const displaySecondaryName = translatedName && englishName && translatedName !== englishName ? englishName : "";
   const displayManaCost = getDisplayField("mana_cost");
   const displayTypeLine = getDisplayField("type_line");
   const displayOracleText = getDisplayField("oracle_text");
@@ -66,10 +74,14 @@ function CardItem({ card, imageMode, decks: propDecks }) {
   const displayPower = getDisplayField("power");
   const displayToughness = getDisplayField("toughness");
   const displayLoyalty = getDisplayField("loyalty");
-  const displaySetName = selectedArt?.setName || card.set_name;
+  const displaySetName = selectedArt?.setName || activeZhFace?.set_name || zhCard?.set_name || card.set_name;
   const displaySet = selectedArt?.set || card.set;
   const displayRarity = selectedArt?.rarity || card.rarity;
   const setIconClass = getSetIconClass({ set: displaySet, rarity: displayRarity });
+
+  useEffect(() => {
+    setImgError(false);
+  }, [frontImageUri, backImageUri]);
 
   useEffect(() => {
     if (!showDeckMenu) return;
@@ -349,7 +361,10 @@ function CardItem({ card, imageMode, decks: propDecks }) {
       )}
 
       <div className="card-info">
-        <h3 className="card-name">{displayName}</h3>
+        <h3 className="card-name">
+          <span>{displayName}</span>
+          {displaySecondaryName && <span className="card-name-secondary">{displaySecondaryName}</span>}
+        </h3>
         <div className="card-meta">
           <div className="card-meta-left">
             {displayManaCost && (

@@ -1,10 +1,9 @@
-import { TYPE_MANA_CLASSES, getCardDisplayImage } from "../deckModel.js";
+import { TYPE_MANA_CLASSES, getCardDisplayImage, getLocalizedCardName } from "../deckModel.js";
 
 function DeckStackCard({
   item,
   selectedCard,
   cardIssuesById,
-  quantityIncreaseGuards,
   isOwner,
   onDragStart,
   onDragEnd,
@@ -16,13 +15,13 @@ function DeckStackCard({
   onMouseLeave,
   onSelect,
   onQuantityChange,
+  language,
   t,
 }) {
   const img = getCardDisplayImage(item);
+  const displayName = getLocalizedCardName(item.card, language);
   const isSelected = selectedCard?.card_id === item.card_id && selectedCard?.board === item.board;
   const cardIssues = cardIssuesById?.[item.card_id] || [];
-  const increaseGuard = quantityIncreaseGuards?.[`${item.card_id}:${item.board}`];
-  const increaseDisabled = increaseGuard?.canIncrease === false;
 
   return (
     <div
@@ -39,14 +38,14 @@ function DeckStackCard({
       onClick={() => onSelect(item)}
     >
       {img ? (
-        <img src={img} alt={item.card.name} className="deck-stack-img" loading="lazy" />
+        <img src={img} alt={displayName} className="deck-stack-img" loading="lazy" />
       ) : (
-        <div className="deck-stack-placeholder">{item.card.name}</div>
+        <div className="deck-stack-placeholder">{displayName}</div>
       )}
       <div className="deck-stack-overlay" />
       <div className="deck-stack-name">
         {cardIssues.length > 0 && <span className="deck-illegal-icon" title={cardIssues.join("\n")}>!</span>}
-        {item.card.name}
+        {displayName}
       </div>
       {!isOwner ? (
         <div className="deck-stack-qty">{item.quantity > 1 && `x${item.quantity}`}</div>
@@ -54,11 +53,7 @@ function DeckStackCard({
         <div className="deck-stack-controls">
           <button onClick={(e) => { e.stopPropagation(); onQuantityChange(item.card_id, -1, item.board); }}>-</button>
           <span>{item.quantity}</span>
-          <button
-            disabled={increaseDisabled}
-            title={increaseDisabled ? increaseGuard.reason : undefined}
-            onClick={(e) => { e.stopPropagation(); onQuantityChange(item.card_id, 1, item.board); }}
-          >
+          <button onClick={(e) => { e.stopPropagation(); onQuantityChange(item.card_id, 1, item.board); }}>
             +
           </button>
         </div>
@@ -95,7 +90,6 @@ export default function DeckBoard({
   sideboardCount,
   selectedCard,
   cardIssuesById,
-  quantityIncreaseGuards,
   dragOverBoard,
   isOwner,
   language,
@@ -105,8 +99,8 @@ export default function DeckBoard({
   const cardProps = {
     selectedCard,
     cardIssuesById,
-    quantityIncreaseGuards,
     isOwner,
+    language,
     t,
     onDragStart: handlers.onDragStart,
     onDragEnd: handlers.onDragEnd,

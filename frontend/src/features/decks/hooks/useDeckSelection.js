@@ -4,7 +4,7 @@ import { patchDeckCard } from "../../../api/decks.js";
 import { getExactImageUri, getImageUri } from "../../../utils/cardImage.js";
 import { DOUBLE_FACED_LAYOUTS, getPreviewData } from "../deckModel.js";
 
-export function useDeckSelection({ id, cards, setCards, showToast, t }) {
+export function useDeckSelection({ id, cards, setCards, showToast, t, language }) {
   const [selectedCard, setSelectedCard] = useState(null);
   const [previewFlipped, setPreviewFlipped] = useState(false);
   const [showMobileSheet, setShowMobileSheet] = useState(false);
@@ -199,8 +199,8 @@ export function useDeckSelection({ id, cards, setCards, showToast, t }) {
   }, [selectedCard?.card_id, selectedCard?.board, selectedCard?.print_id, selectedCard?.card?.card_faces, selectedCard?.card?.layout]);
 
   const selectedPreview = useMemo(
-    () => getPreviewData(selectedCard, previewFlipped),
-    [selectedCard, previewFlipped]
+    () => getPreviewData(selectedCard, previewFlipped, language),
+    [selectedCard, previewFlipped, language]
   );
 
   return {

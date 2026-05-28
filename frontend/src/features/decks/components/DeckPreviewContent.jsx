@@ -77,7 +77,10 @@ function ManaCost({ manaCost }) {
 function PreviewInfo({ preview, selectedCard, deck, language }) {
   return (
     <div className="deck-preview-info">
-      <h3 className="deck-preview-name">{preview.name}</h3>
+      <h3 className="deck-preview-name">
+        <span>{preview.name}</span>
+        {preview.secondary_name && <span className="card-name-secondary">{preview.secondary_name}</span>}
+      </h3>
       <ManaCost manaCost={preview.mana_cost} />
       <p className="deck-preview-type">{preview.type_line}</p>
       {preview.oracle_text && (

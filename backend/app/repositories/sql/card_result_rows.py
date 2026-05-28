@@ -8,7 +8,10 @@ CARD_RESULT_COLUMNS = """c.id, c.name, c.mana_cost, c.cmc, c.type_line, c.oracle
                   c.legalities, c.layout, c.card_faces,
                   dp.id AS print_id, dp.image_small, dp.image_normal, dp.image_large, dp.image_png,
                   dp.image_art_crop, dp.image_border_crop, dp.rarity, dp.set_code, dp.set_name,
-                  dp.flavor_text, dp.artist, dp.card_faces AS print_card_faces"""
+                  dp.flavor_text, dp.artist, dp.card_faces AS print_card_faces,
+                  zt.name AS zh_name, zt.type_line AS zh_type_line,
+                  zt.oracle_text AS zh_oracle_text, zt.flavor_text AS zh_flavor_text,
+                  zt.set_name AS zh_set_name, zt.card_faces AS zh_card_faces"""
 
 DEFAULT_PRINT_JOIN = """LEFT JOIN LATERAL (
                SELECT id, image_small, image_normal, image_large, image_png,
@@ -18,7 +21,16 @@ DEFAULT_PRINT_JOIN = """LEFT JOIN LATERAL (
                WHERE card_id = c.id
                ORDER BY released_at DESC NULLS LAST
                LIMIT 1
-           ) dp ON TRUE"""
+           ) dp ON TRUE
+           LEFT JOIN LATERAL (
+               SELECT name, type_line, oracle_text, flavor_text, set_name, card_faces
+               FROM card_print_translations
+               WHERE card_id = c.id
+                 AND lang = 'zhs'
+                 AND status = 'ok'
+               ORDER BY synced_at DESC
+               LIMIT 1
+           ) zt ON TRUE"""
 
 
 async def get_cards_by_ids(card_ids: list[str]) -> list[dict]:
@@ -40,7 +52,7 @@ async def get_cards_by_ids(card_ids: list[str]) -> list[dict]:
 
 def serialize_card_result(row) -> dict:
     legalities = row["legalities"]
-    return {
+    card = {
         "id": row["id"],
         "print_id": row["print_id"],
         "name": row["name"],
@@ -63,3 +75,31 @@ def serialize_card_result(row) -> dict:
         "flavor_text": row["flavor_text"],
         "artist": row["artist"],
     }
+    zh = _translation_from_row(row)
+    if zh:
+        card["zh"] = zh
+    return card
+
+
+def _translation_from_row(row) -> dict | None:
+    if "zh_name" not in row.keys():
+        return None
+    if not any(row[key] for key in ("zh_name", "zh_type_line", "zh_oracle_text", "zh_flavor_text")):
+        return None
+
+    card_faces = _decode_json_field(row["zh_card_faces"])
+    return {
+        "source": "mtgch",
+        "name": row["zh_name"],
+        "type_line": row["zh_type_line"],
+        "oracle_text": row["zh_oracle_text"],
+        "flavor_text": row["zh_flavor_text"],
+        "set_name": row["zh_set_name"],
+        "card_faces": card_faces or [],
+    }
+
+
+def _decode_json_field(value):
+    if isinstance(value, str):
+        return json.loads(value)
+    return value

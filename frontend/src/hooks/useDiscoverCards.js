@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 const PAGE_SIZE = 60;
 
-export function useDiscoverCards({ enabled = true } = {}) {
+export function useDiscoverCards({ enabled = true, includeZh = false } = {}) {
   const [q, setQ] = useState("");
   const [colors, setColors] = useState(new Set());
   const [types, setTypes] = useState(new Set());
@@ -51,8 +51,9 @@ export function useDiscoverCards({ enabled = true } = {}) {
     if (powerMax !== "") body.power_max = parseFloat(powerMax);
     if (toughnessMin !== "") body.toughness_min = parseFloat(toughnessMin);
     if (toughnessMax !== "") body.toughness_max = parseFloat(toughnessMax);
+    if (includeZh) body.include_zh = true;
     return body;
-  }, [q, colors, types, rarity, selectedKeywords, selectedSubtypes, cmcMin, cmcMax, powerMin, powerMax, toughnessMin, toughnessMax]);
+  }, [q, colors, types, rarity, selectedKeywords, selectedSubtypes, cmcMin, cmcMax, powerMin, powerMax, toughnessMin, toughnessMax, includeZh]);
 
   const fetchResults = useCallback(async (pageNum) => {
     if (abortRef.current) abortRef.current.abort();

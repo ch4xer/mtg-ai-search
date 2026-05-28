@@ -102,7 +102,10 @@ export default function MobileDeckSheet({
             )}
           </div>
           <div className="mobile-sheet-info">
-            <h3 className="deck-preview-name">{selectedPreview.name}</h3>
+            <h3 className="deck-preview-name">
+              <span>{selectedPreview.name}</span>
+              {selectedPreview.secondary_name && <span className="card-name-secondary">{selectedPreview.secondary_name}</span>}
+            </h3>
             {selectedPreview.mana_cost && (
               <span className="deck-preview-mana">
                 {parseManaCost(selectedPreview.mana_cost).map((sym, idx) =>
