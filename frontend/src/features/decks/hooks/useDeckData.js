@@ -8,7 +8,6 @@ import {
 } from "../../../api/decks.js";
 import {
   buildDeckAnalysis,
-  getQuantityIncreaseGuards,
   splitDeckBoards,
   validateDeck,
 } from "../deckModel.js";
@@ -55,10 +54,6 @@ export function useDeckData({ id, navigate, showToast, t, language }) {
   const groupedCards = mainboardGroups;
   const deckAnalysis = useMemo(() => buildDeckAnalysis(mainCards, language), [mainCards, language]);
   const deckValidation = useMemo(() => validateDeck(cards, deck?.format, language), [cards, deck?.format, language]);
-  const quantityIncreaseGuards = useMemo(
-    () => getQuantityIncreaseGuards(cards, deck?.format, language),
-    [cards, deck?.format, language]
-  );
   const mainboardCount = useMemo(
     () => mainCards.reduce((sum, card) => sum + card.quantity, 0),
     [mainCards]
@@ -157,7 +152,6 @@ export function useDeckData({ id, navigate, showToast, t, language }) {
     groupedCards,
     deckAnalysis,
     deckValidation,
-    quantityIncreaseGuards,
     mainboardCount,
     sideboardCount,
   };

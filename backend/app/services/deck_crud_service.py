@@ -8,11 +8,11 @@ from ..repositories.decks import (
     get_user_decks,
     remove_card_from_deck,
     update_deck,
+    update_deck_cover,
     update_deck_card_image,
 )
-from ..schemas.decks import AddCardRequest, CreateDeckRequest, UpdateCardImageRequest, UpdateDeckRequest
+from ..schemas.decks import AddCardRequest, CreateDeckRequest, UpdateCardImageRequest, UpdateDeckCoverRequest, UpdateDeckRequest
 from .deck_access_service import (
-    require_copy_limit,
     require_deck_name,
     require_nonzero_quantity,
     require_owner,
@@ -43,6 +43,14 @@ async def update_owned_deck(deck_id: str, user_id: str, req: UpdateDeckRequest) 
     return await update_deck(deck_id, require_deck_name(req.name), validate_format(req.format))
 
 
+async def update_owned_deck_cover(deck_id: str, user_id: str, req: UpdateDeckCoverRequest) -> dict:
+    await require_owner(deck_id, user_id)
+    cover_url = req.cover_image_url.strip()
+    if not cover_url:
+        raise HTTPException(status_code=400, detail="Cover image URL is required")
+    return await update_deck_cover(deck_id, cover_url)
+
+
 async def delete_owned_deck(deck_id: str, user_id: str) -> None:
     await require_owner(deck_id, user_id)
     await delete_deck(deck_id)
@@ -63,7 +71,6 @@ async def list_public_deck_cards(deck_id: str) -> list[dict]:
 async def add_owned_deck_card(deck_id: str, user_id: str, req: AddCardRequest) -> dict:
     await require_owner(deck_id, user_id)
     require_nonzero_quantity(req.quantity)
-    await require_copy_limit(deck_id, req.card_id, req.quantity)
     update_image = "image_url" in req.model_fields_set or "display_url" in req.model_fields_set
     return await add_card_to_deck(
         deck_id,

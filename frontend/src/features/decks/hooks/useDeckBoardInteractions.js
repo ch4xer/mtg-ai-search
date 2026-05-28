@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { addDeckCard, removeDeckCard } from "../../../api/decks.js";
-import { getQuantityIncreaseGuards } from "../deckModel.js";
+import { addDeckCard, patchDeckCover, removeDeckCard } from "../../../api/decks.js";
+import { getCardCoverImage } from "../deckModel.js";
 
 export function useDeckBoardInteractions({
   id,
@@ -8,7 +8,7 @@ export function useDeckBoardInteractions({
   setCards,
   selectedCard,
   setSelectedCard,
-  deckFormat,
+  setDeck,
   language,
   isOwner,
   showToast,
@@ -40,14 +40,6 @@ export function useDeckBoardInteractions({
       await handleRemoveCard(cardId, board);
       return;
     }
-    if (delta > 0) {
-      const guard = getQuantityIncreaseGuards(cards, deckFormat, language)[`${cardId}:${board}`];
-      if (guard?.canIncrease === false) {
-        showToast(guard.reason, "error");
-        return;
-      }
-    }
-
     const res = await addDeckCard(id, { card_id: cardId, quantity: delta, board });
     if (res.ok) {
       setCards((prev) =>
@@ -227,6 +219,32 @@ export function useDeckBoardInteractions({
     handleContextMenuClose();
   };
 
+  const handleContextMenuSetCover = async () => {
+    const item = contextMenu?.item;
+    if (!item) return;
+    const coverImageUrl = getCardCoverImage(item);
+    if (!coverImageUrl) {
+      showToast(language === "zh" ? "这张牌没有可用的画作卡图" : "This card has no art-crop image", "error");
+      handleContextMenuClose();
+      return;
+    }
+
+    try {
+      const res = await patchDeckCover(id, coverImageUrl);
+      if (!res.ok) {
+        showToast(language === "zh" ? "设置封面失败" : "Failed to set deck cover", "error");
+        return;
+      }
+      const updated = await res.json();
+      setDeck?.((prev) => prev ? { ...prev, cover_image_url: updated.cover_image_url } : prev);
+      showToast(language === "zh" ? "已设为卡组封面" : "Deck cover updated");
+    } catch {
+      showToast(language === "zh" ? "设置封面失败" : "Failed to set deck cover", "error");
+    } finally {
+      handleContextMenuClose();
+    }
+  };
+
   useEffect(() => {
     const handleClickOutside = () => setContextMenu(null);
     if (contextMenu) {
@@ -254,5 +272,6 @@ export function useDeckBoardInteractions({
     handleMovePanelClose,
     handleContextMenu,
     handleContextMenuMoveOne,
+    handleContextMenuSetCover,
   };
 }

@@ -9,6 +9,7 @@ from .schemas.decks import (
     CreateDeckRequest,
     ImportDeckRequest,
     UpdateCardImageRequest,
+    UpdateDeckCoverRequest,
     UpdateDeckRequest,
 )
 from .services.deck_export_service import (
@@ -31,6 +32,7 @@ from .services.deck_crud_service import (
     list_user_decks,
     remove_owned_deck_card,
     update_owned_deck,
+    update_owned_deck_cover,
     update_owned_deck_card_image,
 )
 from .services.deck_import_service import import_owned_deck
@@ -58,6 +60,11 @@ async def get_deck_endpoint(deck_id: str, user_id: str = Depends(get_current_use
 @deck_router.put("/{deck_id}")
 async def update_deck_endpoint(deck_id: str, req: UpdateDeckRequest, user_id: str = Depends(get_current_user)):
     return await update_owned_deck(deck_id, user_id, req)
+
+
+@deck_router.patch("/{deck_id}/cover")
+async def update_deck_cover_endpoint(deck_id: str, req: UpdateDeckCoverRequest, user_id: str = Depends(get_current_user)):
+    return await update_owned_deck_cover(deck_id, user_id, req)
 
 
 @deck_router.delete("/{deck_id}", status_code=204)

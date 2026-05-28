@@ -39,6 +39,7 @@ export default function DeckDetailPage() {
 
   const {
     deck,
+    setDeck,
     cards,
     setCards,
     loading,
@@ -57,7 +58,6 @@ export default function DeckDetailPage() {
     groupedCards,
     deckAnalysis,
     deckValidation,
-    quantityIncreaseGuards,
     mainboardCount,
     sideboardCount,
   } = useDeckData({ id, navigate, showToast, t, language });
@@ -82,7 +82,7 @@ export default function DeckDetailPage() {
     previewLockedRef,
     cancelPendingSelect,
     schedulePreviewSelect,
-  } = useDeckSelection({ id, cards, setCards, showToast, t });
+  } = useDeckSelection({ id, cards, setCards, showToast, t, language });
 
   const {
     dragOverBoard,
@@ -102,13 +102,14 @@ export default function DeckDetailPage() {
     handleMovePanelClose,
     handleContextMenu,
     handleContextMenuMoveOne,
+    handleContextMenuSetCover,
   } = useDeckBoardInteractions({
     id,
     cards,
     setCards,
     selectedCard,
     setSelectedCard,
-    deckFormat: deck?.format,
+    setDeck,
     language,
     isOwner,
     showToast,
@@ -223,7 +224,6 @@ export default function DeckDetailPage() {
             sideboardCount={sideboardCount}
             selectedCard={selectedCard}
             cardIssuesById={deckValidation.cardIssuesById}
-            quantityIncreaseGuards={quantityIncreaseGuards}
             dragOverBoard={dragOverBoard}
             isOwner={isOwner}
             language={language}
@@ -294,6 +294,7 @@ export default function DeckDetailPage() {
         contextMenu={contextMenu}
         language={language}
         onMoveOne={handleContextMenuMoveOne}
+        onSetCover={handleContextMenuSetCover}
       />
 
       {showMovePanel && touchDragCard && (

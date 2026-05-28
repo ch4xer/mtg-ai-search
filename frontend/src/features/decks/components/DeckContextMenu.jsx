@@ -1,6 +1,6 @@
 import { createPortal } from "react-dom";
 
-export default function DeckContextMenu({ contextMenu, language, onMoveOne }) {
+export default function DeckContextMenu({ contextMenu, language, onMoveOne, onSetCover }) {
   if (!contextMenu) return null;
 
   return createPortal(
@@ -18,6 +18,9 @@ export default function DeckContextMenu({ contextMenu, language, onMoveOne }) {
           {language === "zh" ? "发送一张到主卡组" : "Send 1 to Mainboard"}
         </div>
       )}
+      <div className="context-menu-item" onClick={onSetCover}>
+        {language === "zh" ? "设为卡组封面" : "Set as Deck Cover"}
+      </div>
     </div>,
     document.body
   );

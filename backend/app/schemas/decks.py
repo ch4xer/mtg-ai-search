@@ -11,6 +11,10 @@ class UpdateDeckRequest(BaseModel):
     format: str | None = None
 
 
+class UpdateDeckCoverRequest(BaseModel):
+    cover_image_url: str
+
+
 class AddCardRequest(BaseModel):
     card_id: str
     quantity: int = 1
@@ -29,4 +33,3 @@ class UpdateCardImageRequest(BaseModel):
 
 class ImportDeckRequest(BaseModel):
     text: str
-

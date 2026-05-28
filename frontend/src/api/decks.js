@@ -181,6 +181,14 @@ export async function updateDeck(id, body) {
   return invalidateOnSuccess(response, id);
 }
 
+export async function patchDeckCover(id, coverImageUrl) {
+  const response = await apiFetch(`/api/decks/${id}/cover`, {
+    method: "PATCH",
+    body: { cover_image_url: coverImageUrl },
+  });
+  return invalidateOnSuccess(response, id);
+}
+
 export async function deleteDeck(id) {
   const response = await apiFetch(`/api/decks/${id}`, { method: "DELETE" });
   return invalidateOnSuccess(response, id);

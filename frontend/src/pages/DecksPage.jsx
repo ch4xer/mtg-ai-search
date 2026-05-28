@@ -5,6 +5,52 @@ import { useToast } from "../contexts/ToastContext.jsx";
 import { useLanguage } from "../contexts/LanguageContext.jsx";
 import { FORMATS, getFormatLabel } from "../utils/formats.js";
 
+const DECK_COLOR_OPTIONS = [
+  { value: "W", labelEn: "White", labelZh: "白", symbolClass: "ms ms-w ms-cost" },
+  { value: "U", labelEn: "Blue", labelZh: "蓝", symbolClass: "ms ms-u ms-cost" },
+  { value: "B", labelEn: "Black", labelZh: "黑", symbolClass: "ms ms-b ms-cost" },
+  { value: "R", labelEn: "Red", labelZh: "红", symbolClass: "ms ms-r ms-cost" },
+  { value: "G", labelEn: "Green", labelZh: "绿", symbolClass: "ms ms-g ms-cost" },
+];
+const COLORLESS_OPTION = {
+  labelEn: "Colorless",
+  labelZh: "无色",
+  symbolClass: "ms ms-c ms-cost",
+};
+
+function DeckColorIdentity({ deck, language }) {
+  const colors = new Set(deck.colors || []);
+  const colorOptions = DECK_COLOR_OPTIONS.filter((color) => colors.has(color.value));
+  const hasMainboardCards = (deck.mainboard_card_count ?? deck.card_count ?? 0) > 0;
+
+  if (colorOptions.length === 0 && !hasMainboardCards) return null;
+
+  return (
+    <div className="deck-card-colors" aria-label={language === "zh" ? "卡组颜色" : "Deck colors"}>
+      {colorOptions.length > 0 ? (
+        <span className="deck-card-mana-row">
+          {colorOptions.map((color) => (
+            <i
+              key={color.value}
+              className={color.symbolClass}
+              title={language === "zh" ? color.labelZh : color.labelEn}
+              aria-label={language === "zh" ? color.labelZh : color.labelEn}
+            />
+          ))}
+        </span>
+      ) : hasMainboardCards ? (
+        <span className="deck-card-mana-row">
+          <i
+            className={COLORLESS_OPTION.symbolClass}
+            title={language === "zh" ? COLORLESS_OPTION.labelZh : COLORLESS_OPTION.labelEn}
+            aria-label={language === "zh" ? COLORLESS_OPTION.labelZh : COLORLESS_OPTION.labelEn}
+          />
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
 function DecksPage() {
   const { t, language } = useLanguage();
   const [decks, setDecks] = useState([]);
@@ -131,21 +177,24 @@ function DecksPage() {
           {decks.map((deck) => (
             <div
               key={deck.id}
-              className="deck-card"
+              className={`deck-card ${deck.cover_image_url ? "has-cover" : ""}`}
+              style={deck.cover_image_url ? { "--deck-cover-image": `url("${deck.cover_image_url}")` } : undefined}
               onClick={() => navigate(`/decks/${deck.id}`)}
             >
-              <div className="deck-card-header">
+              <div className="deck-card-main">
                 <h3 className="deck-card-name">{deck.name}</h3>
-                <span
-                  className={`format-badge format-${deck.format || "undefined"}`}
-                >
-                  {getFormatLabel(deck.format, language)}
-                </span>
+                {deck.format && deck.format !== "undefined" && (
+                  <span
+                    className={`deck-card-format format-badge format-${deck.format}`}
+                  >
+                    {getFormatLabel(deck.format, language)}
+                  </span>
+                )}
               </div>
-              <p className="deck-card-count">{deck.card_count || 0} {language === 'zh' ? '张卡牌' : 'cards'}</p>
-              <p className="deck-card-date">
-                {new Date(deck.created_at).toLocaleDateString(language === 'zh' ? "zh-CN" : "en-US")}
-              </p>
+              <div className="deck-card-footer">
+                <DeckColorIdentity deck={deck} language={language} />
+                <p className="deck-card-count">{deck.card_count || 0} {language === 'zh' ? '张卡牌' : 'cards'}</p>
+              </div>
             </div>
           ))}
         </div>
