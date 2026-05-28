@@ -2,13 +2,19 @@
 
 import logging
 
+from ..config import get_tag_bootstrap_config
 from ..maintenance import (
     full_reseed,
     incremental_sync,
 )
 from .keyword_sync_service import sync_abilities_incremental
-from .tag_search_service import sync_function_tag_card_links
+from .mtgch_service import sync_mtgch_translations
 from .admin_task_state import TaskStatus, set_task_state
+from .tag_search_service import (
+    build_tag_expansion_cache,
+    generate_missing_tag_embeddings,
+    sync_function_tag_card_links,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +69,77 @@ async def run_sync_function_tags(only_failed: bool = False, limit: int | None = 
     except Exception as exc:
         logger.exception("[tag_sync] Failed")
         set_task_state("tag_sync", TaskStatus.ERROR, f"失败: {exc}")
+
+
+async def run_generate_tag_embeddings():
+    try:
+        config = get_tag_bootstrap_config()
+        generated = 0
+        embedded = 0
+        failed_batches = 0
+
+        while True:
+            set_task_state("tag_embeddings", TaskStatus.RUNNING, "正在生成 function tag 语义扩展文本...")
+            expansion_result = await build_tag_expansion_cache(
+                limit=config["expansion_batch_size"],
+                batch_size=config["expansion_batch_size"],
+                sample_size=config["sample_size"],
+                scryfall_delay_seconds=config["scryfall_delay_seconds"],
+                print_embedding_text=config["print_embedding_text"],
+            )
+            generated += int(expansion_result.get("generated") or 0)
+            failed_batches += int(expansion_result.get("failed_batches") or 0)
+            if int(expansion_result.get("generated") or 0) == 0:
+                break
+
+        while True:
+            set_task_state("tag_embeddings", TaskStatus.RUNNING, "正在生成缺失的 function tag embeddings...")
+            embedding_result = await generate_missing_tag_embeddings(
+                limit=config["embedding_batch_size"],
+                batch_size=config["embedding_batch_size"],
+                print_embedding_text=config["print_embedding_text"],
+            )
+            embedded += int(embedding_result.get("processed") or 0)
+            failed_batches += int(embedding_result.get("failed_batches") or 0)
+            if int(embedding_result.get("processed") or 0) == 0:
+                break
+
+        suffix = f"，失败批次 {failed_batches}" if failed_batches else ""
+        set_task_state(
+            "tag_embeddings",
+            TaskStatus.DONE,
+            f"完成！生成 {generated} 个 tag 语义扩展，写入 {embedded} 个 embeddings{suffix}",
+        )
+    except Exception as exc:
+        logger.exception("[tag_embeddings] Failed")
+        set_task_state("tag_embeddings", TaskStatus.ERROR, f"失败: {exc}")
+
+
+async def run_sync_card_translations():
+    try:
+        result = await sync_mtgch_translations(
+            status_callback=lambda msg: set_task_state("card_translations", TaskStatus.RUNNING, msg),
+        )
+        if result["skipped"]:
+            set_task_state("card_translations", TaskStatus.DONE, "中文卡牌信息同步已关闭")
+            return
+
+        synced = result["synced"]
+        empty = result["empty"]
+        not_found = result["not_found"]
+        failed = result["failed"]
+        suffix = []
+        if empty:
+            suffix.append(f"无中文信息 {empty} 张")
+        if not_found:
+            suffix.append(f"未找到 {not_found} 张")
+        if failed:
+            suffix.append(f"失败 {failed} 张")
+        detail = f"，{'，'.join(suffix)}" if suffix else ""
+        set_task_state("card_translations", TaskStatus.DONE, f"完成！补全中文信息 {synced} 张{detail}")
+    except Exception as exc:
+        logger.exception("[card_translations] Failed")
+        set_task_state("card_translations", TaskStatus.ERROR, f"失败: {exc}")
 
 
 async def run_sync(force: bool = False):

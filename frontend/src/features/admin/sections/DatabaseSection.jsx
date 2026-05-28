@@ -30,6 +30,8 @@ export default function DatabaseSection() {
 
   const handleSyncAbilities = () => runAction("/api/admin/sync-abilities", t("adminTaskAbilitiesIncrementalStarted"));
   const handleSyncFunctionTags = () => runAction("/api/admin/sync-function-tags", t("adminTaskFunctionTagsStarted"));
+  const handleTagEmbeddings = () => runAction("/api/admin/tag-embeddings", t("adminTaskTagEmbeddingsStarted"));
+  const handleCardTranslations = () => runAction("/api/admin/sync-card-translations", t("adminTaskCardTranslationsStarted"));
   const handleSync = () => runAction("/api/admin/sync", t("adminSyncStartedManual"));
   const handleForceSync = () => runAction("/api/admin/sync?force=true", t("adminSyncStartedForce"));
   const handleExportCards = async () => {
@@ -84,6 +86,22 @@ export default function DatabaseSection() {
           disabled={anyRunning}
           onRun={handleSyncFunctionTags}
           btnText={t("adminTaskFunctionTagsBtn")}
+        />
+        <TaskCard
+          title={t("adminTaskTagEmbeddingsTitle")}
+          desc={t("adminTaskTagEmbeddingsDesc")}
+          status={taskStatus.tag_embeddings}
+          disabled={anyRunning}
+          onRun={handleTagEmbeddings}
+          btnText={t("adminTaskTagEmbeddingsBtn")}
+        />
+        <TaskCard
+          title={t("adminTaskCardTranslationsTitle")}
+          desc={t("adminTaskCardTranslationsDesc")}
+          status={taskStatus.card_translations}
+          disabled={anyRunning}
+          onRun={handleCardTranslations}
+          btnText={t("adminTaskCardTranslationsBtn")}
         />
         <TaskCard
           title={t("adminCardExportTitle")}

@@ -5,6 +5,8 @@ const DEFAULT_TASK_STATUS = {
   reseed: { status: "idle" },
   seed_abilities: { status: "idle" },
   tag_sync: { status: "idle" },
+  tag_embeddings: { status: "idle" },
+  card_translations: { status: "idle" },
 };
 
 export function useAdminTaskPolling() {

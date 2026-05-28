@@ -17,6 +17,8 @@ _task_state: dict = {
     "reseed": {"status": TaskStatus.IDLE, "message": "", "started_at": None},
     "seed_abilities": {"status": TaskStatus.IDLE, "message": "", "started_at": None},
     "tag_sync": {"status": TaskStatus.IDLE, "message": "", "started_at": None},
+    "tag_embeddings": {"status": TaskStatus.IDLE, "message": "", "started_at": None},
+    "card_translations": {"status": TaskStatus.IDLE, "message": "", "started_at": None},
 }
 
 

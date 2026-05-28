@@ -14,8 +14,10 @@ from .services.admin_stats_service import get_admin_stats
 from .services.admin_task_service import (
     get_task_status,
     list_sync_logs,
+    start_generate_tag_embeddings,
     start_reseed,
     start_sync,
+    start_sync_card_translations,
     start_sync_abilities,
     start_sync_function_tags,
 )
@@ -71,6 +73,16 @@ async def admin_sync_function_tags(
     _: str = Depends(require_admin),
 ):
     return await start_sync_function_tags(only_failed=only_failed, limit=limit)
+
+
+@admin_router.post("/tag-embeddings")
+async def admin_generate_tag_embeddings(_: str = Depends(require_admin)):
+    return await start_generate_tag_embeddings()
+
+
+@admin_router.post("/sync-card-translations")
+async def admin_sync_card_translations(_: str = Depends(require_admin)):
+    return await start_sync_card_translations()
 
 
 @admin_router.get("/sync-logs")
