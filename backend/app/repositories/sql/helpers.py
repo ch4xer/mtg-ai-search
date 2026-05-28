@@ -10,7 +10,6 @@ _MAIN_TYPES = [
     "Land",
     "Planeswalker",
     "Battle",
-    "Kindred",
 ]
 
 # Operators allowed in condition expressions like ">5", ">=2020-01-01"
@@ -61,6 +60,7 @@ def _serialize_deck_row(row) -> dict:
         "id": str(row["id"]),
         "name": row["name"],
         "format": row["format"],
+        "cover_image_url": row["cover_image_url"] if "cover_image_url" in row.keys() else None,
         "created_at": row["created_at"].isoformat(),
     }
 
@@ -82,8 +82,10 @@ def _serialize_deck_summary_row(row) -> dict:
         "name": row["name"],
         "format": row["format"],
         "card_count": int(row["card_count"]),
+        "mainboard_card_count": int(row["mainboard_card_count"]),
+        "colors": row["colors"] or [],
+        "cover_image_url": row["cover_image_url"],
         "created_at": row["created_at"].isoformat(),
         "updated_at": row["updated_at"].isoformat(),
         "analysis": _serialize_analysis(row),
     }
-

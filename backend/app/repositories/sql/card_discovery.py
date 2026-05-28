@@ -67,7 +67,7 @@ async def _count_discovery_results(pool, where: str, params: list, need_rarity_j
             *params,
         )
     return await pool.fetchval(
-        f"SELECT COUNT(*) FROM (SELECT DISTINCT ON (name) id FROM cards WHERE {where} ORDER BY name) sub",
+        f"SELECT COUNT(*) FROM (SELECT DISTINCT ON (c.name) c.id FROM cards c WHERE {where} ORDER BY c.name) sub",
         *params,
     )
 
@@ -98,9 +98,9 @@ async def _fetch_discovery_page(pool, filter_spec, page: int, page_size: int):
     return await pool.fetch(
         f"""SELECT {CARD_RESULT_COLUMNS}
             FROM (
-              SELECT DISTINCT ON (name) id, name
-              FROM cards WHERE {filter_spec.where}
-              ORDER BY name
+              SELECT DISTINCT ON (c.name) c.id, c.name
+              FROM cards c WHERE {filter_spec.where}
+              ORDER BY c.name
             ) sub
             JOIN cards c ON c.id = sub.id
             {DEFAULT_PRINT_JOIN}

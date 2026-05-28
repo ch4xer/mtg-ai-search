@@ -24,12 +24,12 @@ async def get_discovery_facets(pool, where: str, params: list, need_rarity_join:
 async def _get_color_facets(pool, where: str, params: list, need_rarity_join: bool) -> dict:
     if need_rarity_join:
         rows = await pool.fetch(
-            f"SELECT c AS val, COUNT(*) AS cnt FROM cards c LEFT JOIN card_prints cp ON cp.card_id = c.id, unnest(colors) AS c WHERE {where} GROUP BY c ORDER BY cnt DESC",
+            f"SELECT color_val AS val, COUNT(*) AS cnt FROM cards c LEFT JOIN card_prints cp ON cp.card_id = c.id, unnest(c.colors) AS color_val WHERE {where} GROUP BY color_val ORDER BY cnt DESC",
             *params,
         )
     else:
         rows = await pool.fetch(
-            f"SELECT c AS val, COUNT(*) AS cnt FROM cards, unnest(colors) AS c WHERE {where} GROUP BY c ORDER BY cnt DESC",
+            f"SELECT color_val AS val, COUNT(*) AS cnt FROM cards c, unnest(c.colors) AS color_val WHERE {where} GROUP BY color_val ORDER BY cnt DESC",
             *params,
         )
     return {r["val"]: int(r["cnt"]) for r in rows}
@@ -45,7 +45,7 @@ async def _get_rarity_facets(pool, where: str, params: list) -> dict:
 
 async def _get_type_facets(pool, where: str, params: list, need_rarity_join: bool) -> dict:
     type_cases = ", ".join(
-        f"COUNT(*) FILTER (WHERE type_line ILIKE '%%{card_type}%%') AS \"{card_type}\""
+        f"COUNT(*) FILTER (WHERE c.type_line ILIKE '%%{card_type}%%') AS \"{card_type}\""
         for card_type in _MAIN_TYPES
     )
     if need_rarity_join:
@@ -54,19 +54,19 @@ async def _get_type_facets(pool, where: str, params: list, need_rarity_join: boo
             *params,
         )
     else:
-        row = await pool.fetchrow(f"SELECT {type_cases} FROM cards WHERE {where}", *params)
+        row = await pool.fetchrow(f"SELECT {type_cases} FROM cards c WHERE {where}", *params)
     return {card_type: int(row[card_type]) for card_type in _MAIN_TYPES if row[card_type]}
 
 
 async def _get_keyword_facets(pool, where: str, params: list, need_rarity_join: bool) -> list[dict]:
     if need_rarity_join:
         rows = await pool.fetch(
-            f"SELECT k AS val, COUNT(*) AS cnt FROM cards c LEFT JOIN card_prints cp ON cp.card_id = c.id, unnest(keywords) AS k WHERE {where} GROUP BY k ORDER BY cnt DESC LIMIT 30",
+            f"SELECT k AS val, COUNT(*) AS cnt FROM cards c LEFT JOIN card_prints cp ON cp.card_id = c.id, unnest(c.keywords) AS k WHERE {where} GROUP BY k ORDER BY cnt DESC LIMIT 30",
             *params,
         )
     else:
         rows = await pool.fetch(
-            f"SELECT k AS val, COUNT(*) AS cnt FROM cards, unnest(keywords) AS k WHERE {where} GROUP BY k ORDER BY cnt DESC LIMIT 30",
+            f"SELECT k AS val, COUNT(*) AS cnt FROM cards c, unnest(c.keywords) AS k WHERE {where} GROUP BY k ORDER BY cnt DESC LIMIT 30",
             *params,
         )
     return [{"name": r["val"], "count": int(r["cnt"])} for r in rows]
@@ -78,10 +78,10 @@ async def _get_subtype_facets(pool, where: str, params: list, need_rarity_join: 
             f"""SELECT s AS val, COUNT(*) AS cnt
                 FROM (
                     SELECT unnest(string_to_array(
-                        trim(split_part(type_line, '\u2014', 2)), ' '
+                        trim(split_part(c.type_line, '\u2014', 2)), ' '
                     )) AS s
                     FROM cards c LEFT JOIN card_prints cp ON cp.card_id = c.id
-                    WHERE {where} AND type_line LIKE '%%\u2014%%'
+                    WHERE {where} AND c.type_line LIKE '%%\u2014%%'
                 ) sub
                 WHERE s != ''
                 GROUP BY s ORDER BY cnt DESC LIMIT 40""",
@@ -92,10 +92,10 @@ async def _get_subtype_facets(pool, where: str, params: list, need_rarity_join: 
             f"""SELECT s AS val, COUNT(*) AS cnt
                 FROM (
                     SELECT unnest(string_to_array(
-                        trim(split_part(type_line, '\u2014', 2)), ' '
+                        trim(split_part(c.type_line, '\u2014', 2)), ' '
                     )) AS s
-                    FROM cards
-                    WHERE {where} AND type_line LIKE '%%\u2014%%'
+                    FROM cards c
+                    WHERE {where} AND c.type_line LIKE '%%\u2014%%'
                 ) sub
                 WHERE s != ''
                 GROUP BY s ORDER BY cnt DESC LIMIT 40""",
@@ -108,23 +108,23 @@ async def _get_range_facets(pool, where: str, params: list, need_rarity_join: bo
     if need_rarity_join:
         row = await pool.fetchrow(
             f"""SELECT
-                    MIN(cmc) AS cmc_min, MAX(cmc) AS cmc_max,
-                    MIN(CAST(power AS real)) FILTER (WHERE power ~ '^[0-9]+\\.?[0-9]*$') AS power_min,
-                    MAX(CAST(power AS real)) FILTER (WHERE power ~ '^[0-9]+\\.?[0-9]*$') AS power_max,
-                    MIN(CAST(toughness AS real)) FILTER (WHERE toughness ~ '^[0-9]+\\.?[0-9]*$') AS toughness_min,
-                    MAX(CAST(toughness AS real)) FILTER (WHERE toughness ~ '^[0-9]+\\.?[0-9]*$') AS toughness_max
+                    MIN(c.cmc) AS cmc_min, MAX(c.cmc) AS cmc_max,
+                    MIN(CAST(c.power AS real)) FILTER (WHERE c.power ~ '^[0-9]+\\.?[0-9]*$') AS power_min,
+                    MAX(CAST(c.power AS real)) FILTER (WHERE c.power ~ '^[0-9]+\\.?[0-9]*$') AS power_max,
+                    MIN(CAST(c.toughness AS real)) FILTER (WHERE c.toughness ~ '^[0-9]+\\.?[0-9]*$') AS toughness_min,
+                    MAX(CAST(c.toughness AS real)) FILTER (WHERE c.toughness ~ '^[0-9]+\\.?[0-9]*$') AS toughness_max
                 FROM cards c LEFT JOIN card_prints cp ON cp.card_id = c.id WHERE {where}""",
             *params,
         )
     else:
         row = await pool.fetchrow(
             f"""SELECT
-                    MIN(cmc) AS cmc_min, MAX(cmc) AS cmc_max,
-                    MIN(CAST(power AS real)) FILTER (WHERE power ~ '^[0-9]+\\.?[0-9]*$') AS power_min,
-                    MAX(CAST(power AS real)) FILTER (WHERE power ~ '^[0-9]+\\.?[0-9]*$') AS power_max,
-                    MIN(CAST(toughness AS real)) FILTER (WHERE toughness ~ '^[0-9]+\\.?[0-9]*$') AS toughness_min,
-                    MAX(CAST(toughness AS real)) FILTER (WHERE toughness ~ '^[0-9]+\\.?[0-9]*$') AS toughness_max
-                FROM cards WHERE {where}""",
+                    MIN(c.cmc) AS cmc_min, MAX(c.cmc) AS cmc_max,
+                    MIN(CAST(c.power AS real)) FILTER (WHERE c.power ~ '^[0-9]+\\.?[0-9]*$') AS power_min,
+                    MAX(CAST(c.power AS real)) FILTER (WHERE c.power ~ '^[0-9]+\\.?[0-9]*$') AS power_max,
+                    MIN(CAST(c.toughness AS real)) FILTER (WHERE c.toughness ~ '^[0-9]+\\.?[0-9]*$') AS toughness_min,
+                    MAX(CAST(c.toughness AS real)) FILTER (WHERE c.toughness ~ '^[0-9]+\\.?[0-9]*$') AS toughness_max
+                FROM cards c WHERE {where}""",
             *params,
         )
 
@@ -142,4 +142,3 @@ async def _get_range_facets(pool, where: str, params: list, need_rarity_join: bo
             "max": float(row["toughness_max"]) if row["toughness_max"] is not None else 0,
         },
     }
-

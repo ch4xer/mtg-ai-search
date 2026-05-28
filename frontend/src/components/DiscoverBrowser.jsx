@@ -14,12 +14,12 @@ const COLOR_OPTIONS = [
 
 const TYPE_OPTIONS_EN = [
   "Creature", "Instant", "Sorcery", "Enchantment",
-  "Artifact", "Land", "Planeswalker", "Battle", "Kindred",
+  "Artifact", "Land", "Planeswalker", "Battle",
 ];
 
 const TYPE_OPTIONS_ZH = [
   "生物", "瞬间", "法术", "结界",
-  "神器", "地", "鹏洛客", "战斗", "族类",
+  "神器", "地", "鹏洛客", "战斗",
 ];
 
 const RARITY_OPTIONS_EN = [
@@ -111,7 +111,7 @@ function DiscoverBrowser({ imageMode, onToggleImageMode, enabled = true }) {
     hasFilters,
     activeFilterCount,
     totalPages,
-  } = useDiscoverCards({ enabled });
+  } = useDiscoverCards({ enabled, includeZh: language === "zh" });
 
   const TYPE_OPTIONS = language === 'zh' ? TYPE_OPTIONS_ZH : TYPE_OPTIONS_EN;
   const RARITY_OPTIONS = language === 'zh' ? RARITY_OPTIONS_ZH : RARITY_OPTIONS_EN;
