@@ -39,11 +39,13 @@ CREATE TABLE IF NOT EXISTS decks (
     user_id    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     name       TEXT NOT NULL,
     format     TEXT NOT NULL DEFAULT 'undefined',
+    cover_image_url TEXT,
     analysis_data JSONB,
     analysis_updated_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ DEFAULT now(),
     updated_at TIMESTAMPTZ DEFAULT now()
 );
+ALTER TABLE decks ADD COLUMN IF NOT EXISTS cover_image_url TEXT;
 
 CREATE TABLE IF NOT EXISTS search_logs (
     id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -53,6 +55,16 @@ CREATE TABLE IF NOT EXISTS search_logs (
     tokens_completion INT NOT NULL DEFAULT 0,
     ip_address    TEXT,
     created_at    TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS ai_search_sessions (
+    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id       UUID REFERENCES users(id) ON DELETE CASCADE,
+    query         TEXT NOT NULL,
+    plan          JSONB NOT NULL,
+    ip_address    TEXT,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    expires_at    TIMESTAMPTZ NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS app_meta (
@@ -138,6 +150,8 @@ CREATE INDEX IF NOT EXISTS idx_decks_user_id ON decks(user_id);
 CREATE INDEX IF NOT EXISTS idx_search_logs_user_id ON search_logs(user_id);
 CREATE INDEX IF NOT EXISTS idx_search_logs_created_at ON search_logs(created_at);
 CREATE INDEX IF NOT EXISTS idx_search_logs_ip_address ON search_logs(ip_address);
+CREATE INDEX IF NOT EXISTS idx_ai_search_sessions_user_id ON ai_search_sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_ai_search_sessions_expires_at ON ai_search_sessions(expires_at);
 """
 
 # Tables that depend on cards(id) existing. Run after seeding.
@@ -155,6 +169,25 @@ CREATE TABLE IF NOT EXISTS card_effects (
 CREATE INDEX IF NOT EXISTS idx_card_effects_card_id ON card_effects(card_id);
 ALTER TABLE card_prints DROP CONSTRAINT IF EXISTS card_prints_card_id_set_code_collector_num_key;
 CREATE INDEX IF NOT EXISTS idx_cards_is_unofficial ON cards(is_unofficial);
+
+CREATE TABLE IF NOT EXISTS card_print_translations (
+    print_id    TEXT PRIMARY KEY REFERENCES card_prints(id) ON DELETE CASCADE,
+    card_id     TEXT NOT NULL REFERENCES cards(id) ON DELETE CASCADE,
+    lang        TEXT NOT NULL DEFAULT 'zhs',
+    source      TEXT NOT NULL DEFAULT 'mtgch',
+    status      TEXT NOT NULL DEFAULT 'ok',
+    name        TEXT,
+    type_line   TEXT,
+    oracle_text TEXT,
+    flavor_text TEXT,
+    set_name    TEXT,
+    card_faces  JSONB,
+    synced_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_error  TEXT NOT NULL DEFAULT ''
+);
+ALTER TABLE card_print_translations DROP COLUMN IF EXISTS image_uris;
+CREATE INDEX IF NOT EXISTS idx_card_print_translations_card_id ON card_print_translations(card_id);
+CREATE INDEX IF NOT EXISTS idx_card_print_translations_status ON card_print_translations(status);
 
 CREATE TABLE IF NOT EXISTS card_tagger_tags (
     tag_type           TEXT NOT NULL CHECK (tag_type IN ('art', 'function')),

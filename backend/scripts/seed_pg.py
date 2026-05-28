@@ -108,6 +108,24 @@ def create_schema(conn):
             )
         """)
         cur.execute("ALTER TABLE card_prints DROP CONSTRAINT IF EXISTS card_prints_card_id_set_code_collector_num_key")
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS card_print_translations (
+                print_id    TEXT PRIMARY KEY REFERENCES card_prints(id) ON DELETE CASCADE,
+                card_id     TEXT NOT NULL REFERENCES cards(id) ON DELETE CASCADE,
+                lang        TEXT NOT NULL DEFAULT 'zhs',
+                source      TEXT NOT NULL DEFAULT 'mtgch',
+                status      TEXT NOT NULL DEFAULT 'ok',
+                name        TEXT,
+                type_line   TEXT,
+                oracle_text TEXT,
+                flavor_text TEXT,
+                set_name    TEXT,
+                card_faces  JSONB,
+                synced_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+                last_error  TEXT NOT NULL DEFAULT ''
+            )
+        """)
+        cur.execute("ALTER TABLE card_print_translations DROP COLUMN IF EXISTS image_uris")
 
         cur.execute("""
             CREATE TABLE IF NOT EXISTS keyword_abilities (
@@ -214,12 +232,14 @@ def create_schema(conn):
                 user_id              UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
                 name                 TEXT NOT NULL,
                 format               TEXT NOT NULL DEFAULT 'undefined',
+                cover_image_url      TEXT,
                 analysis_data        JSONB,
                 analysis_updated_at  TIMESTAMPTZ,
                 created_at           TIMESTAMPTZ DEFAULT now(),
                 updated_at           TIMESTAMPTZ DEFAULT now()
             )
         """)
+        cur.execute("ALTER TABLE decks ADD COLUMN IF NOT EXISTS cover_image_url TEXT")
         cur.execute("""
             CREATE TABLE IF NOT EXISTS deck_cards (
                 id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -243,6 +263,17 @@ def create_schema(conn):
                 tokens_completion INT NOT NULL DEFAULT 0,
                 ip_address    TEXT,
                 created_at    TIMESTAMPTZ DEFAULT now()
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS ai_search_sessions (
+                id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                user_id       UUID REFERENCES users(id) ON DELETE CASCADE,
+                query         TEXT NOT NULL,
+                plan          JSONB NOT NULL,
+                ip_address    TEXT,
+                created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+                expires_at    TIMESTAMPTZ NOT NULL
             )
         """)
         cur.execute("""
@@ -271,6 +302,8 @@ def create_schema(conn):
         cur.execute("CREATE INDEX IF NOT EXISTS idx_search_logs_user_id ON search_logs(user_id)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_search_logs_created_at ON search_logs(created_at)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_search_logs_ip_address ON search_logs(ip_address)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_ai_search_sessions_user_id ON ai_search_sessions(user_id)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_ai_search_sessions_expires_at ON ai_search_sessions(expires_at)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_cards_name ON cards(name)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_cards_cmc ON cards(cmc)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_cards_colors ON cards USING GIN(colors)")
@@ -286,6 +319,8 @@ def create_schema(conn):
         cur.execute("CREATE INDEX IF NOT EXISTS idx_card_prints_set_code ON card_prints(set_code)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_card_prints_lookup ON card_prints(card_id, set_code, collector_num)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_card_prints_flavor_name ON card_prints(flavor_name)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_card_print_translations_card_id ON card_print_translations(card_id)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_card_print_translations_status ON card_print_translations(status)")
     conn.commit()
     log("Schema created.")
 
