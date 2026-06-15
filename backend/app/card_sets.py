@@ -58,7 +58,7 @@ def is_unofficial_print(card: dict[str, Any]) -> bool:
     border_color = _lower(card.get("border_color"))
 
     return (
-        set_type in {"funny", "minigame"}
+        set_type == "funny"
         or security_stamp == "acorn"
         or border_color == "silver"
         or set_code in UNOFFICIAL_SET_CODES

@@ -13,13 +13,25 @@ const COLOR_OPTIONS = [
 ];
 
 const TYPE_OPTIONS_EN = [
-  "Creature", "Instant", "Sorcery", "Enchantment",
-  "Artifact", "Land", "Planeswalker", "Battle",
+  { value: "Creature", label: "Creature" },
+  { value: "Instant", label: "Instant" },
+  { value: "Sorcery", label: "Sorcery" },
+  { value: "Enchantment", label: "Enchantment" },
+  { value: "Artifact", label: "Artifact" },
+  { value: "Land", label: "Land" },
+  { value: "Planeswalker", label: "Planeswalker" },
+  { value: "Battle", label: "Battle" },
 ];
 
 const TYPE_OPTIONS_ZH = [
-  "生物", "瞬间", "法术", "结界",
-  "神器", "地", "鹏洛客", "战斗",
+  { value: "Creature", label: "生物" },
+  { value: "Instant", label: "瞬间" },
+  { value: "Sorcery", label: "法术" },
+  { value: "Enchantment", label: "结界" },
+  { value: "Artifact", label: "神器" },
+  { value: "Land", label: "地" },
+  { value: "Planeswalker", label: "鹏洛客" },
+  { value: "Battle", label: "战斗" },
 ];
 
 const RARITY_OPTIONS_EN = [
@@ -244,7 +256,7 @@ function DiscoverBrowser({ imageMode, onToggleImageMode, enabled = true }) {
               onChange={(e) => {
                 if (e.target.value) {
                   setTypes(new Set([e.target.value]));
-                  if (e.target.value !== "Creature" && e.target.value !== "生物") {
+                  if (e.target.value !== "Creature") {
                     setSelectedSubtypes(new Set());
                     setSubtypeSearch("");
                   }
@@ -256,8 +268,8 @@ function DiscoverBrowser({ imageMode, onToggleImageMode, enabled = true }) {
               }}
             >
               <option value="">{t('any')}</option>
-              {TYPE_OPTIONS.map((t) => (
-                <option key={t} value={t}>{t}</option>
+              {TYPE_OPTIONS.map((type) => (
+                <option key={type.value} value={type.value}>{type.label}</option>
               ))}
             </select>
           </div>

@@ -216,19 +216,6 @@ CREATE TABLE IF NOT EXISTS tag_card_sync_state (
 );
 CREATE INDEX IF NOT EXISTS idx_tag_card_sync_state_status ON tag_card_sync_state(status);
 
-UPDATE cards c
-SET is_unofficial = TRUE
-WHERE EXISTS (
-    SELECT 1 FROM card_prints cp
-    WHERE cp.card_id = c.id
-      AND cp.set_type = 'minigame'
-)
-AND NOT EXISTS (
-    SELECT 1 FROM card_prints cp
-    WHERE cp.card_id = c.id
-      AND cp.set_type IS DISTINCT FROM 'minigame'
-);
-
 CREATE TABLE IF NOT EXISTS deck_cards (
     id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     deck_id    UUID NOT NULL REFERENCES decks(id) ON DELETE CASCADE,

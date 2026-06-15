@@ -340,8 +340,7 @@ def insert_cards_and_prints(conn, chunk_size: int = 5000, batch_size: int = 1000
     for chunk in stream_cards(chunk_size=chunk_size):
         valid_prints = [
             p for p in chunk
-            if p.get("layout") not in ("token", "emblem", "art_series")
-            and p.get("set_type") != "minigame"
+            if p.get("layout") not in ("emblem", "art_series")
             and p.get("lang") == "en"
             and p.get("oracle_id")
         ]
@@ -374,8 +373,7 @@ def insert_cards_and_prints(conn, chunk_size: int = 5000, batch_size: int = 1000
     for chunk in stream_cards(chunk_size=chunk_size):
         valid_prints = [
             p for p in chunk
-            if p.get("layout") not in ("token", "emblem", "art_series")
-            and p.get("set_type") != "minigame"
+            if p.get("layout") not in ("emblem", "art_series")
             and p.get("lang") == "en"
             and p.get("oracle_id")
         ]

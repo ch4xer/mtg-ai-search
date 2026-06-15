@@ -23,19 +23,6 @@ def build_pdf(unique_data: list[bytes | None], slot_url_index: list[int]) -> io.
     x_offset = (page_w - grid_w) / 2
     y_offset = (page_h - grid_h) / 2
 
-    def draw_cut_guides(c):
-        c.saveState()
-        c.setStrokeColorRGB(0.3, 0.3, 0.3)
-        c.setLineWidth(0.5)
-        c.setDash(4, 4)
-        for col in range(1, COLS):
-            gx = x_offset + col * CARD_W
-            c.line(gx, 0, gx, page_h)
-        for row in range(1, ROWS):
-            gy = page_h - y_offset - row * CARD_H
-            c.line(0, gy, page_w, gy)
-        c.restoreState()
-
     readers: dict[int, ImageReader] = {}
     for i, data in enumerate(unique_data):
         if data is None:
@@ -58,7 +45,6 @@ def build_pdf(unique_data: list[bytes | None], slot_url_index: list[int]) -> io.
             continue
         pos = slot_index % CARDS_PER_PAGE
         if pos == 0 and slot_index > 0:
-            draw_cut_guides(c)
             c.showPage()
         col = pos % COLS
         row = pos // COLS
@@ -67,8 +53,6 @@ def build_pdf(unique_data: list[bytes | None], slot_url_index: list[int]) -> io.
         c.drawImage(readers[uid], x, y, width=CARD_W, height=CARD_H, preserveAspectRatio=True)
         slot_index += 1
 
-    draw_cut_guides(c)
     c.save()
     buf.seek(0)
     return buf
-

@@ -26,7 +26,7 @@ MTG AI Search 是一个面向万智牌玩家的卡牌搜索与卡组管理系统
 
 ### 3.1 Scryfall
 
-系统的英文卡牌数据来自 Scryfall `all_cards` bulk data。导入时只保留英文印刷版本，即 `lang == "en"`，并排除 token、emblem、art series、minigame 等不作为普通卡牌搜索结果的对象。
+系统的英文卡牌数据来自 Scryfall `all_cards` bulk data。导入时只保留英文印刷版本，即 `lang == "en"`，并排除 emblem、art series 等不作为普通卡牌搜索结果的对象。Token 和 minigame 对象允许进入卡牌库并可在搜索结果中展示。
 
 系统需要保存：
 

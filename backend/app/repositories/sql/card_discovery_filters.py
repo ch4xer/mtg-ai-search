@@ -47,11 +47,20 @@ def build_discovery_filter(
                           AND zt.lang = 'zhs'
                           AND zt.status = 'ok'
                           AND (
-	                              zt.name ILIKE ${idx}
-	                              OR zt.type_line ILIKE ${idx}
-	                              OR zt.oracle_text ILIKE ${idx}
-	                          )
-	                    )"""
+                              zt.name ILIKE ${idx}
+                              OR zt.type_line ILIKE ${idx}
+                              OR zt.oracle_text ILIKE ${idx}
+                              OR zt.set_name ILIKE ${idx}
+                              OR EXISTS (
+                                  SELECT 1
+                                  FROM jsonb_array_elements(COALESCE(zt.card_faces, '[]'::jsonb)) AS face(value)
+                                  WHERE face.value ->> 'name' ILIKE ${idx}
+                                     OR face.value ->> 'type_line' ILIKE ${idx}
+                                     OR face.value ->> 'oracle_text' ILIKE ${idx}
+                                     OR face.value ->> 'set_name' ILIKE ${idx}
+                              )
+                          )
+                    )"""
                 )
             else:
                 clauses.append(f"(c.name ILIKE ${idx} OR c.type_line ILIKE ${idx} OR c.oracle_text ILIKE ${idx})")
