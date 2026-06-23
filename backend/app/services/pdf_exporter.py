@@ -23,6 +23,12 @@ def build_pdf(unique_data: list[bytes | None], slot_url_index: list[int]) -> io.
     x_offset = (page_w - grid_w) / 2
     y_offset = (page_h - grid_h) / 2
 
+    def draw_card_background(c, x: float, y: float):
+        c.saveState()
+        c.setFillColorRGB(0, 0, 0)
+        c.rect(x, y, CARD_W, CARD_H, stroke=0, fill=1)
+        c.restoreState()
+
     readers: dict[int, ImageReader] = {}
     for i, data in enumerate(unique_data):
         if data is None:
@@ -50,6 +56,7 @@ def build_pdf(unique_data: list[bytes | None], slot_url_index: list[int]) -> io.
         row = pos // COLS
         x = x_offset + col * (CARD_W + FIX_W)
         y = page_h - y_offset - (row + 1) * CARD_H - row * FIX_H
+        draw_card_background(c, x, y)
         c.drawImage(readers[uid], x, y, width=CARD_W, height=CARD_H, preserveAspectRatio=True)
         slot_index += 1
 
