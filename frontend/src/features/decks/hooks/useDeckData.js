@@ -25,7 +25,7 @@ export function useDeckData({ id, navigate, showToast, t, language }) {
     try {
       const [deckData, deckCards] = await Promise.all([
         fetchSharedDeckData(id),
-        fetchSharedDeckCardsData(id),
+        fetchSharedDeckCardsData(id, { force: true }),
       ]);
       setDeck(deckData);
       setEditName(deckData.name);

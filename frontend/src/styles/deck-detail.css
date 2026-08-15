@@ -828,10 +828,45 @@
   to { transform: translateY(0); }
 }
 
-@media (max-width: 1100px) {
+@media (max-width: 1200px) {
   .deck-body {
     flex-wrap: wrap;
   }
+
+  /* Stats move below, preview + board stay side-by-side */
+  .deck-preview-panel {
+    order: 0;
+  }
+  .deck-mainboard-section {
+    flex: 1 1 0;
+    order: 0;
+  }
+
+  /* Cap deck columns at 2 so width surge doesn't jump back to 3 */
+  .deck-groups {
+    columns: 2 220px;
+  }
+  .deck-sideboard-groups {
+    columns: 2 200px;
+  }
+
+  .deck-analysis {
+    position: static;
+    width: 100%;
+    min-width: 0;
+    flex: 1 1 100%;
+    order: 2;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 1rem;
+  }
+  .deck-analysis .analyze-card {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 900px) {
+  /* Preview slides to top as horizontal bar */
   .deck-preview-panel {
     position: static;
     width: 100%;
@@ -850,27 +885,12 @@
     flex: 1;
   }
   .deck-mainboard-section {
-    flex: 1 1 0;
+    width: 100%;
+    flex: none;
     order: 1;
   }
   .deck-groups {
     columns: 2 220px;
-  }
-  .deck-sideboard-groups {
-    columns: 2 200px;
-  }
-  .deck-analysis {
-    position: static;
-    width: 100%;
-    min-width: 0;
-    order: 2;
-    flex: 1 1 0;
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-    gap: 1rem;
-  }
-  .deck-analysis .analyze-card {
-    grid-column: 1 / -1;
   }
 }
 
@@ -881,6 +901,7 @@
     padding: 0;
     gap: 1rem;
   }
+  /* Mobile: hide preview panel, use bottom sheet instead */
   .deck-preview-panel {
     display: none;
   }

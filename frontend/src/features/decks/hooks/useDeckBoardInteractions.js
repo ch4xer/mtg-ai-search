@@ -83,10 +83,19 @@ export function useDeckBoardInteractions({
       }
     }
 
-    const addRes = await addDeckCard(id, { card_id: cardId, quantity: moveCount, board: toBoard });
+    const addBody = { card_id: cardId, quantity: moveCount, board: toBoard };
+    if (card.print_id) addBody.print_id = card.print_id;
+    if (card.image_url) addBody.image_url = card.image_url;
+    if (card.display_url) addBody.display_url = card.display_url;
+
+    const addRes = await addDeckCard(id, addBody);
     if (!addRes.ok) {
       showToast(language === "zh" ? "移动失败" : "Failed to move card", "error");
-      await addDeckCard(id, { card_id: cardId, quantity: moveCount, board: fromBoard });
+      const rollbackBody = { card_id: cardId, quantity: moveCount, board: fromBoard };
+      if (card.print_id) rollbackBody.print_id = card.print_id;
+      if (card.image_url) rollbackBody.image_url = card.image_url;
+      if (card.display_url) rollbackBody.display_url = card.display_url;
+      await addDeckCard(id, rollbackBody);
       return;
     }
 
