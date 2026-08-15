@@ -39,7 +39,9 @@ function LoginPage() {
     try {
       if (tab === "login") {
         const user = await login(username.trim(), password);
-        if (user.email_verified === false) {
+        // 只对绑定了邮箱的账号强制验证；无邮箱的旧账号跳过，否则会陷入
+        // "要求验证 → 但没有邮箱可收码" 的死循环。
+        if (user.email_verified === false && user.email) {
           setEmail(user.email || "");
           // Resend a fresh code since the old one may have expired
           try { await resendVerification(); } catch {}
