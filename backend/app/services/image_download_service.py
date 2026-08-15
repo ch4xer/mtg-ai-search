@@ -24,6 +24,8 @@ def _int_env(name: str, default: int) -> int:
         return default
 
 
+from app.config import USER_AGENT
+
 IMAGE_CACHE_DIR = Path(os.environ.get("MTG_IMAGE_CACHE_DIR", Path(tempfile.gettempdir()) / "mtg-ai-search-image-cache"))
 IMAGE_CACHE_TTL_SECONDS = _int_env("MTG_IMAGE_CACHE_TTL_SECONDS", 7 * 24 * 60 * 60)
 IMAGE_CACHE_MAX_BYTES = _int_env("MTG_IMAGE_CACHE_MAX_BYTES", 512 * 1024 * 1024)
@@ -215,7 +217,7 @@ async def download_unique_images(slots: list[ImageSlot]) -> AsyncIterator[Downlo
         await progress_queue.put(uid)
 
     async def download_all():
-        async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
+        async with httpx.AsyncClient(timeout=60, follow_redirects=True, headers={"User-Agent": USER_AGENT}) as client:
             await asyncio.gather(*(fetch_one(client, url, i) for i, url in enumerate(unique_url_list)))
         await _cleanup_image_cache_if_needed()
         await progress_queue.put(None)

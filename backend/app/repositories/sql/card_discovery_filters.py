@@ -12,6 +12,8 @@ class DiscoveryFilter:
     params: list
     next_param_index: int
     need_rarity_join: bool
+    relevance_expr: str = ""
+    where_param_count: int = 0
 
 
 def build_discovery_filter(
@@ -32,13 +34,17 @@ def build_discovery_filter(
     clauses: list[str] = []
     params: list = []
     idx = 1
+    relevance_expr = "0"
+    search_chinese = False
+    tokens: list[str] = []
 
     if not include_playtest:
         clauses.append("NOT COALESCE(c.is_unofficial, FALSE)")
 
     if q.strip():
         search_chinese = _contains_cjk(q)
-        for token in q.strip().split():
+        tokens = q.strip().split()
+        for token in tokens:
             if search_chinese:
                 clauses.append(
                     f"""EXISTS (
@@ -122,11 +128,37 @@ def build_discovery_filter(
         params.append(float(toughness_max))
         idx += 1
 
+    where_param_count = idx - 1
+
+    # Build relevance score for non-CJK queries after all WHERE params
+    if not search_chinese and len(tokens) >= 1:
+        full_query = q.strip()
+        params.append(full_query)
+        exact_idx = idx
+        idx += 1
+        params.append(f"{full_query}%")
+        prefix_idx = idx
+        idx += 1
+        name_clauses_parts = []
+        for token in tokens:
+            params.append(f"%{token}%")
+            name_clauses_parts.append(f"c.name ILIKE ${idx}")
+            idx += 1
+        name_all_tokens = " AND ".join(name_clauses_parts)
+        relevance_expr = (
+            f"CASE WHEN c.name ILIKE ${exact_idx} THEN 0"
+            f" WHEN c.name ILIKE ${prefix_idx} THEN 1"
+            f" WHEN ({name_all_tokens}) THEN 2"
+            f" ELSE 3 END"
+        )
+
     return DiscoveryFilter(
         where=" AND ".join(clauses) if clauses else "TRUE",
         params=params,
         next_param_index=idx,
         need_rarity_join=rarities is not None,
+        relevance_expr=relevance_expr,
+        where_param_count=where_param_count,
     )
 
 

@@ -8,7 +8,6 @@ dependencies = [
     "bcrypt>=4.0.0",
     "fastapi>=0.135.2",
     "httpx>=0.28.1",
-    "ijson>=3.3.0",
     "langchain>=1.2.13",
     "langchain-openai>=1.1.12",
     "langgraph>=1.1.3",

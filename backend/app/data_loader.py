@@ -1,10 +1,13 @@
+import gzip
 import os
 import re
 import requests
 
+from app.config import USER_AGENT
+
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data")
 BULK_DATA_TYPE = "all_cards"
-BULK_DATA_CACHE = os.path.join(DATA_DIR, "all-cards.json")
+BULK_DATA_CACHE = os.path.join(DATA_DIR, "all-cards.jsonl.gz")
 DOWNLOAD_CHUNK_SIZE = 1024 * 1024
 
 
@@ -60,7 +63,7 @@ def download_bulk_data_to_file(filepath: str = None) -> str:
     os.makedirs(os.path.dirname(filepath), exist_ok=True)
 
     bulk_url = "https://api.scryfall.com/bulk-data"
-    resp = requests.get(bulk_url)
+    resp = requests.get(bulk_url, headers={"User-Agent": USER_AGENT})
     resp.raise_for_status()
     bulk_data = resp.json()
 
@@ -73,7 +76,7 @@ def download_bulk_data_to_file(filepath: str = None) -> str:
     if not bulk_entry:
         raise ValueError(f"Could not find {BULK_DATA_TYPE} bulk data")
 
-    download_url = bulk_entry["download_uri"]
+    download_url = bulk_entry["jsonl_download_uri"]
     updated_at = bulk_entry.get("updated_at", "")
 
     # Check if existing file is up-to-date
@@ -108,13 +111,14 @@ def download_bulk_data_to_file(filepath: str = None) -> str:
     print(f"Downloading {BULK_DATA_TYPE} cards from {download_url} ...")
     if resume_from:
         print(f"  Resuming from {resume_from / 1024 / 1024:.1f}MB")
-    resp = requests.get(download_url, headers=headers, stream=True, timeout=60)
+    download_headers = {**headers, "User-Agent": USER_AGENT}
+    resp = requests.get(download_url, headers=download_headers, stream=True, timeout=60)
     if resume_from and resp.status_code != 206:
         print("  Server did not resume; restarting download.")
         resume_from = 0
         mode = "wb"
         resp.close()
-        resp = requests.get(download_url, stream=True, timeout=60)
+        resp = requests.get(download_url, headers={"User-Agent": USER_AGENT}, stream=True, timeout=60)
     resp.raise_for_status()
 
     # Write to file with progress
@@ -145,13 +149,23 @@ def download_bulk_data_to_file(filepath: str = None) -> str:
     return filepath
 
 
-def stream_cards(filepath: str = None, chunk_size: int = 5000):
-    """Stream all_cards from local file in chunks.
+def _is_gzip(filepath: str) -> bool:
+    """Detect gzip magic bytes; bulk files may be .jsonl.gz or plain .jsonl."""
+    try:
+        with open(filepath, "rb") as f:
+            return f.read(2) == b"\x1f\x8b"
+    except OSError:
+        return False
 
-    Downloads file if not present, then uses ijson to parse incrementally
-    without loading entire file into memory.
+
+def stream_cards(filepath: str = None, chunk_size: int = 5000):
+    """Stream all_cards from local JSONL file in chunks.
+
+    Downloads the gzipped JSONL bulk file if not present, then parses it
+    line-by-line without loading the entire file into memory. Accepts
+    either .jsonl.gz or plain .jsonl files.
     """
-    import ijson
+    import json
 
     if filepath is None:
         env_file = _env_bulk_data_file()
@@ -164,12 +178,16 @@ def stream_cards(filepath: str = None, chunk_size: int = 5000):
     elif not os.path.exists(filepath):
         filepath = download_bulk_data_to_file(filepath)
 
+    opener = gzip.open if _is_gzip(filepath) else open
     print(f"Streaming from local file: {filepath}")
-    with open(filepath, "rb") as f:
+    with opener(filepath, "rt", encoding="utf-8") as f:
         chunk = []
         total = 0
-        for card in ijson.items(f, "item"):
-            chunk.append(card)
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            chunk.append(json.loads(line))
             if len(chunk) >= chunk_size:
                 total += len(chunk)
                 print(f"  Yielded chunk: {len(chunk)} cards (total: {total})")

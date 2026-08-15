@@ -32,7 +32,6 @@ async def search_cards(
     rerank_top_n: int = 200,
     card_limit: int = 60,
     card_offset: int = 0,
-    include_zh: bool = False,
 ) -> list[dict]:
     result = await search_cards_result(
         query,
@@ -42,7 +41,6 @@ async def search_cards(
         rerank_top_n=rerank_top_n,
         card_limit=card_limit,
         card_offset=card_offset,
-        include_zh=include_zh,
         create_session=False,
     )
     return result["results"]
@@ -59,7 +57,6 @@ async def search_cards_result(
     card_offset: int = 0,
     search_id: str | None = None,
     create_session: bool = True,
-    include_zh: bool = False,
 ) -> dict:
     offset = max(0, card_offset)
     limit = max(0, card_limit)

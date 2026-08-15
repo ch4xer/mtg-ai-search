@@ -9,6 +9,7 @@ from typing import Any
 
 import httpx
 
+from ..config import USER_AGENT
 from ..repositories.database import get_pool
 from .task_progress import StatusCallback, emit_status
 
@@ -77,7 +78,7 @@ async def sync_mtgch_translations(
     }
 
     timeout = httpx.Timeout(MTGCH_API_TIMEOUT_SECONDS, connect=min(2.0, MTGCH_API_TIMEOUT_SECONDS))
-    headers = {"Accept": "application/json", "User-Agent": "MTG-AI-Search/1.0"}
+    headers = {"Accept": "application/json", "User-Agent": USER_AGENT}
     semaphore = asyncio.Semaphore(MTGCH_API_CONCURRENCY)
     throttle = _MtgchThrottle(MTGCH_REQUEST_DELAY_SECONDS)
     async with httpx.AsyncClient(timeout=timeout, follow_redirects=True, headers=headers) as client:

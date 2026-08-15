@@ -1,5 +1,7 @@
 import os
 
+USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+
 DEFAULT_ALLOWED_ORIGINS = (
     "http://localhost:5173,http://localhost:3000,http://127.0.0.1:5173"
 )

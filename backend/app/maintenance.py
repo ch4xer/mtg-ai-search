@@ -3,6 +3,7 @@ import logging
 
 import requests
 
+from .config import USER_AGENT
 from .repositories.database import get_pool
 from .services.task_progress import StatusCallback, emit_status
 
@@ -62,7 +63,7 @@ def _get_scryfall_bulk_updated_at() -> str | None:
     try:
         from app.data_loader import BULK_DATA_TYPE
 
-        resp = requests.get("https://api.scryfall.com/bulk-data", timeout=15)
+        resp = requests.get("https://api.scryfall.com/bulk-data", timeout=15, headers={"User-Agent": USER_AGENT})
         resp.raise_for_status()
         for entry in resp.json()["data"]:
             if entry["type"] == BULK_DATA_TYPE:

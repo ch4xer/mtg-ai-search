@@ -6,7 +6,6 @@ class SearchRequest(BaseModel):
     limit: int = Field(default=60, ge=1, le=500)
     offset: int = Field(default=0, ge=0)
     search_id: str | None = None
-    include_zh: bool = False
 
 
 class SearchResponse(BaseModel):
@@ -108,4 +107,3 @@ class DiscoverRequest(BaseModel):
     toughness_max: float | None = None
     page: int = 1
     page_size: int = 60
-    include_zh: bool = False

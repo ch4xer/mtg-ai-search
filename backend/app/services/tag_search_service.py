@@ -26,13 +26,14 @@ from ..repositories.database import get_pool
 from .card_query_constraints import build_structured_card_filters, extract_card_search_constraints
 from .llm_json import parse_llm_json_object
 
+from app.config import USER_AGENT
+
 logger = logging.getLogger(__name__)
 
 TAGGER_TAGS_URL = "https://scryfall.com/docs/tagger-tags"
 SCRYFALL_SEARCH_URL = "https://scryfall.com/search?q="
 SCRYFALL_API_CARDS_SEARCH_URL = "https://api.scryfall.com/cards/search"
 REFRESH_INTERVAL = timedelta(hours=12)
-USER_AGENT = "MTG-AI-Search/1.0 (+https://github.com/ch4ser/MTG-AI-Search)"
 SAMPLE_CARDS_PER_TAG = 3
 SCRYFALL_SAMPLE_REQUEST_DELAY_SECONDS = float(os.getenv("SCRYFALL_SAMPLE_REQUEST_DELAY_SECONDS", "0.35"))
 TAG_EXPANSION_DB_VERSION = 1

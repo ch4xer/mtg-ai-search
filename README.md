@@ -35,8 +35,7 @@ and returns matching cards.
   keyword ability sync, card-data export, and sync logs.
 - **External API.** API-key protected `/api/external/ai-search` and
   `/api/external/exact-match` endpoints for third-party integrations.
-- **Auth.** JWT access/refresh tokens, email verification, password reset
-  (via Resend), and per-user API key management.
+- **Auth.** JWT access/refresh tokens, email verification, password change (via email verification with Resend), and per-user API key management.
 
 ## Stack
 

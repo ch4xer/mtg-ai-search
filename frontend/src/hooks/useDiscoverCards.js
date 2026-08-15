@@ -51,7 +51,6 @@ export function useDiscoverCards({ enabled = true, includeZh = false } = {}) {
     if (powerMax !== "") body.power_max = parseFloat(powerMax);
     if (toughnessMin !== "") body.toughness_min = parseFloat(toughnessMin);
     if (toughnessMax !== "") body.toughness_max = parseFloat(toughnessMax);
-    if (includeZh) body.include_zh = true;
     return body;
   }, [q, colors, types, rarity, selectedKeywords, selectedSubtypes, cmcMin, cmcMax, powerMin, powerMax, toughnessMin, toughnessMax, includeZh]);
 

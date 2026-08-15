@@ -13,5 +13,7 @@ CLAUDE.md
 .playwright-mcp/
 
 # Bulk data cache
+backend/data/all-cards.jsonl.gz
+backend/data/all-cards.jsonl.gz.meta
 backend/data/unique_artwork.json
 backend/data/unique_artwork.json.meta

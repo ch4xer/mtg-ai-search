@@ -50,7 +50,6 @@ async def search_cards(
         card_limit=request.limit,
         card_offset=request.offset,
         search_id=request.search_id,
-        include_zh=request.include_zh,
     )
     logger.debug(
         "<<< /api/search returned %d cards in %.2fs",

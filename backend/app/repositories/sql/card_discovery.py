@@ -41,13 +41,14 @@ async def discover_cards(
         include_playtest=include_playtest,
     )
 
-    total = await _count_discovery_results(pool, filter_spec.where, filter_spec.params, filter_spec.need_rarity_join)
+    where_params = filter_spec.params[:filter_spec.where_param_count]
+    total = await _count_discovery_results(pool, filter_spec.where, where_params, filter_spec.need_rarity_join)
     rows = await _fetch_discovery_page(pool, filter_spec, page, page_size)
     cards = [serialize_card_result(row) for row in rows]
     facets = await get_discovery_facets(
         pool,
         filter_spec.where,
-        filter_spec.params,
+        where_params,
         filter_spec.need_rarity_join,
     )
 
@@ -76,6 +77,8 @@ async def _fetch_discovery_page(pool, filter_spec, page: int, page_size: int):
     offset = (page - 1) * page_size
     limit_idx = filter_spec.next_param_index
     offset_idx = filter_spec.next_param_index + 1
+    rel = filter_spec.relevance_expr or "0"
+    rel_order = f"{rel}, c.name"
 
     if filter_spec.need_rarity_join:
         return await pool.fetch(
@@ -88,7 +91,7 @@ async def _fetch_discovery_page(pool, filter_spec, page: int, page_size: int):
                 ) sub
                 JOIN cards c ON c.id = sub.id
                 {DEFAULT_PRINT_JOIN}
-                ORDER BY c.name
+                ORDER BY {rel_order}
                 LIMIT ${limit_idx} OFFSET ${offset_idx}""",
             *filter_spec.params,
             page_size,
@@ -104,7 +107,7 @@ async def _fetch_discovery_page(pool, filter_spec, page: int, page_size: int):
             ) sub
             JOIN cards c ON c.id = sub.id
             {DEFAULT_PRINT_JOIN}
-            ORDER BY c.name
+            ORDER BY {rel_order}
             LIMIT ${limit_idx} OFFSET ${offset_idx}""",
         *filter_spec.params,
         page_size,
