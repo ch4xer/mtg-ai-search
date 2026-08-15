@@ -66,7 +66,6 @@
 
 .deck-explorer-card-preview {
   position: fixed;
-  top: 5rem;
   right: calc(380px + 1rem);
   width: min(300px, calc(100vw - 420px - 2rem));
   z-index: 500;

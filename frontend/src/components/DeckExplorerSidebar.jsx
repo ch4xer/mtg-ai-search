@@ -18,6 +18,7 @@ function DeckExplorerSidebar({ isOpen, onClose }) {
   const [dragOverDeckId, setDragOverDeckId] = useState(null);
   const [dragOverContents, setDragOverContents] = useState(false);
   const [hoveredCard, setHoveredCard] = useState(null);
+  const [previewTop, setPreviewTop] = useState(16);
   const [mutatingCardKey, setMutatingCardKey] = useState(null);
   const dragEnterCount = useRef(0);
 
@@ -225,6 +226,15 @@ function DeckExplorerSidebar({ isOpen, onClose }) {
     }
   };
 
+  const handleCardHover = (item, element) => {
+    const { top } = element.getBoundingClientRect();
+    const previewHeight = 456;
+    const viewportPadding = 16;
+    const maxTop = Math.max(viewportPadding, window.innerHeight - previewHeight - viewportPadding);
+    setPreviewTop(Math.min(Math.max(top, viewportPadding), maxTop));
+    setHoveredCard(item);
+  };
+
   const handleCreate = async (e) => {
     e.preventDefault();
     if (!newName.trim()) return;
@@ -256,7 +266,7 @@ function DeckExplorerSidebar({ isOpen, onClose }) {
   return createPortal(
     <>
       {hoveredCardImage && visible && (
-        <div className="deck-explorer-card-preview" aria-hidden="true">
+        <div className="deck-explorer-card-preview" style={{ top: previewTop }} aria-hidden="true">
           <img src={hoveredCardImage} alt="" />
           <span>{hoveredCardName}</span>
         </div>
@@ -285,7 +295,7 @@ function DeckExplorerSidebar({ isOpen, onClose }) {
         </div>
 
         {/* Body */}
-        <div className="deck-explorer-body">
+        <div className="deck-explorer-body" onScroll={() => setHoveredCard(null)}>
           {!selectedDeckId ? (
             <>
               {/* New Deck Form */}
@@ -376,7 +386,7 @@ function DeckExplorerSidebar({ isOpen, onClose }) {
                       <div
                         key={`${item.card_id}-${item.board || "main"}-${idx}`}
                         className="deck-explorer-card-item"
-                        onMouseEnter={() => setHoveredCard(item)}
+                        onMouseEnter={(e) => handleCardHover(item, e.currentTarget)}
                         onMouseLeave={() => setHoveredCard(null)}
                       >
                         {getCardDisplayImage(item) ? (
