@@ -544,6 +544,32 @@
   background: var(--accent-tint-subtle);
 }
 
+.deck-explorer-btn {
+  padding: 0.45rem;
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+  box-shadow: 0 1px 3px var(--shadow);
+}
+
+.deck-explorer-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-tint-subtle);
+}
+
+.deck-explorer-btn.active {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-tint-subtle);
+}
+
 .ai-search-settings-popover {
   position: relative;
   display: flex;

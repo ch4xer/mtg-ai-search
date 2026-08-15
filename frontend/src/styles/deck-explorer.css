@@ -1,0 +1,492 @@
+/* ===== Deck Explorer Sidebar ===== */
+
+.deck-explorer-fab {
+  position: fixed;
+  bottom: 2rem;
+  right: 2rem;
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--accent-text-dark, #000);
+  border: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 502;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  transition: transform 0.2s, box-shadow 0.2s, opacity 0.2s;
+}
+
+.deck-explorer-fab:hover {
+  transform: scale(1.08);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+}
+
+@media (max-width: 768px) {
+  .deck-explorer-fab {
+    display: none;
+  }
+}
+
+.deck-explorer-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  z-index: 500;
+  animation: deckExplorerFadeIn 0.25s ease;
+}
+
+@keyframes deckExplorerFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.deck-explorer-panel {
+  position: fixed;
+  top: 0;
+  right: 0;
+  width: 380px;
+  max-width: 100vw;
+  height: 100vh;
+  background: var(--bg-primary);
+  border-left: 1px solid var(--border-subtle);
+  z-index: 501;
+  display: flex;
+  flex-direction: column;
+  box-shadow: -4px 0 24px rgba(0, 0, 0, 0.25);
+  transform: translateX(100%);
+  transition: transform 0.25s ease;
+}
+
+.deck-explorer-panel.open {
+  transform: translateX(0);
+}
+
+.deck-explorer-card-preview {
+  position: fixed;
+  top: 5rem;
+  right: calc(380px + 1rem);
+  width: min(300px, calc(100vw - 420px - 2rem));
+  z-index: 500;
+  pointer-events: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  align-items: stretch;
+}
+
+.deck-explorer-card-preview img {
+  width: 100%;
+  aspect-ratio: 488 / 680;
+  object-fit: contain;
+  border-radius: 12px;
+  box-shadow: 0 10px 32px rgba(0, 0, 0, 0.45);
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.deck-explorer-card-preview span {
+  color: #fff;
+  font-family: "Crimson Text", Georgia, serif;
+  font-size: 0.9rem;
+  line-height: 1.2;
+  text-align: center;
+  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.85);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Header */
+.deck-explorer-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 1rem 1rem 0.75rem;
+  border-bottom: 1px solid var(--border-subtle);
+  flex-shrink: 0;
+}
+
+.deck-explorer-spacer {
+  width: 34px;
+  flex-shrink: 0;
+}
+
+.deck-explorer-back-btn,
+.deck-explorer-close-btn {
+  width: 34px;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  border-radius: 6px;
+  flex-shrink: 0;
+  transition: background 0.15s, color 0.15s;
+}
+
+.deck-explorer-back-btn:hover,
+.deck-explorer-close-btn:hover {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+}
+
+.deck-explorer-title {
+  flex: 1;
+  font-family: "Cinzel", serif;
+  font-size: 1rem;
+  color: var(--accent);
+  margin: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: center;
+  text-transform: none;
+}
+
+/* Body */
+.deck-explorer-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  scrollbar-width: none;
+}
+
+.deck-explorer-body::-webkit-scrollbar {
+  display: none;
+}
+
+/* New Deck Form */
+.deck-explorer-new-deck {
+  display: flex;
+  gap: 0.4rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.deck-explorer-input {
+  flex: 1;
+  min-width: 0;
+  padding: 0.45rem 0.6rem;
+  font-size: 0.85rem;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  outline: none;
+}
+
+.deck-explorer-input::placeholder {
+  color: var(--text-muted);
+}
+
+.deck-explorer-input:focus {
+  border-color: var(--accent);
+}
+
+.deck-explorer-format-select {
+  padding: 0.35rem 0.4rem;
+  font-size: 0.8rem;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  max-width: 100px;
+}
+
+.deck-explorer-create-btn {
+  width: 34px;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.2rem;
+  font-weight: 700;
+  background: var(--accent);
+  color: var(--accent-text-dark, #000);
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: opacity 0.15s;
+}
+
+.deck-explorer-create-btn:hover:not(:disabled) {
+  opacity: 0.85;
+}
+
+.deck-explorer-create-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* Deck List */
+.deck-explorer-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.deck-explorer-deck-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.65rem 0.8rem;
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: border-color 0.15s, box-shadow 0.15s;
+  text-align: left;
+  width: 100%;
+  font-family: inherit;
+  color: var(--text-primary);
+}
+
+.deck-explorer-deck-item:hover {
+  border-color: var(--accent);
+  box-shadow: 0 2px 8px var(--shadow);
+}
+
+.deck-explorer-deck-item.drag-over {
+  border-color: var(--accent);
+  background: var(--accent-tint-subtle, rgba(136, 57, 239, 0.08));
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+.deck-explorer-deck-info {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  flex: 1;
+}
+
+.deck-explorer-deck-name {
+  font-family: "Crimson Text", Georgia, serif;
+  font-size: 0.95rem;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-transform: none;
+}
+
+.deck-explorer-deck-count {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+/* Deck Contents */
+.deck-explorer-contents {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  border: 2px solid transparent;
+  border-radius: 8px;
+  padding: 0.5rem;
+  margin: -0.5rem;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.deck-explorer-contents.drag-over {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-tint-subtle, rgba(136, 57, 239, 0.2));
+  background: var(--accent-tint-subtle, rgba(136, 57, 239, 0.05));
+}
+
+.deck-explorer-type-group {
+  break-inside: avoid;
+}
+
+.deck-explorer-type-header {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-bottom: 0.35rem;
+  padding-bottom: 0.25rem;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.deck-explorer-type-icon {
+  font-size: 14px;
+  color: var(--accent);
+}
+
+.deck-explorer-type-label {
+  font-family: "Cinzel", serif;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.deck-explorer-type-count {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin-left: auto;
+}
+
+.deck-explorer-card-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.deck-explorer-card-item {
+  position: relative;
+  width: 100%;
+  min-height: 54px;
+  border-radius: 8px;
+  overflow: hidden;
+  cursor: default;
+  border: 1px solid var(--border-subtle);
+  transition: border-color 0.15s, transform 0.15s, box-shadow 0.15s;
+  box-shadow: 0 1px 4px var(--shadow);
+  isolation: isolate;
+}
+
+.deck-explorer-card-item:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px var(--shadow-strong);
+  border-color: var(--accent);
+}
+
+.deck-explorer-card-img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.deck-explorer-card-placeholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-secondary);
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  text-align: center;
+  padding: 0.5rem;
+}
+
+.deck-explorer-card-overlay {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, rgba(0, 0, 0, 0.75) 0%, rgba(0, 0, 0, 0.46) 55%, rgba(0, 0, 0, 0.2) 100%);
+}
+
+.deck-explorer-card-name {
+  position: absolute;
+  left: 0.65rem;
+  right: 6.7rem;
+  top: 50%;
+  transform: translateY(-50%);
+  color: #fff;
+  font-family: "Crimson Text", Georgia, serif;
+  font-size: 0.88rem;
+  font-weight: 700;
+  line-height: 1.2;
+  text-transform: none;
+  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.9);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  z-index: 1;
+}
+
+.deck-explorer-card-counter {
+  position: absolute;
+  right: 0.35rem;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  gap: 0.2rem;
+  z-index: 2;
+}
+
+.deck-explorer-counter-btn {
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.5);
+  color: #fff;
+  cursor: pointer;
+  font-size: 0.9rem;
+  font-weight: 700;
+  line-height: 1;
+  backdrop-filter: blur(2px);
+  transition: background 0.15s, border-color 0.15s, transform 0.15s;
+}
+
+.deck-explorer-counter-btn:hover:not(:disabled) {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-text-dark, #000);
+  transform: scale(1.05);
+}
+
+.deck-explorer-counter-btn:disabled {
+  opacity: 0.45;
+  cursor: wait;
+}
+
+.deck-explorer-card-qty {
+  min-width: 26px;
+  color: #fff;
+  font-family: "Cinzel", serif;
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-align: center;
+  background: rgba(0, 0, 0, 0.5);
+  border-radius: 999px;
+  padding: 0.2rem 0.35rem;
+  backdrop-filter: blur(2px);
+}
+
+/* Loading & Empty */
+.deck-explorer-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  padding: 3rem 1rem;
+  color: var(--text-muted);
+}
+
+.deck-explorer-empty {
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  padding: 2rem 1rem;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .deck-explorer-panel {
+    width: 100vw;
+  }
+
+  .deck-explorer-card-preview {
+    display: none;
+  }
+}

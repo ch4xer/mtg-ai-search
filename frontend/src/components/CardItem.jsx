@@ -83,6 +83,18 @@ function CardItem({ card, imageMode, decks: propDecks }) {
     setImgError(false);
   }, [frontImageUri, backImageUri]);
 
+  // Preload art_crop image so drag ghost renders immediately on first drag
+  const artCropPreloadUri = card.image_uris
+    ? getImageUri(card.image_uris, "art_crop")
+    : card.card_faces?.[0]?.image_uris
+      ? getImageUri(card.card_faces[0].image_uris, "art_crop")
+      : "";
+  useEffect(() => {
+    if (!artCropPreloadUri) return;
+    const img = new Image();
+    img.src = artCropPreloadUri;
+  }, [artCropPreloadUri]);
+
   useEffect(() => {
     if (!showDeckMenu) return;
     const handleClick = (e) => {
@@ -116,12 +128,8 @@ function CardItem({ card, imageMode, decks: propDecks }) {
       setShowDeckMenu(false);
       return;
     }
-    if (canUsePropDecks) {
-      setShowDeckMenu(true);
-      return;
-    }
-    setLoadingDecks(true);
     setShowDeckMenu(true);
+    setLoadingDecks(true);
     try {
       setLocalDecks(await fetchUserDecks());
     } catch {
@@ -184,9 +192,50 @@ function CardItem({ card, imageMode, decks: propDecks }) {
     }
   };
 
+  const handleDragStart = (e) => {
+    if (isArtCrop && e.target.closest("button")) {
+      e.preventDefault();
+      return;
+    }
+
+    e.dataTransfer.setData(
+      "application/json",
+      JSON.stringify({
+        card_id: card.id,
+        name: card.name,
+        image_uri: artCropPreloadUri,
+      })
+    );
+    e.dataTransfer.effectAllowed = "copy";
+
+    // art_crop is preloaded in useEffect – already cached by now
+    const ghostImgSrc = artCropPreloadUri;
+
+    const ghost = document.createElement("div");
+    ghost.style.cssText =
+      "position:fixed;top:-9999px;left:-9999px;width:240px;height:58px;" +
+      "border-radius:8px;overflow:hidden;isolation:isolate;" +
+      "box-shadow:0 2px 12px rgba(0,0,0,0.4);";
+    ghost.innerHTML =
+      `<img src="${ghostImgSrc}" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block;" />` +
+      `<div style="position:absolute;inset:0;background:linear-gradient(90deg,rgba(0,0,0,0.75) 0%,rgba(0,0,0,0.46) 55%,rgba(0,0,0,0.2) 100%);"></div>` +
+      `<span style="position:absolute;left:0.65rem;right:0.65rem;top:50%;transform:translateY(-50%);color:#fff;font-family:'Crimson Text',Georgia,serif;font-size:0.88rem;font-weight:700;line-height:1.2;text-shadow:0 2px 8px rgba(0,0,0,0.9);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${card.name}</span>`;
+    document.body.appendChild(ghost);
+    e.dataTransfer.setDragImage(ghost, 120, 29);
+    requestAnimationFrame(() => document.body.removeChild(ghost));
+  };
+
   return (
-    <div className={`card-item ${isArtCrop ? "art-crop" : ""}`}>
-      <div className={`card-image-wrapper ${isDoubleFaced ? "flippable" : ""} ${isArtCrop ? "art-crop" : ""}`}>
+    <div
+      className={`card-item ${isArtCrop ? "art-crop" : ""}`}
+      draggable={!isArtCrop}
+      onDragStart={!isArtCrop ? handleDragStart : undefined}
+    >
+      <div
+        className={`card-image-wrapper ${isDoubleFaced ? "flippable" : ""} ${isArtCrop ? "art-crop" : ""}`}
+        draggable={isArtCrop}
+        onDragStart={isArtCrop ? handleDragStart : undefined}
+      >
         {isDoubleFaced ? (
           <div className={`card-flip-container ${flipped ? "flipped" : ""}`}>
             <div className="card-flip-front">

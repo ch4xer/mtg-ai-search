@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import SearchBar from "../components/SearchBar.jsx";
 import CardGrid from "../components/CardGrid.jsx";
+import DeckExplorerSidebar from "../components/DeckExplorerSidebar.jsx";
 import DiscoverBrowser from "../components/DiscoverBrowser.jsx";
 import { useUserDecks } from "../hooks/useUserDecks.js";
 import { useAuth } from "../contexts/AuthContext.jsx";
@@ -56,6 +57,9 @@ function SearchContainer({ imageMode, onToggleImageMode }) {
 
   const isDiscover = location.pathname === "/exact-match";
   const isAiSearch = !isDiscover;
+
+  // Deck explorer sidebar
+  const [showDeckExplorer, setShowDeckExplorer] = useState(false);
 
   // AI search state
   const [aiResults, setAiResults] = useState([]);
@@ -202,52 +206,69 @@ function SearchContainer({ imageMode, onToggleImageMode }) {
       </div>
 
       {/* AI search panel — hidden when on exact match, but stays mounted */}
-      <div style={{ display: isAiSearch ? undefined : "none" }}>
-        <SearchBar onSearch={handleAiSearch} loading={aiLoading} />
-        {aiLoading && (
-          <div className="loading">
-            <div className="loading-spinner" />
-            <p>{t('searching')}</p>
-          </div>
-        )}
-        {!aiLoading && aiSearched && aiResults.length === 0 && (
-          <div className="no-results">
-            <p>{t('noCardsFoundAI')}</p>
-          </div>
-        )}
-        {!aiLoading && aiResults.length > 0 && (
-          <>
-            <CardGrid cards={aiResults} imageMode={imageMode} decks={decks} />
-            {aiHasMore && (
-              <div className="load-more-row">
-                <button className="load-more-btn" onClick={handleLoadMoreAi} disabled={aiLoadingMore}>
-                  {aiLoadingMore
-                    ? t('loadingMore')
-                    : t('loadMoreCards')
-                        .replace("{shown}", aiResults.length)
-                        .replace("{total}", aiTotal)}
-                </button>
-              </div>
-            )}
-          </>
-        )}
-        {!aiLoading && !aiSearched && (
-          <div className="features-section">
-            {AI_SEARCH_FEATURES.map((f) => (
-              <div key={f.titleKey} className="feature-card">
-                <div className="feature-icon">{f.icon}</div>
-                <h3 className="feature-title">{t(f.titleKey)}</h3>
-                <p className="feature-desc">{t(f.descKey)}</p>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
+        <div style={{ display: isAiSearch ? undefined : "none" }}>
+          <SearchBar onSearch={handleAiSearch} loading={aiLoading} />
+          {aiLoading && (
+            <div className="loading">
+              <div className="loading-spinner" />
+              <p>{t('searching')}</p>
+            </div>
+          )}
+          {!aiLoading && aiSearched && aiResults.length === 0 && (
+            <div className="no-results">
+              <p>{t('noCardsFoundAI')}</p>
+            </div>
+          )}
+          {!aiLoading && aiResults.length > 0 && (
+            <>
+              <CardGrid cards={aiResults} imageMode={imageMode} decks={decks} />
+              {aiHasMore && (
+                <div className="load-more-row">
+                  <button className="load-more-btn" onClick={handleLoadMoreAi} disabled={aiLoadingMore}>
+                    {aiLoadingMore
+                      ? t('loadingMore')
+                      : t('loadMoreCards')
+                          .replace("{shown}", aiResults.length)
+                          .replace("{total}", aiTotal)}
+                  </button>
+                </div>
+              )}
+            </>
+          )}
+          {!aiLoading && !aiSearched && (
+            <div className="features-section">
+              {AI_SEARCH_FEATURES.map((f) => (
+                <div key={f.titleKey} className="feature-card">
+                  <div className="feature-icon">{f.icon}</div>
+                  <h3 className="feature-title">{t(f.titleKey)}</h3>
+                  <p className="feature-desc">{t(f.descKey)}</p>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
 
-      {/* Discover panel — hidden when on /, but stays mounted */}
-      <div style={{ display: isDiscover ? undefined : "none" }}>
-        <DiscoverBrowser imageMode={imageMode} onToggleImageMode={onToggleImageMode} enabled={true} />
-      </div>
+        {/* Discover panel — hidden when on /, but stays mounted */}
+        <div style={{ display: isDiscover ? undefined : "none" }}>
+          <DiscoverBrowser imageMode={imageMode} onToggleImageMode={onToggleImageMode} enabled={true} />
+        </div>
+
+      <button
+        className="deck-explorer-fab"
+        onClick={() => setShowDeckExplorer((v) => !v)}
+        title={t("deckExplorer")}
+      >
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <polygon points="12 2 2 7 12 12 22 7 12 2" />
+          <polyline points="2 17 12 22 22 17" />
+          <polyline points="2 12 12 17 22 12" />
+        </svg>
+      </button>
+
+      <DeckExplorerSidebar
+        isOpen={showDeckExplorer}
+        onClose={() => setShowDeckExplorer(false)}
+      />
     </>
   );
 }
