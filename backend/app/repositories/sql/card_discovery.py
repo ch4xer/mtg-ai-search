@@ -2,7 +2,8 @@
 
 from .card_discovery_facets import get_discovery_facets
 from .card_discovery_filters import build_discovery_filter
-from .card_result_rows import CARD_RESULT_COLUMNS, DEFAULT_PRINT_JOIN, serialize_card_result
+from .card_result_rows import CARD_RESULT_COLUMNS, DEFAULT_PRINT_JOIN, MATCHED_PRINT_JOIN, serialize_card_result
+from .card_search_order import order_cards_by_mana_value
 from .connection import get_pool
 
 
@@ -11,12 +12,15 @@ async def discover_cards(
     colors: list[str] | None = None,
     types: list[str] | None = None,
     rarities: list[str] | None = None,
+    set_codes: list[str] | None = None,
     keywords: list[str] | None = None,
     cmc_min: float | None = None,
     cmc_max: float | None = None,
     power_min: float | None = None,
     power_max: float | None = None,
     subtypes: list[str] | None = None,
+    function_tags: list[str] | None = None,
+    exclude_card_id: str | None = None,
     toughness_min: float | None = None,
     toughness_max: float | None = None,
     include_playtest: bool = False,
@@ -30,26 +34,29 @@ async def discover_cards(
         colors=colors,
         types=types,
         rarities=rarities,
+        set_codes=set_codes,
         keywords=keywords,
         cmc_min=cmc_min,
         cmc_max=cmc_max,
         power_min=power_min,
         power_max=power_max,
         subtypes=subtypes,
+        function_tags=function_tags,
+        exclude_card_id=exclude_card_id,
         toughness_min=toughness_min,
         toughness_max=toughness_max,
         include_playtest=include_playtest,
     )
 
     where_params = filter_spec.params[:filter_spec.where_param_count]
-    total = await _count_discovery_results(pool, filter_spec.where, where_params, filter_spec.need_rarity_join)
+    total = await _count_discovery_results(pool, filter_spec.where, where_params, filter_spec.need_print_join)
     rows = await _fetch_discovery_page(pool, filter_spec, page, page_size)
     cards = [serialize_card_result(row) for row in rows]
     facets = await get_discovery_facets(
         pool,
         filter_spec.where,
         where_params,
-        filter_spec.need_rarity_join,
+        filter_spec.need_print_join,
     )
 
     return {
@@ -61,8 +68,8 @@ async def discover_cards(
     }
 
 
-async def _count_discovery_results(pool, where: str, params: list, need_rarity_join: bool) -> int:
-    if need_rarity_join:
+async def _count_discovery_results(pool, where: str, params: list, need_print_join: bool) -> int:
+    if need_print_join:
         return await pool.fetchval(
             f"SELECT COUNT(*) FROM (SELECT DISTINCT ON (c.name) c.id FROM cards c LEFT JOIN card_prints cp ON cp.card_id = c.id WHERE {where} ORDER BY c.name) sub",
             *params,
@@ -77,21 +84,22 @@ async def _fetch_discovery_page(pool, filter_spec, page: int, page_size: int):
     offset = (page - 1) * page_size
     limit_idx = filter_spec.next_param_index
     offset_idx = filter_spec.next_param_index + 1
-    rel = filter_spec.relevance_expr or "0"
-    rel_order = f"{rel}, c.name"
+    rel = filter_spec.relevance_expr
+    relevance_order = rel if rel and rel != "0" else ""
+    result_order = order_cards_by_mana_value(relevance_order, "c.name ASC", "c.id ASC")
 
-    if filter_spec.need_rarity_join:
+    if filter_spec.need_print_join:
         return await pool.fetch(
             f"""SELECT {CARD_RESULT_COLUMNS}
                 FROM (
-                  SELECT DISTINCT ON (c.name) c.id, c.name
-                  FROM cards c LEFT JOIN card_prints cp ON cp.card_id = c.id
+                  SELECT DISTINCT ON (c.name) c.id, c.name, cp.id AS matched_print_id
+                  FROM cards c JOIN card_prints cp ON cp.card_id = c.id
                   WHERE {filter_spec.where}
-                  ORDER BY c.name
+                  ORDER BY c.name, cp.released_at DESC NULLS LAST, cp.id
                 ) sub
                 JOIN cards c ON c.id = sub.id
-                {DEFAULT_PRINT_JOIN}
-                ORDER BY {rel_order}
+                {MATCHED_PRINT_JOIN}
+                ORDER BY {result_order}
                 LIMIT ${limit_idx} OFFSET ${offset_idx}""",
             *filter_spec.params,
             page_size,
@@ -107,7 +115,7 @@ async def _fetch_discovery_page(pool, filter_spec, page: int, page_size: int):
             ) sub
             JOIN cards c ON c.id = sub.id
             {DEFAULT_PRINT_JOIN}
-            ORDER BY {rel_order}
+            ORDER BY {result_order}
             LIMIT ${limit_idx} OFFSET ${offset_idx}""",
         *filter_spec.params,
         page_size,

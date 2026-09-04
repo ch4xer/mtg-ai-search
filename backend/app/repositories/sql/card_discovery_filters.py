@@ -11,7 +11,7 @@ class DiscoveryFilter:
     where: str
     params: list
     next_param_index: int
-    need_rarity_join: bool
+    need_print_join: bool
     relevance_expr: str = ""
     where_param_count: int = 0
 
@@ -21,12 +21,15 @@ def build_discovery_filter(
     colors: list[str] | None = None,
     types: list[str] | None = None,
     rarities: list[str] | None = None,
+    set_codes: list[str] | None = None,
     keywords: list[str] | None = None,
     cmc_min: float | None = None,
     cmc_max: float | None = None,
     power_min: float | None = None,
     power_max: float | None = None,
     subtypes: list[str] | None = None,
+    function_tags: list[str] | None = None,
+    exclude_card_id: str | None = None,
     toughness_min: float | None = None,
     toughness_max: float | None = None,
     include_playtest: bool = False,
@@ -74,7 +77,10 @@ def build_discovery_filter(
             idx += 1
 
     if colors:
-        clauses.append(f"c.colors @> ${idx}::text[]")
+        clauses.append(
+            f"(COALESCE(c.colors, ARRAY[]::text[]) @> ${idx}::text[] "
+            f"AND COALESCE(c.colors, ARRAY[]::text[]) <@ ${idx}::text[])"
+        )
         params.append(colors)
         idx += 1
 
@@ -90,9 +96,41 @@ def build_discovery_filter(
             params.append(f"%{subtype}%")
             idx += 1
 
+    normalized_function_tags = sorted({tag.strip().lower() for tag in function_tags or [] if tag.strip()})
+    if normalized_function_tags:
+        clauses.append(
+            f"""EXISTS (
+                SELECT 1
+                FROM card_tagger_tags ctt_filter
+                JOIN tagger_tags tt_filter
+                  ON tt_filter.tag_type = ctt_filter.tag_type
+                 AND tt_filter.tag = ctt_filter.tag
+                 AND tt_filter.removed_at IS NULL
+                WHERE ctt_filter.card_id = c.id
+                  AND ctt_filter.tag_type = 'function'
+                  AND (
+                      LOWER(ctt_filter.tag) = ANY(${idx}::text[])
+                      OR LOWER(tt_filter.label) = ANY(${idx}::text[])
+                  )
+            )"""
+        )
+        params.append(normalized_function_tags)
+        idx += 1
+
+    if exclude_card_id and normalized_function_tags:
+        clauses.append(f"c.id <> ${idx}")
+        params.append(exclude_card_id)
+        idx += 1
+
     if rarities:
         clauses.append(f"cp.rarity = ANY(${idx}::text[])")
         params.append(rarities)
+        idx += 1
+
+    normalized_set_codes = sorted({code.strip().lower() for code in set_codes or [] if code.strip()})
+    if normalized_set_codes:
+        clauses.append(f"cp.set_code = ANY(${idx}::text[])")
+        params.append(normalized_set_codes)
         idx += 1
 
     if keywords:
@@ -156,7 +194,7 @@ def build_discovery_filter(
         where=" AND ".join(clauses) if clauses else "TRUE",
         params=params,
         next_param_index=idx,
-        need_rarity_join=rarities is not None,
+        need_print_join=bool(rarities or normalized_set_codes),
         relevance_expr=relevance_expr,
         where_param_count=where_param_count,
     )

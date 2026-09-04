@@ -7,15 +7,25 @@ import { getAccessToken } from "../utils/apiFetch.js";
 import { useToast } from "../contexts/ToastContext.jsx";
 import { useLanguage } from "../contexts/LanguageContext.jsx";
 import { getFormatLabel, getCardLegality, legalityLabel } from "../utils/formats.js";
-import { getImageUri } from "../utils/cardImage.js";
+import { getCardImage, getCardPresentation } from "../utils/cardPresentation.js";
 import { cacheImage, isImageCached } from "../utils/imageCache.js";
 import { getSetIconClass } from "../utils/keyrune.js";
 import { parseManaCost, parseOracleText } from "../utils/manaSymbols.js";
+import KeywordAbilityTooltip from "./KeywordAbilityTooltip.jsx";
+import CardActionMenu from "./CardActionMenu.jsx";
 
-const DOUBLE_FACED_LAYOUTS = new Set(["transform", "modal_dfc", "double_faced_token", "reversible_card"]);
 const ART_PICKER_SKELETON_COUNT = 18;
 
-function CardItem({ card, imageMode, decks: propDecks }) {
+function CardItem({
+  card,
+  imageMode,
+  decks: propDecks,
+  abilityCatalog = {},
+  tooltipActive = false,
+  onTooltipActivate,
+  onTooltipDeactivate,
+  onFindSimilar,
+}) {
   const [imgError, setImgError] = useState(false);
   const [flipped, setFlipped] = useState(false);
   const [showDeckMenu, setShowDeckMenu] = useState(false);
@@ -25,7 +35,9 @@ function CardItem({ card, imageMode, decks: propDecks }) {
   const [selectedArt, setSelectedArt] = useState(null);
   const [localDecks, setLocalDecks] = useState(null);
   const [loadingDecks, setLoadingDecks] = useState(false);
-  const { language } = useLanguage();
+  const [actionMenu, setActionMenu] = useState(null);
+  const { language, t } = useLanguage();
+  const cardRef = useRef(null);
   const menuRef = useRef(null);
   const { user } = useAuth();
   const { showToast } = useToast();
@@ -35,60 +47,42 @@ function CardItem({ card, imageMode, decks: propDecks }) {
   const decks = localDecks ?? (canUsePropDecks ? propDecks : []);
 
   const isArtCrop = imageMode === "art_crop";
-  const zhCard = language === "zh" ? card.zh : null;
-  const zhFaces = zhCard?.card_faces || [];
   const selectedCardFaces = selectedArt?.card_faces || card.card_faces || [];
-  const isDoubleFaced =
-    selectedCardFaces.length >= 2 &&
-    DOUBLE_FACED_LAYOUTS.has(card.layout);
-
-  let frontImageUri = "";
-  let backImageUri = "";
-
-  if (isDoubleFaced) {
-    frontImageUri = getImageUri(selectedCardFaces[0]?.image_uris, imageMode);
-    backImageUri = getImageUri(selectedCardFaces[1]?.image_uris, imageMode);
-  } else if (selectedArt) {
-    frontImageUri = getImageUri(selectedArt.image_uris, imageMode);
-  } else if (card.image_uris) {
-    frontImageUri = getImageUri(card.image_uris, imageMode);
-  } else if (card.card_faces && card.card_faces[0]?.image_uris) {
-    frontImageUri = getImageUri(card.card_faces[0].image_uris, imageMode);
-  }
-
-  const activeFaceIndex = isDoubleFaced ? (flipped ? 1 : 0) : 0;
-  const activeFace = isDoubleFaced ? selectedCardFaces[activeFaceIndex] : null;
-  const activeZhFace = zhFaces[activeFaceIndex] || null;
-  const frontFace = selectedCardFaces?.[0];
-  const getEnglishField = (field) => activeFace ? activeFace[field] : (card[field] ?? frontFace?.[field]);
-  const getTranslatedField = (field) => activeZhFace?.[field] || (!isDoubleFaced ? zhCard?.[field] : null);
-  const getDisplayField = (field) => getTranslatedField(field) || getEnglishField(field);
-  const englishName = activeFace?.name || card.name || frontFace?.name;
-  const translatedName = activeZhFace?.name || (!isDoubleFaced ? zhCard?.name : null);
-  const displayName = translatedName || englishName;
-  const displaySecondaryName = translatedName && englishName && translatedName !== englishName ? englishName : "";
-  const displayManaCost = getDisplayField("mana_cost");
-  const displayTypeLine = getDisplayField("type_line");
-  const displayOracleText = getDisplayField("oracle_text");
-  const displayFlavorText = getDisplayField("flavor_text");
-  const displayPower = getDisplayField("power");
-  const displayToughness = getDisplayField("toughness");
-  const displayLoyalty = getDisplayField("loyalty");
-  const displaySetName = selectedArt?.setName || activeZhFace?.set_name || zhCard?.set_name || card.set_name;
+  const presentation = getCardPresentation(card, {
+    language,
+    faceIndex: flipped ? 1 : 0,
+    faces: selectedCardFaces,
+    imageUris: selectedArt?.image_uris || card.image_uris,
+    imageMode,
+  });
+  const {
+    isDoubleFaced,
+    name: displayName,
+    secondaryName: displaySecondaryName,
+    mana_cost: displayManaCost,
+    type_line: displayTypeLine,
+    oracle_text: displayOracleText,
+    flavor_text: displayFlavorText,
+    power: displayPower,
+    toughness: displayToughness,
+    loyalty: displayLoyalty,
+    frontImageUrl: frontImageUri,
+    backImageUrl: backImageUri,
+  } = presentation;
+  const displaySetName = selectedArt?.setName || presentation.set_name;
   const displaySet = selectedArt?.set || card.set;
   const displayRarity = selectedArt?.rarity || card.rarity;
   const setIconClass = getSetIconClass({ set: displaySet, rarity: displayRarity });
+  const keywordExplanations = (card.keywords || [])
+    .map((keyword) => abilityCatalog[keyword.trim().toLowerCase()])
+    .filter(Boolean);
 
   useEffect(() => {
     setImgError(false);
   }, [frontImageUri, backImageUri]);
 
   // Preload art_crop image so drag ghost renders immediately on first drag
-  const artCropPreloadUri = card.image_uris
-    ? getImageUri(card.image_uris, "art_crop")
-    : card.card_faces?.[0]?.image_uris
-      ? getImageUri(card.card_faces[0].image_uris, "art_crop")
-      : "";
+  const artCropPreloadUri = getCardImage(card, { mode: "art_crop" });
   useEffect(() => {
     if (!artCropPreloadUri) return;
     const img = new Image();
@@ -152,18 +146,21 @@ function CardItem({ card, imageMode, decks: propDecks }) {
   };
 
   const getImageUrlForDeck = () => {
-    if (selectedArt) return selectedArt.normal || getImageUri(selectedArt.card_faces?.[0]?.image_uris, "normal");
-    if (card.image_uris?.normal) return card.image_uris.normal;
-    if (card.card_faces?.[0]?.image_uris?.normal) return card.card_faces[0].image_uris.normal;
-    return null;
+    if (selectedArt?.normal) return selectedArt.normal;
+    return getCardImage(card, {
+      mode: "normal",
+      faces: selectedArt?.card_faces || card.card_faces,
+      imageUris: selectedArt?.image_uris || card.image_uris,
+    }) || null;
   };
 
   const getDisplayUrlForDeck = () => {
-    if (selectedArt) {
-      return getImageUri(selectedArt.image_uris, "art_crop")
-        || getImageUri(selectedArt.card_faces?.[0]?.image_uris, "art_crop");
-    }
-    return null;
+    if (!selectedArt) return null;
+    return getCardImage(card, {
+      mode: "art_crop",
+      faces: selectedArt.card_faces,
+      imageUris: selectedArt.image_uris,
+    }) || null;
   };
 
   const handleAddToDeck = async (deckId, deckName) => {
@@ -225,12 +222,54 @@ function CardItem({ card, imageMode, decks: propDecks }) {
     requestAnimationFrame(() => document.body.removeChild(ghost));
   };
 
+  const openActionMenu = (clientX, clientY) => {
+    const menuWidth = 210;
+    const menuHeight = 52;
+    setActionMenu({
+      left: Math.max(8, Math.min(clientX, window.innerWidth - menuWidth - 8)),
+      top: Math.max(8, Math.min(clientY, window.innerHeight - menuHeight - 8)),
+    });
+    onTooltipDeactivate?.();
+  };
+
+  const handleContextMenu = (event) => {
+    if (!onFindSimilar || !card.id) return;
+    event.preventDefault();
+    openActionMenu(event.clientX, event.clientY);
+  };
+
+  const handleMoreClick = (event) => {
+    event.stopPropagation();
+    const rect = event.currentTarget.getBoundingClientRect();
+    openActionMenu(rect.right - 210, rect.bottom + 6);
+  };
+
   return (
     <div
+      ref={cardRef}
       className={`card-item ${isArtCrop ? "art-crop" : ""}`}
       draggable={!isArtCrop}
       onDragStart={!isArtCrop ? handleDragStart : undefined}
+      onMouseEnter={onTooltipActivate}
+      onMouseMove={onTooltipActivate}
+      onMouseLeave={onTooltipDeactivate}
+      onContextMenu={handleContextMenu}
     >
+      {tooltipActive && keywordExplanations.length > 0 && (
+        <KeywordAbilityTooltip
+          anchorRef={cardRef}
+          abilities={keywordExplanations}
+          language={language}
+        />
+      )}
+      {actionMenu && (
+        <CardActionMenu
+          card={card}
+          position={actionMenu}
+          onClose={() => setActionMenu(null)}
+          onSearch={onFindSimilar}
+        />
+      )}
       <div
         className={`card-image-wrapper ${isDoubleFaced ? "flippable" : ""} ${isArtCrop ? "art-crop" : ""}`}
         draggable={isArtCrop}
@@ -292,6 +331,21 @@ function CardItem({ card, imageMode, decks: propDecks }) {
               <path d="M3 11V9a4 4 0 0 1 4-4h14" />
               <path d="M7 23l-4-4 4-4" />
               <path d="M21 13v2a4 4 0 0 1-4 4H3" />
+            </svg>
+          </button>
+        )}
+        {onFindSimilar && card.id && (
+          <button
+            type="button"
+            className="card-more-btn"
+            onClick={handleMoreClick}
+            title={t("moreCardActions")}
+            aria-label={t("moreCardActions")}
+          >
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+              <circle cx="5" cy="12" r="1.7" />
+              <circle cx="12" cy="12" r="1.7" />
+              <circle cx="19" cy="12" r="1.7" />
             </svg>
           </button>
         )}

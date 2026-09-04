@@ -1,10 +1,19 @@
 import { useState, useRef } from "react";
 import { useLanguage } from "../contexts/LanguageContext.jsx";
 
-function SearchBar({ onSearch, loading, rightActions = null, placeholder = null }) {
+function SearchBar({
+  onSearch,
+  loading,
+  rightActions = null,
+  placeholder = null,
+  value,
+  onChange,
+}) {
   const { t } = useLanguage();
-  const [query, setQuery] = useState("");
+  const [localQuery, setLocalQuery] = useState("");
   const inputRef = useRef(null);
+  const controlled = value !== undefined;
+  const query = controlled ? value : localQuery;
 
   const handleSubmit = (e) => {
     e.preventDefault();
@@ -21,7 +30,10 @@ function SearchBar({ onSearch, loading, rightActions = null, placeholder = null 
           className="search-input"
           placeholder={placeholder || t('searchPlaceholder')}
           value={query}
-          onChange={(e) => setQuery(e.target.value)}
+          onChange={(e) => {
+            if (controlled) onChange?.(e.target.value);
+            else setLocalQuery(e.target.value);
+          }}
           disabled={loading}
         />
         <button type="submit" className="search-btn" disabled={loading}>

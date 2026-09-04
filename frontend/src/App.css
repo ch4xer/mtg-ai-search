@@ -1,6 +1,7 @@
 @import "./styles/theme-base.css";
 @import "./styles/shell-search.css";
 @import "./styles/cards.css";
+@import "./styles/random-card.css";
 @import "./styles/auth-decks.css";
 @import "./styles/deck-detail.css";
 @import "./styles/feedback.css";

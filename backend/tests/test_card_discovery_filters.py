@@ -29,7 +29,48 @@ class CardDiscoveryFilterTest(unittest.TestCase):
         self.assertIn("c.type_line ILIKE $1", filter_spec.where)
         self.assertIn("c.oracle_text ILIKE $1", filter_spec.where)
         self.assertNotIn("card_print_translations", filter_spec.where)
-        self.assertEqual(filter_spec.params, ["%lightning%"])
+        self.assertEqual(filter_spec.params[:filter_spec.where_param_count], ["%lightning%"])
+
+    def test_set_codes_are_normalized_and_use_a_print_join(self):
+        filter_spec = build_discovery_filter(set_codes=[" LTR ", "ltc", "LTR"])
+
+        self.assertIn("cp.set_code = ANY($1::text[])", filter_spec.where)
+        self.assertEqual(filter_spec.params, [["ltc", "ltr"]])
+        self.assertTrue(filter_spec.need_print_join)
+        self.assertEqual(filter_spec.where_param_count, 1)
+
+    def test_set_and_rarity_apply_to_the_same_print_alias(self):
+        filter_spec = build_discovery_filter(rarities=["rare"], set_codes=["LTR"])
+
+        self.assertIn("cp.rarity = ANY($1::text[])", filter_spec.where)
+        self.assertIn("cp.set_code = ANY($2::text[])", filter_spec.where)
+        self.assertEqual(filter_spec.params, [["rare"], ["ltr"]])
+        self.assertTrue(filter_spec.need_print_join)
+
+    def test_empty_set_codes_do_not_require_a_print_join(self):
+        filter_spec = build_discovery_filter(set_codes=["", "  "])
+
+        self.assertFalse(filter_spec.need_print_join)
+        self.assertNotIn("cp.set_code", filter_spec.where)
+
+    def test_selected_colors_require_the_exact_color_set(self):
+        filter_spec = build_discovery_filter(colors=["R", "U"])
+
+        self.assertIn("COALESCE(c.colors, ARRAY[]::text[]) @> $1::text[]", filter_spec.where)
+        self.assertIn("COALESCE(c.colors, ARRAY[]::text[]) <@ $1::text[]", filter_spec.where)
+        self.assertEqual(filter_spec.params, [["R", "U"]])
+
+    def test_function_tags_match_tag_or_label_and_exclude_source_card(self):
+        filter_spec = build_discovery_filter(
+            function_tags=[" Cast-Trigger-You ", "Magecraft", "magecraft"],
+            exclude_card_id="source-card",
+        )
+
+        self.assertIn("FROM card_tagger_tags ctt_filter", filter_spec.where)
+        self.assertIn("LOWER(ctt_filter.tag) = ANY($1::text[])", filter_spec.where)
+        self.assertIn("LOWER(tt_filter.label) = ANY($1::text[])", filter_spec.where)
+        self.assertIn("c.id <> $2", filter_spec.where)
+        self.assertEqual(filter_spec.params, [["cast-trigger-you", "magecraft"], "source-card"])
 
 
 if __name__ == "__main__":

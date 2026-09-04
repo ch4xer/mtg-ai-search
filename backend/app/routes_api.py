@@ -16,8 +16,6 @@ async def external_ai_search(req: ApiAiSearchRequest, raw_request: Request):
         req.query,
         get_client_ip(raw_request),
         user["id"],
-        rerank_enabled=req.rerank_enabled,
-        rerank_top_n=req.rerank_top_n,
         card_limit=req.limit,
     )
     return SearchResponse(results=results)

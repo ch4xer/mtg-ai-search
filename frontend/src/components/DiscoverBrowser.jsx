@@ -3,6 +3,7 @@ import CardGrid from "./CardGrid.jsx";
 import { useDiscoverCards } from "../hooks/useDiscoverCards.js";
 import { useUserDecks } from "../hooks/useUserDecks.js";
 import { useLanguage } from "../contexts/LanguageContext.jsx";
+import { getSearchableCardTypes } from "../utils/cardTypes.js";
 
 const COLOR_OPTIONS = [
   { value: "W", label: "White", symbolClass: "ms ms-w ms-cost" },
@@ -10,28 +11,6 @@ const COLOR_OPTIONS = [
   { value: "B", label: "Black", symbolClass: "ms ms-b ms-cost" },
   { value: "R", label: "Red", symbolClass: "ms ms-r ms-cost" },
   { value: "G", label: "Green", symbolClass: "ms ms-g ms-cost" },
-];
-
-const TYPE_OPTIONS_EN = [
-  { value: "Creature", label: "Creature" },
-  { value: "Instant", label: "Instant" },
-  { value: "Sorcery", label: "Sorcery" },
-  { value: "Enchantment", label: "Enchantment" },
-  { value: "Artifact", label: "Artifact" },
-  { value: "Land", label: "Land" },
-  { value: "Planeswalker", label: "Planeswalker" },
-  { value: "Battle", label: "Battle" },
-];
-
-const TYPE_OPTIONS_ZH = [
-  { value: "Creature", label: "生物" },
-  { value: "Instant", label: "瞬间" },
-  { value: "Sorcery", label: "法术" },
-  { value: "Enchantment", label: "结界" },
-  { value: "Artifact", label: "神器" },
-  { value: "Land", label: "地" },
-  { value: "Planeswalker", label: "鹏洛客" },
-  { value: "Battle", label: "战斗" },
 ];
 
 const RARITY_OPTIONS_EN = [
@@ -86,10 +65,115 @@ const EXACT_MATCH_FEATURES = [
   },
 ];
 
-function DiscoverBrowser({ imageMode, onToggleImageMode, enabled = true }) {
+function SetMultiselect({ sets, selectedCodes, setSelectedCodes, language, t }) {
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  const rootRef = useRef(null);
+  const normalizedSearch = search.trim().toLowerCase();
+  const visibleSets = sets.filter((set) => {
+    if (!normalizedSearch) return true;
+    return [set.code, set.name, set.zh_name]
+      .some((value) => value?.toLowerCase().includes(normalizedSearch));
+  }).slice(0, 80);
+
+  useEffect(() => {
+    if (!open) return;
+    const closeOnOutsideClick = (event) => {
+      if (!rootRef.current?.contains(event.target)) setOpen(false);
+    };
+    const closeOnEscape = (event) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("pointerdown", closeOnOutsideClick);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutsideClick);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [open]);
+
+  const toggleCode = (code) => {
+    setSelectedCodes((previous) => {
+      const next = new Set(previous);
+      if (next.has(code)) next.delete(code);
+      else next.add(code);
+      return next;
+    });
+  };
+
+  const summary = selectedCodes.size > 0
+    ? t("setsSelected").replace("{count}", selectedCodes.size)
+    : t("anySet");
+
+  return (
+    <div className="filter-group filter-sets-group">
+      <span className="filter-group-title">{t("set")}</span>
+      <div className="filter-abilities-wrapper">
+        <div className="filter-ability-multiselect filter-set-multiselect" ref={rootRef}>
+          <button
+            type="button"
+            className={`filter-ability-trigger ${selectedCodes.size > 0 ? "active" : ""}`}
+            onClick={() => setOpen((value) => !value)}
+            aria-expanded={open}
+          >
+            <span>{summary}</span>
+            {selectedCodes.size > 0 && <span className="filter-count-badge">{selectedCodes.size}</span>}
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M6 9l6 6 6-6" />
+            </svg>
+          </button>
+          {open && (
+            <div className="filter-ability-menu filter-set-menu" role="listbox" aria-multiselectable="true">
+              <input
+                type="search"
+                className="filter-set-search"
+                placeholder={t("searchSets")}
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                autoFocus
+              />
+              {visibleSets.map((set) => {
+                const displayName = language === "zh" ? (set.zh_name || set.name) : set.name;
+                return (
+                  <label key={set.code} className="filter-ability-option filter-set-option">
+                    <input
+                      type="checkbox"
+                      checked={selectedCodes.has(set.code)}
+                      onChange={() => toggleCode(set.code)}
+                    />
+                    <span className="filter-set-code">{set.code.toUpperCase()}</span>
+                    <span className="filter-set-name" title={displayName}>{displayName}</span>
+                    <span className="filter-set-count">{set.card_count}</span>
+                  </label>
+                );
+              })}
+              {visibleSets.length === 0 && <div className="filter-set-empty">{t("noSetsFound")}</div>}
+            </div>
+          )}
+        </div>
+        {selectedCodes.size > 0 && (
+          <div className="filter-selected-keywords filter-selected-sets">
+            {[...selectedCodes].map((code) => (
+              <button key={code} type="button" className="filter-keyword-tag" onClick={() => toggleCode(code)}>
+                {code.toUpperCase()}
+                <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" aria-hidden="true">
+                  <line x1="18" y1="6" x2="6" y2="18" />
+                  <line x1="6" y1="6" x2="18" y2="18" />
+                </svg>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function DiscoverBrowser({ imageMode, onToggleImageMode, enabled = true, onFindSimilar }) {
   const { t, language } = useLanguage();
   const decks = useUserDecks();
   const [keywordsOpen, setKeywordsOpen] = useState(false);
+  const [functionTagDraft, setFunctionTagDraft] = useState("");
   const keywordsRef = useRef(null);
   const filtersRef = useRef(null);
   const {
@@ -97,8 +181,10 @@ function DiscoverBrowser({ imageMode, onToggleImageMode, enabled = true }) {
     colors, setColors,
     types, setTypes,
     rarity, setRarity,
+    selectedSetCodes, setSelectedSetCodes,
     selectedKeywords, setSelectedKeywords,
     selectedSubtypes, setSelectedSubtypes,
+    functionTags, setFunctionTags,
     cmcMin, setCmcMin,
     cmcMax, setCmcMax,
     powerMin, setPowerMin,
@@ -120,12 +206,13 @@ function DiscoverBrowser({ imageMode, onToggleImageMode, enabled = true }) {
     subtypeFacets,
     keywordFacets,
     allKeywords,
+    allSets,
     hasFilters,
     activeFilterCount,
     totalPages,
-  } = useDiscoverCards({ enabled, includeZh: language === "zh" });
+  } = useDiscoverCards({ enabled });
 
-  const TYPE_OPTIONS = language === 'zh' ? TYPE_OPTIONS_ZH : TYPE_OPTIONS_EN;
+  const TYPE_OPTIONS = getSearchableCardTypes(language);
   const RARITY_OPTIONS = language === 'zh' ? RARITY_OPTIONS_ZH : RARITY_OPTIONS_EN;
   const selectedKeywordCount = selectedKeywords.size;
   const keywordSummary = selectedKeywordCount
@@ -140,6 +227,21 @@ function DiscoverBrowser({ imageMode, onToggleImageMode, enabled = true }) {
       } else {
         next.add(keyword);
       }
+      return next;
+    });
+  };
+
+  const addFunctionTags = () => {
+    const additions = functionTagDraft.split(",").map((tag) => tag.trim()).filter(Boolean);
+    if (!additions.length) return;
+    setFunctionTags((previous) => new Set([...previous, ...additions]));
+    setFunctionTagDraft("");
+  };
+
+  const removeFunctionTag = (tag) => {
+    setFunctionTags((previous) => {
+      const next = new Set(previous);
+      next.delete(tag);
       return next;
     });
   };
@@ -201,14 +303,31 @@ function DiscoverBrowser({ imageMode, onToggleImageMode, enabled = true }) {
       <div className="discover-filter-popover" ref={filtersRef}>
         <div className="discover-search-bar">
           <div className="discover-search-row">
-            <input
-              type="text"
-              className="discover-search-input"
-              placeholder={t('searchPlaceholderDiscover')}
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter") handleSearch(); }}
-            />
+            <div className="discover-search-input-shell">
+              {[...functionTags].map((tag) => (
+                <button
+                  key={tag}
+                  type="button"
+                  className="discover-search-tag"
+                  title={t("removeFunctionTag")}
+                  onClick={() => removeFunctionTag(tag)}
+                >
+                  <span>{tag}</span>
+                  <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" aria-hidden="true">
+                    <line x1="18" y1="6" x2="6" y2="18" />
+                    <line x1="6" y1="6" x2="18" y2="18" />
+                  </svg>
+                </button>
+              ))}
+              <input
+                type="text"
+                className="discover-search-input"
+                placeholder={functionTags.size ? t("searchWithFunctionTags") : t('searchPlaceholderDiscover')}
+                value={q}
+                onChange={(e) => setQ(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") handleSearch(); }}
+              />
+            </div>
             <button className="discover-search-go" onClick={handleSearch} disabled={loading}>
               {loading ? "..." : (
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -236,6 +355,26 @@ function DiscoverBrowser({ imageMode, onToggleImageMode, enabled = true }) {
 
         <div className={`discover-filters-bar ${filtersOpen ? "open" : ""}`}>
           <div className="discover-filters-row">
+          <div className="filter-group filter-function-tags-group">
+            <span className="filter-group-title">{t("functionTags")}</span>
+            <div className="filter-function-tag-entry">
+              <input
+                type="text"
+                className="filter-text-input-small"
+                placeholder={t("functionTagsPlaceholder")}
+                value={functionTagDraft}
+                onChange={(event) => setFunctionTagDraft(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    addFunctionTags();
+                  }
+                }}
+              />
+              <button type="button" onClick={addFunctionTags} disabled={!functionTagDraft.trim()} aria-label={t("addFunctionTags")}>+</button>
+            </div>
+          </div>
+
           <div className="filter-group">
             <span className="filter-group-title">{t('colors')}</span>
             <div className="filter-color-inline">
@@ -273,6 +412,14 @@ function DiscoverBrowser({ imageMode, onToggleImageMode, enabled = true }) {
               ))}
             </select>
           </div>
+
+          <SetMultiselect
+            sets={allSets}
+            selectedCodes={selectedSetCodes}
+            setSelectedCodes={setSelectedSetCodes}
+            language={language}
+            t={t}
+          />
 
           {showSubtypes && (
             <div className="filter-group filter-abilities-group">
@@ -471,7 +618,7 @@ function DiscoverBrowser({ imageMode, onToggleImageMode, enabled = true }) {
         {!loading && results.length === 0 && hasFilters && <div className="no-results"><p>{t('noCardsFound')}</p></div>}
         {!loading && results.length > 0 && (
           <>
-            <CardGrid cards={results} imageMode={imageMode} decks={decks} />
+            <CardGrid cards={results} imageMode={imageMode} decks={decks} onFindSimilar={onFindSimilar} />
             {totalPages > 1 && <Pagination page={page} totalPages={totalPages} onChange={handlePageChange} />}
           </>
         )}

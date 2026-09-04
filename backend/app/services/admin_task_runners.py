@@ -37,10 +37,17 @@ async def run_sync_abilities():
             status_callback=lambda msg: set_task_state("seed_abilities", TaskStatus.RUNNING, msg),
         )
         added = result["added"]
+        refreshed = result.get("refreshed", 0)
         if added:
             names = "、".join(result["added_names"][:5])
             suffix = "等" if added > 5 else ""
-            set_task_state("seed_abilities", TaskStatus.DONE, f"完成！新增 {added} 个关键词（{names}{suffix}）")
+            set_task_state(
+                "seed_abilities",
+                TaskStatus.DONE,
+                f"完成！新增 {added} 个关键词（{names}{suffix}），处理 {refreshed} 条双语说明",
+            )
+        elif refreshed:
+            set_task_state("seed_abilities", TaskStatus.DONE, f"完成！处理 {refreshed} 条双语说明")
         else:
             set_task_state("seed_abilities", TaskStatus.DONE, "完成！无新关键词需要添加")
     except Exception as exc:

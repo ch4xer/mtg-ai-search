@@ -32,6 +32,12 @@ DEFAULT_PRINT_JOIN = """LEFT JOIN LATERAL (
                LIMIT 1
            ) zt ON TRUE"""
 
+MATCHED_PRINT_JOIN = """JOIN card_prints dp ON dp.id = sub.matched_print_id
+           LEFT JOIN card_print_translations zt
+             ON zt.print_id = dp.id
+            AND zt.lang = 'zhs'
+            AND zt.status = 'ok'"""
+
 
 async def get_cards_by_ids(card_ids: list[str]) -> list[dict]:
     if not card_ids:

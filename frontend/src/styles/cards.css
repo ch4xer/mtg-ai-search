@@ -32,6 +32,75 @@
   background: var(--card-hover);
 }
 
+/* ===== Keyword ability hover explanations ===== */
+.keyword-ability-tooltip {
+  position: fixed;
+  z-index: 1080;
+  max-height: calc(100vh - 24px);
+  overflow: hidden;
+  pointer-events: none;
+  background: color-mix(in srgb, var(--bg-card) 96%, transparent);
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  box-shadow: 0 12px 32px var(--shadow-strong);
+  color: var(--text-primary);
+  backdrop-filter: blur(12px);
+  animation: keyword-tooltip-in 120ms ease-out;
+}
+
+.keyword-ability-tooltip-list {
+  max-height: calc(100vh - 24px);
+  overflow: hidden;
+  padding: 0.25rem 0.8rem 0.35rem;
+}
+
+.keyword-ability-tooltip-item {
+  padding: 0.55rem 0;
+}
+
+.keyword-ability-tooltip-item + .keyword-ability-tooltip-item {
+  border-top: 1px solid var(--border-subtle);
+}
+
+.keyword-ability-tooltip-item h4 {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin: 0 0 0.2rem;
+  color: var(--accent);
+  font-family: "Cinzel", serif;
+  font-size: 0.84rem;
+  line-height: 1.25;
+}
+
+.keyword-ability-tooltip-icon {
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 1.35rem;
+  width: 1.35rem;
+  height: 1.35rem;
+  font-size: 0.9rem;
+  line-height: 1;
+}
+
+.keyword-ability-tooltip-item p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+  line-height: 1.38;
+}
+
+@keyframes keyword-tooltip-in {
+  from { opacity: 0; transform: translateY(3px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@media (hover: none), (pointer: coarse) {
+  .keyword-ability-tooltip {
+    display: none;
+  }
+}
+
 .card-rank {
   position: absolute;
   top: 12px;
@@ -195,6 +264,263 @@
   background: var(--accent);
   color: var(--accent-text-dark);
   transform: scale(1.1);
+}
+
+.card-more-btn {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  z-index: 4;
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border: none;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.62);
+  color: #fff;
+  cursor: pointer;
+  backdrop-filter: blur(4px);
+  transition: background 0.2s ease, color 0.2s ease, transform 0.2s ease;
+}
+
+.card-more-btn:hover,
+.card-more-btn:focus-visible {
+  background: var(--accent);
+  color: var(--accent-text-dark);
+  transform: scale(1.08);
+}
+
+.card-action-menu {
+  position: fixed;
+  z-index: 1200;
+  width: 210px;
+  padding: 0.3rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--bg-card) 96%, transparent);
+  box-shadow: 0 10px 30px var(--shadow-strong);
+  backdrop-filter: blur(12px);
+}
+
+.card-action-menu button {
+  width: 100%;
+  padding: 0.65rem 0.7rem;
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.card-action-menu button:hover,
+.card-action-menu button:focus-visible {
+  outline: none;
+  background: var(--accent);
+  color: var(--accent-text-dark);
+}
+
+.card-action-menu button > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.card-action-chevron {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.card-tag-submenu {
+  position: fixed;
+  z-index: 1201;
+  width: min(320px, calc(100vw - 16px));
+  max-height: min(430px, calc(100vh - 16px));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--bg-card) 97%, transparent);
+  box-shadow: 0 12px 34px var(--shadow-strong);
+  backdrop-filter: blur(12px);
+  overscroll-behavior: contain;
+}
+
+.card-tag-submenu-header {
+  padding: 0.7rem 0.75rem 0.6rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.card-tag-submenu-header > div {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.card-tag-submenu-header button {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.card-tag-submenu-header button:hover,
+.card-tag-submenu-header button:focus-visible {
+  background: var(--bg-hover);
+  color: var(--accent);
+}
+
+.card-tag-submenu-header strong {
+  color: var(--text-primary);
+  font-size: 0.92rem;
+}
+
+.card-tag-submenu-header > span {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 0.76rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.card-tag-options {
+  min-height: 90px;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  padding: 0.35rem;
+  touch-action: pan-y;
+}
+
+.card-tag-option {
+  padding: 0.48rem 0.5rem;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.55rem;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.card-tag-option:hover {
+  background: var(--accent-tint-subtle);
+}
+
+.card-tag-option input {
+  margin-top: 0.18rem;
+  accent-color: var(--accent);
+}
+
+.card-tag-option > span {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.card-tag-option strong {
+  color: var(--text-primary);
+  font-size: 0.84rem;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.card-tag-option small {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 0.7rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.card-tag-menu-status {
+  min-height: 100px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.55rem;
+  color: var(--text-muted);
+  font-size: 0.84rem;
+  text-align: center;
+}
+
+.card-tag-menu-status .loading-spinner {
+  width: 20px;
+  height: 20px;
+  border-width: 2px;
+  margin: 0;
+}
+
+.card-tag-menu-error {
+  padding: 0.8rem;
+  flex-direction: column;
+  color: var(--ctp-red);
+}
+
+.card-tag-menu-error button {
+  padding: 0.3rem 0.6rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: 5px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.card-tag-submenu-footer {
+  padding: 0.6rem 0.7rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.card-tag-selection-tools {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.1rem;
+  color: var(--text-muted);
+  font-size: 0.72rem;
+}
+
+.card-tag-selection-tools button {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+}
+
+.card-tag-search-btn {
+  flex-shrink: 0;
+  padding: 0.48rem 0.75rem;
+  border: 0;
+  border-radius: 6px;
+  background: var(--accent);
+  color: var(--accent-text-dark);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.card-tag-search-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
 }
 
 /* ===== Art Picker ===== */

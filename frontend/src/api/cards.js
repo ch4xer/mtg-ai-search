@@ -1,4 +1,4 @@
-import { apiFetch } from "../utils/apiFetch.js";
+import { apiJson } from "../utils/apiFetch.js";
 import { cacheImages } from "../utils/imageCache.js";
 
 const PRINTS_CACHE_TTL = 30 * 60 * 1000;
@@ -7,11 +7,22 @@ const PRINT_IMAGE_PRELOAD_LIMIT = 16;
 const printsCache = new Map();
 const pendingPrintRequests = new Map();
 
-export function fetchCardPrints(cardId) {
-  return apiFetch(`/api/cards/${cardId}/prints`);
+function fetchCardPrints(cardId) {
+  return apiJson(`/api/cards/${encodeURIComponent(cardId)}/prints`, {}, "Failed to fetch card prints");
 }
 
-export function normalizePrints(data) {
+export function fetchRandomCard(excludeCardId = null) {
+  const params = new URLSearchParams();
+  if (excludeCardId) params.set("exclude_card_id", excludeCardId);
+  const suffix = params.toString();
+  return apiJson(`/api/cards/random${suffix ? `?${suffix}` : ""}`, {}, "Failed to fetch a random card");
+}
+
+export function fetchCardFunctionTags(cardId) {
+  return apiJson(`/api/cards/${encodeURIComponent(cardId)}/function-tags`, {}, "Failed to fetch function tags");
+}
+
+function normalizePrints(data) {
   return (data.prints || [])
     .map((print) => {
       const collectorNumber = print.image_collector_number;
@@ -90,12 +101,7 @@ export async function fetchNormalizedCardPrints(cardId) {
   if (pending) return pending;
 
   const request = (async () => {
-    const res = await fetchCardPrints(cacheKey);
-    if (!res.ok) {
-      throw new Error(`Failed to fetch card prints: ${res.status}`);
-    }
-
-    const data = await res.json();
+    const data = await fetchCardPrints(cacheKey);
     const prints = normalizePrints(data);
     setCachedPrints(cacheKey, prints);
     warmPrintImageCache(prints);

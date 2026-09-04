@@ -1,12 +1,24 @@
 """Card search and discover workflows."""
 
 import asyncio
+from functools import lru_cache
+from pathlib import Path
 
 from fastapi import HTTPException, Request
 
 from ..config import get_rate_limits
+from ..data_loader import parse_keyword_abilities
+from ..keyword_ability_catalog import CORE_KEYWORD_EXPLANATIONS, concise_rules_fallback
 from ..repositories.ai_search_sessions import create_ai_search_session, get_ai_search_session
-from ..repositories.cards import discover_cards, get_all_keywords, get_card_prints_by_oracle_id
+from ..repositories.cards import (
+    discover_cards,
+    get_card_function_tags,
+    get_all_keywords,
+    get_keyword_ability_rows,
+    get_card_prints_by_oracle_id,
+    get_card_set_catalog,
+    get_random_playable_card,
+)
 from ..repositories.search_logs import get_ip_hourly_search_count, get_user_hourly_search_count, log_search
 from ..repositories.users import get_user_by_id
 from ..schemas.search import DiscoverRequest
@@ -28,8 +40,6 @@ async def search_cards(
     client_ip: str,
     user_id: str | None,
     *,
-    rerank_enabled: bool = True,
-    rerank_top_n: int = 200,
     card_limit: int = 60,
     card_offset: int = 0,
 ) -> list[dict]:
@@ -37,8 +47,6 @@ async def search_cards(
         query,
         client_ip,
         user_id,
-        rerank_enabled=rerank_enabled,
-        rerank_top_n=rerank_top_n,
         card_limit=card_limit,
         card_offset=card_offset,
         create_session=False,
@@ -51,8 +59,6 @@ async def search_cards_result(
     client_ip: str,
     user_id: str | None,
     *,
-    rerank_enabled: bool = True,
-    rerank_top_n: int = 200,
     card_limit: int = 60,
     card_offset: int = 0,
     search_id: str | None = None,
@@ -133,24 +139,7 @@ async def search_cards_result(
 
 
 async def discover(req: DiscoverRequest) -> dict:
-    result = await discover_cards(
-        q=req.q,
-        colors=req.colors,
-        types=req.types,
-        rarities=req.rarities,
-        keywords=req.keywords,
-        subtypes=req.subtypes,
-        include_playtest=req.include_playtest,
-        cmc_min=req.cmc_min,
-        cmc_max=req.cmc_max,
-        power_min=req.power_min,
-        power_max=req.power_max,
-        toughness_min=req.toughness_min,
-        toughness_max=req.toughness_max,
-        page=req.page,
-        page_size=req.page_size,
-    )
-    return result
+    return await discover_cards(**req.model_dump())
 
 
 async def discover_exact_match(query: str, limit: int, **filters) -> dict:
@@ -161,5 +150,57 @@ async def list_keywords() -> dict:
     return {"keywords": await get_all_keywords()}
 
 
+@lru_cache(maxsize=1)
+def _keyword_rules() -> dict[str, str]:
+    path = Path(__file__).resolve().parents[2] / "data" / "keyword_ability.txt"
+    return parse_keyword_abilities(str(path)) if path.exists() else {}
+
+
+async def list_keyword_abilities() -> dict:
+    rules = _keyword_rules()
+    abilities: dict[str, dict] = {}
+    for row in await get_keyword_ability_rows():
+        name = row["name"]
+        core = CORE_KEYWORD_EXPLANATIONS.get(name.lower(), {})
+        raw_rules = rules.get(name, "")
+        description_en = (row["description"] or "").strip()
+        if not description_en or description_en == raw_rules:
+            description_en = core.get("description_en", "")
+        if not description_en:
+            description_en = concise_rules_fallback(raw_rules)
+        if not description_en:
+            continue
+        abilities[name.lower()] = {
+            "name": name,
+            "name_zh": (row["name_zh"] or "").strip() or core.get("name_zh", ""),
+            "description_en": description_en,
+            "description_zh": (row["description_zh"] or "").strip() or core.get("description_zh", ""),
+        }
+
+    for normalized_name, core in CORE_KEYWORD_EXPLANATIONS.items():
+        abilities.setdefault(
+            normalized_name,
+            {
+                "name": normalized_name.title(),
+                "name_zh": core["name_zh"],
+                "description_en": core["description_en"],
+                "description_zh": core["description_zh"],
+            },
+        )
+    return {"abilities": list(abilities.values())}
+
+
+async def list_card_sets() -> dict:
+    return {"sets": await get_card_set_catalog()}
+
+
 async def list_card_prints(oracle_id: str) -> dict:
     return {"prints": await get_card_prints_by_oracle_id(oracle_id)}
+
+
+async def random_card(exclude_card_id: str | None = None) -> dict | None:
+    return await get_random_playable_card(exclude_card_id)
+
+
+async def card_function_tags(card_id: str) -> dict | None:
+    return await get_card_function_tags(card_id)

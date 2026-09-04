@@ -131,10 +131,14 @@ def create_schema(conn):
             CREATE TABLE IF NOT EXISTS keyword_abilities (
                 id          TEXT PRIMARY KEY,
                 name        TEXT NOT NULL,
+                name_zh     TEXT,
                 description TEXT NOT NULL,
+                description_zh TEXT NOT NULL DEFAULT '',
                 embedding   halfvec(2560)
             )
         """)
+        cur.execute("ALTER TABLE keyword_abilities ADD COLUMN IF NOT EXISTS name_zh TEXT")
+        cur.execute("ALTER TABLE keyword_abilities ADD COLUMN IF NOT EXISTS description_zh TEXT NOT NULL DEFAULT ''")
         cur.execute("""
             CREATE TABLE IF NOT EXISTS tag_sync_state (
                 source_url      TEXT PRIMARY KEY,
@@ -629,15 +633,26 @@ def insert_abilities(conn, abilities: dict[str, str], skip_summary: bool = False
     if skip_summary:
         # Fast path: insert all at once without summarization
         log(f"Inserting {total} keyword abilities (no summarization)...")
+        from app.keyword_ability_catalog import core_keyword_explanation
+
         with conn.cursor() as cur:
             values = [
-                (name.lower().replace(" ", "_"), name, desc)
+                (
+                    name.lower().replace(" ", "_"),
+                    name,
+                    (core_keyword_explanation(name) or {}).get("name_zh"),
+                    desc,
+                    (core_keyword_explanation(name) or {}).get("description_zh", ""),
+                )
                 for name, desc in abilities.items()
             ]
             cur.executemany(
-                """INSERT INTO keyword_abilities (id, name, description) VALUES (%s, %s, %s)
+                """INSERT INTO keyword_abilities (id, name, name_zh, description, description_zh)
+                   VALUES (%s, %s, %s, %s, %s)
                    ON CONFLICT (id) DO UPDATE SET
+                       name_zh = COALESCE(EXCLUDED.name_zh, keyword_abilities.name_zh),
                        description = EXCLUDED.description,
+                       description_zh = COALESCE(NULLIF(EXCLUDED.description_zh, ''), keyword_abilities.description_zh),
                        embedding = CASE WHEN keyword_abilities.description IS NOT DISTINCT FROM EXCLUDED.description
                                         THEN keyword_abilities.embedding ELSE NULL END""",
                 values,
@@ -646,56 +661,69 @@ def insert_abilities(conn, abilities: dict[str, str], skip_summary: bool = False
         log("Abilities inserted.")
         return
 
-    from app.ability_summarizer import summarize_ability
+    from app.ability_summarizer import summarize_ability_bilingual
+    from app.keyword_ability_catalog import concise_rules_fallback, core_keyword_explanation
 
     log("Generating concise summaries with DeepSeek (checkpointed)...")
     processed = 0
     for name, desc in abilities.items():
         ability_id = name.lower().replace(" ", "_")
+        existing_desc = ""
+        existing_name_zh = ""
+        existing_desc_zh = ""
 
         # Check existing state to decide whether to skip summarization
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT description, embedding FROM keyword_abilities WHERE id = %s",
+                "SELECT description, name_zh, description_zh FROM keyword_abilities WHERE id = %s",
                 (ability_id,),
             )
             row = cur.fetchone()
             if row:
-                existing_desc, existing_emb = row
-                # Skip summarization if:
-                # 1. Has non-NULL embedding (fully processed)
-                # 2. Has description that differs from raw (already summarized)
-                if existing_emb is not None:
-                    processed += 1
-                    if on_progress:
-                        on_progress(processed, total)
-                    continue
-                # If description is already different from raw, it's a summary - skip API call
-                if existing_desc != desc:
+                existing_desc, existing_name_zh, existing_desc_zh = row
+                if existing_desc and existing_desc != desc and existing_name_zh and existing_desc_zh:
                     processed += 1
                     if on_progress:
                         on_progress(processed, total)
                     continue
 
-        # Generate summary for new or not-yet-summarized ability
-        summary = summarize_ability(name, desc)
-        if summary is None:
-            summary = desc[:200] if len(desc) > 200 else desc
-            log(f"  [{processed + 1}/{total}] {name}: using fallback")
+        bilingual = summarize_ability_bilingual(name, desc)
+        core = core_keyword_explanation(name) or {}
+        stored_summary = existing_desc if existing_desc and existing_desc != desc else ""
+        if bilingual is None:
+            bilingual = {
+                "name_zh": core.get("name_zh", existing_name_zh),
+                "description_en": stored_summary or core.get("description_en", "") or concise_rules_fallback(desc),
+                "description_zh": core.get("description_zh", existing_desc_zh),
+            }
+            log(f"  [{processed + 1}/{total}] {name}: using local fallback")
+        elif stored_summary:
+            # Filling missing Chinese fields must not churn the existing English
+            # summary (or invalidate its embedding).
+            bilingual["description_en"] = stored_summary
 
         # Insert immediately (checkpoint)
         with conn.cursor() as cur:
             cur.execute(
-                """INSERT INTO keyword_abilities (id, name, description) VALUES (%s, %s, %s)
+                """INSERT INTO keyword_abilities (id, name, name_zh, description, description_zh)
+                   VALUES (%s, %s, %s, %s, %s)
                    ON CONFLICT (id) DO UPDATE SET
+                       name_zh = COALESCE(NULLIF(EXCLUDED.name_zh, ''), keyword_abilities.name_zh),
                        description = EXCLUDED.description,
+                       description_zh = COALESCE(NULLIF(EXCLUDED.description_zh, ''), keyword_abilities.description_zh),
                        embedding = CASE WHEN keyword_abilities.description IS NOT DISTINCT FROM EXCLUDED.description
                                         THEN keyword_abilities.embedding ELSE NULL END""",
-                (ability_id, name, summary),
+                (
+                    ability_id,
+                    name,
+                    bilingual["name_zh"],
+                    bilingual["description_en"],
+                    bilingual["description_zh"],
+                ),
             )
         conn.commit()
         processed += 1
-        log(f"  [{processed}/{total}] {name}: {summary[:50]}...")
+        log(f"  [{processed}/{total}] {name}: {bilingual['description_en'][:50]}...")
         if on_progress:
             on_progress(processed, total)
 

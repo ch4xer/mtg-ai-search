@@ -16,6 +16,17 @@ logger = logging.getLogger(__name__)
 _PRE_SEED_DDL = """
 CREATE EXTENSION IF NOT EXISTS vector;
 
+CREATE TABLE IF NOT EXISTS keyword_abilities (
+    id             TEXT PRIMARY KEY,
+    name           TEXT NOT NULL,
+    name_zh        TEXT,
+    description    TEXT NOT NULL DEFAULT '',
+    description_zh TEXT NOT NULL DEFAULT '',
+    embedding      halfvec(2560)
+);
+ALTER TABLE keyword_abilities ADD COLUMN IF NOT EXISTS name_zh TEXT;
+ALTER TABLE keyword_abilities ADD COLUMN IF NOT EXISTS description_zh TEXT NOT NULL DEFAULT '';
+
 CREATE TABLE IF NOT EXISTS users (
     id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     username      TEXT UNIQUE NOT NULL,

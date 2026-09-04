@@ -115,7 +115,6 @@ function AppContent() {
   const location = useLocation();
   const isSearchRoute =
     location.pathname === "/" ||
-    location.pathname === "/discover" ||
     location.pathname === "/exact-match";
 
   return (
@@ -129,8 +128,6 @@ function AppContent() {
         </div>
         <Routes>
           <Route path="/" element={null} />
-          <Route path="/tag-search" element={<Navigate to="/" replace />} />
-          <Route path="/discover" element={<Navigate to="/exact-match" replace />} />
           <Route path="/exact-match" element={null} />
           <Route path="/login" element={<LoginPage />} />
           <Route path="/decks" element={<ProtectedRoute><DecksPage /></ProtectedRoute>} />

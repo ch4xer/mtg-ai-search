@@ -36,8 +36,8 @@ def _download_ability_file(status_callback: StatusCallback = None) -> str:
         raise
 
 
-def _refresh_abilities_from_rules(conn, status_callback: StatusCallback = None) -> list[str]:
-    """Refresh keyword_abilities from rule 702 and return newly added names."""
+def _refresh_abilities_from_rules(conn, status_callback: StatusCallback = None) -> tuple[list[str], int]:
+    """Refresh keyword abilities and return new names plus refreshed row count."""
     from scripts.seed_pg import insert_abilities
 
     from ..data_loader import parse_keyword_abilities
@@ -46,11 +46,20 @@ def _refresh_abilities_from_rules(conn, status_callback: StatusCallback = None) 
     abilities = parse_keyword_abilities(filepath)
 
     with conn.cursor() as cur:
-        cur.execute("SELECT id FROM keyword_abilities")
-        existing_ids = {row[0] for row in cur.fetchall()}
+        cur.execute("SELECT id, description, name_zh, description_zh FROM keyword_abilities")
+        existing = {row[0]: row[1:] for row in cur.fetchall()}
 
     parsed_ids = {name.lower().replace(" ", "_"): name for name in abilities.keys()}
-    new_names = sorted(name for keyword_id, name in parsed_ids.items() if keyword_id not in existing_ids)
+    new_names = sorted(name for keyword_id, name in parsed_ids.items() if keyword_id not in existing)
+    refresh_count = sum(
+        1
+        for keyword_id, name in parsed_ids.items()
+        if keyword_id not in existing
+        or not existing[keyword_id][0]
+        or existing[keyword_id][0] == abilities[name]
+        or not existing[keyword_id][1]
+        or not existing[keyword_id][2]
+    )
 
     emit_status(status_callback, "正在生成关键词摘要...")
     insert_abilities(
@@ -64,7 +73,7 @@ def _refresh_abilities_from_rules(conn, status_callback: StatusCallback = None) 
         emit_status(status_callback, f"发现 {len(new_names)} 个新关键词")
     else:
         logger.info("[keyword-sync] No new abilities in rules 702.")
-    return new_names
+    return new_names, refresh_count
 
 
 async def seed_abilities_if_empty(status_callback: StatusCallback = None) -> None:
@@ -87,16 +96,17 @@ async def seed_abilities_if_empty(status_callback: StatusCallback = None) -> Non
 
 async def sync_abilities_incremental(status_callback: StatusCallback = None) -> dict:
     """Refresh keyword abilities without clearing the existing table."""
-    result = {"added": 0, "added_names": []}
+    result = {"added": 0, "added_names": [], "refreshed": 0}
 
     def _do_sync() -> None:
         from scripts.seed_pg import get_conn
 
         conn = get_conn()
         try:
-            added = _refresh_abilities_from_rules(conn, status_callback)
+            added, refreshed = _refresh_abilities_from_rules(conn, status_callback)
             result["added"] = len(added)
             result["added_names"] = added
+            result["refreshed"] = refreshed
         finally:
             conn.close()
 
