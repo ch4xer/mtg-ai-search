@@ -1,5 +1,5 @@
 import { createPortal } from "react-dom";
-import { getLocalizedCardName } from "../deckModel.js";
+import { getLocalizedCardName } from "../../../utils/cardPresentation.js";
 
 export default function MovePanel({ card, language, onMove, onClose }) {
   if (!card) return null;

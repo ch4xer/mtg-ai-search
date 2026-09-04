@@ -1,29 +1,10 @@
-import { getExactImageUri, getImageUri } from "../../utils/cardImage.js";
+import {
+  getCardImage,
+  getCardPresentation,
+  getLocalizedCardName,
+} from "../../utils/cardPresentation.js";
+import { getCardTypeLabel } from "../../utils/cardTypes.js";
 import { getCardLegality, legalityLabel } from "../../utils/formats.js";
-
-export const TYPE_LABELS_EN = {
-  Creature: "Creature",
-  Planeswalker: "Planeswalker",
-  Instant: "Instant",
-  Sorcery: "Sorcery",
-  Enchantment: "Enchantment",
-  Artifact: "Artifact",
-  Battle: "Battle",
-  Land: "Land",
-  Other: "Other",
-};
-
-export const TYPE_LABELS_ZH = {
-  Creature: "生物",
-  Planeswalker: "旅法师",
-  Instant: "瞬间",
-  Sorcery: "法术",
-  Enchantment: "结界",
-  Artifact: "神器",
-  Battle: "战役",
-  Land: "地",
-  Other: "其他",
-};
 
 export const TYPE_MANA_CLASSES = {
   Creature: "ms-creature",
@@ -37,58 +18,24 @@ export const TYPE_MANA_CLASSES = {
   Other: null,
 };
 
-export const DOUBLE_FACED_LAYOUTS = new Set(["transform", "modal_dfc", "double_faced_token", "reversible_card"]);
-
 const COLOR_ORDER = { W: 0, U: 1, B: 2, R: 3, G: 4 };
 
-export function getDeckType(card) {
+function getDeckType(card) {
   return card?.deck_type || "Other";
 }
 
-function getChineseTranslation(card, field, faceIndex = null, fallbackToCard = true) {
-  const zhCard = card?.zh;
-  if (!zhCard) return null;
-
-  const zhFaces = Array.isArray(zhCard.card_faces) ? zhCard.card_faces : [];
-  if (Number.isInteger(faceIndex)) {
-    const faceValue = zhFaces[faceIndex]?.[field];
-    if (faceValue) return faceValue;
-  }
-
-  return fallbackToCard ? (zhCard[field] || null) : null;
-}
-
-export function getLocalizedCardField(card, field, language = "zh", faceIndex = null) {
-  if (!card) return "";
-  if (language === "zh") {
-    const translated = getChineseTranslation(card, field, faceIndex);
-    if (translated) return translated;
-  }
-
-  if (Number.isInteger(faceIndex)) {
-    const faceValue = card.card_faces?.[faceIndex]?.[field];
-    if (faceValue) return faceValue;
-  }
-
-  return card[field] || "";
-}
-
-export function getLocalizedCardName(card, language = "zh", faceIndex = null) {
-  return getLocalizedCardField(card, "name", language, faceIndex) || card?.name || "";
-}
-
-export function getColorSortIndex(card) {
+function getColorSortIndex(card) {
   const colors = card.color_identity || card.colors || [];
   if (colors.length === 0) return 100;
   if (colors.length === 1) return COLOR_ORDER[colors[0]] ?? 50;
   return 50 + Math.min(...colors.map((color) => COLOR_ORDER[color] ?? 50));
 }
 
-export function hasUncertainCmc(card) {
+function hasUncertainCmc(card) {
   return /\{[XYZ]\}/i.test(card.mana_cost || "");
 }
 
-export function compareDeckCards(a, b, language = "zh") {
+function compareDeckCards(a, b, language = "zh") {
   const uncertainA = hasUncertainCmc(a.card);
   const uncertainB = hasUncertainCmc(b.card);
   const cmcA = a.card.cmc ?? 0;
@@ -105,7 +52,6 @@ export function compareDeckCards(a, b, language = "zh") {
 }
 
 export function buildCardGroups(cards, language) {
-  const labels = language === "zh" ? TYPE_LABELS_ZH : TYPE_LABELS_EN;
   const groups = {};
 
   for (const item of cards) {
@@ -122,7 +68,7 @@ export function buildCardGroups(cards, language) {
     .sort((a, b) => a.sort - b.sort)
     .map((group) => ({
       type: group.type,
-      label: labels[group.type] || labels.Other,
+      label: getCardTypeLabel(group.type, language),
       count: group.items.reduce((sum, card) => sum + card.quantity, 0),
       items: group.items,
     }));
@@ -230,72 +176,36 @@ export function validateDeck(cards, formatKey = "undefined", language = "zh") {
   };
 }
 
-export function getCardDisplayImage(item) {
-  return item.display_url
-    || getImageUri(item.card.image_uris, "art_crop")
-    || getImageUri(item.card.card_faces?.[0]?.image_uris, "art_crop");
+export function getDeckCardImage(item, mode = "normal") {
+  return getCardImage(item.card, { mode });
 }
 
 export function getCardCoverImage(item) {
-  return item.card.image_uris?.art_crop
-    || item.card.card_faces?.[0]?.image_uris?.art_crop
-    || "";
-}
-
-export function getCardFullImage(item) {
-  return getExactImageUri(item.card.image_uris, "png")
-    || getExactImageUri(item.card.card_faces?.[0]?.image_uris, "png")
-    || item.image_url;
-}
-
-export function getCardFaces(item) {
-  return item?.card?.card_faces || [];
-}
-
-export function isDoubleFacedCard(item) {
-  const faces = getCardFaces(item);
-  return faces.length >= 2 && DOUBLE_FACED_LAYOUTS.has(item.card.layout);
+  return getDeckCardImage(item, "art_crop");
 }
 
 export function getPreviewData(item, flipped = false, language = "zh") {
   if (!item) return null;
 
-  const faces = getCardFaces(item);
-  const isDoubleFaced = isDoubleFacedCard(item);
-  const activeFaceIndex = isDoubleFaced ? (flipped ? 1 : 0) : 0;
-  const activeFace = isDoubleFaced ? faces[activeFaceIndex] : null;
-  const frontFace = faces[0];
-  const backFace = faces[1];
-  const getEnglishField = (field) => activeFace ? activeFace[field] : (item.card[field] ?? frontFace?.[field]);
-  const getTranslatedField = (field) => {
-    const translatedFaceValue = getChineseTranslation(item.card, field, activeFaceIndex, !isDoubleFaced);
-    if (translatedFaceValue) return translatedFaceValue;
-    return isDoubleFaced ? null : getChineseTranslation(item.card, field);
-  };
-  const getField = (field) => (language === "zh" ? getTranslatedField(field) : null) || getEnglishField(field);
-  const englishName = activeFace?.name || item.card.name || frontFace?.name;
-  const translatedName = language === "zh"
-    ? getTranslatedField("name")
-    : null;
-  const displayName = translatedName || englishName;
-  const frontImage = getCardFullImage(item)
-    || getExactImageUri(frontFace?.image_uris, "png");
-  const backImage = getExactImageUri(backFace?.image_uris, "png");
+  const presentation = getCardPresentation(item.card, {
+    language,
+    faceIndex: flipped ? 1 : 0,
+  });
 
   return {
-    isDoubleFaced,
-    name: displayName,
-    secondary_name: translatedName && englishName && translatedName !== englishName ? englishName : "",
-    mana_cost: getField("mana_cost"),
-    type_line: getField("type_line"),
-    oracle_text: getField("oracle_text"),
-    power: getField("power"),
-    toughness: getField("toughness"),
-    loyalty: getField("loyalty"),
-    image_url: flipped ? backImage : frontImage,
-    front_image_url: frontImage,
-    back_image_url: backImage,
-    front_name: (language === "zh" ? getChineseTranslation(item.card, "name", 0, false) : null) || frontFace?.name || item.card.name,
-    back_name: (language === "zh" ? getChineseTranslation(item.card, "name", 1, false) : null) || backFace?.name || item.card.name,
+    isDoubleFaced: presentation.isDoubleFaced,
+    name: presentation.name,
+    secondary_name: presentation.secondaryName,
+    mana_cost: presentation.mana_cost,
+    type_line: presentation.type_line,
+    oracle_text: presentation.oracle_text,
+    power: presentation.power,
+    toughness: presentation.toughness,
+    loyalty: presentation.loyalty,
+    image_url: presentation.imageUrl,
+    front_image_url: presentation.frontImageUrl,
+    back_image_url: presentation.backImageUrl,
+    front_name: presentation.frontName,
+    back_name: presentation.backName,
   };
 }

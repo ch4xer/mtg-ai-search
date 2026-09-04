@@ -1,5 +1,5 @@
 import { createPortal } from "react-dom";
-import { getExactImageUri } from "../../../utils/cardImage.js";
+import { getImageUri } from "../../../utils/cardImage.js";
 import { cacheImage, isImageCached } from "../../../utils/imageCache.js";
 
 const ART_PICKER_SKELETON_COUNT = 18;
@@ -16,9 +16,8 @@ export default function ArtPickerModal({
 }) {
   if (!selectedCard) return null;
 
-  const currentImageUrl = getExactImageUri(selectedCard.card.image_uris, "png")
-    || getExactImageUri(selectedCard.card.card_faces?.[0]?.image_uris, "png")
-    || selectedCard.image_url;
+  const currentImageUrl = getImageUri(selectedCard.card.image_uris, "small")
+    || getImageUri(selectedCard.card.card_faces?.[0]?.image_uris, "small");
 
   return createPortal(
     <>
@@ -42,8 +41,8 @@ export default function ArtPickerModal({
         ) : (
           <div className="art-picker-grid">
             {artPrints.map((print) => {
-              const printImageUrl = getExactImageUri(print.image_uris, "png")
-                || getExactImageUri(print.card_faces?.[0]?.image_uris, "png");
+              const printImageUrl = getImageUri(print.image_uris, "small")
+                || getImageUri(print.card_faces?.[0]?.image_uris, "small");
               const isSelected = currentImageUrl === printImageUrl;
               const pickerImage = print.thumbnail || print.normal;
               return (

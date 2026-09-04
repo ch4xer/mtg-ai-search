@@ -4,7 +4,8 @@ import { addDeckCard, createDeck, fetchUserDecks, fetchSharedDeckCardsData, remo
 import { useToast } from "../contexts/ToastContext.jsx";
 import { useLanguage } from "../contexts/LanguageContext.jsx";
 import { FORMATS, getFormatLabel } from "../utils/formats.js";
-import { buildCardGroups, getCardDisplayImage, getCardFullImage, getLocalizedCardName, TYPE_MANA_CLASSES } from "../features/decks/deckModel.js";
+import { buildCardGroups, getDeckCardImage, TYPE_MANA_CLASSES } from "../features/decks/deckModel.js";
+import { getLocalizedCardName } from "../utils/cardPresentation.js";
 
 function DeckExplorerSidebar({ isOpen, onClose }) {
   const [decks, setDecks] = useState([]);
@@ -260,7 +261,7 @@ function DeckExplorerSidebar({ isOpen, onClose }) {
   const groups = selectedDeckId
     ? buildCardGroups(deckCards, language)
     : [];
-  const hoveredCardImage = hoveredCard ? getCardFullImage(hoveredCard) : "";
+  const hoveredCardImage = hoveredCard ? getDeckCardImage(hoveredCard) : "";
   const hoveredCardName = hoveredCard ? getLocalizedCardName(hoveredCard.card, language) : "";
 
   return createPortal(
@@ -389,10 +390,10 @@ function DeckExplorerSidebar({ isOpen, onClose }) {
                         onMouseEnter={(e) => handleCardHover(item, e.currentTarget)}
                         onMouseLeave={() => setHoveredCard(null)}
                       >
-                        {getCardDisplayImage(item) ? (
+                        {getDeckCardImage(item) ? (
                           <img
                             className="deck-explorer-card-img"
-                            src={getCardDisplayImage(item)}
+                            src={getDeckCardImage(item)}
                             alt=""
                             loading="lazy"
                           />

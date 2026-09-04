@@ -45,7 +45,7 @@ async function streamExport(fetcher, onProgress) {
   return exportId;
 }
 
-export function getExportProgressLabel(progress, t) {
+function getExportProgressLabel(progress, t) {
   if (!progress) return "";
   if (progress.phase === "download") return `${progress.current}/${progress.total}`;
   if (progress.phase === "file") return t("downloadingShort");

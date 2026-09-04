@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { fetchNormalizedCardPrints } from "../../../api/cards.js";
 import { patchDeckCard } from "../../../api/decks.js";
-import { getExactImageUri, getImageUri } from "../../../utils/cardImage.js";
-import { DOUBLE_FACED_LAYOUTS, getPreviewData } from "../deckModel.js";
+import { getImageUri } from "../../../utils/cardImage.js";
+import { hasDoubleFacedLayout } from "../../../utils/cardPresentation.js";
+import { getPreviewData } from "../deckModel.js";
 
 export function useDeckSelection({ id, cards, setCards, showToast, t, language }) {
   const [selectedCard, setSelectedCard] = useState(null);
@@ -13,6 +14,7 @@ export function useDeckSelection({ id, cards, setCards, showToast, t, language }
   const [loadingPrints, setLoadingPrints] = useState(false);
   const hoverTimerRef = useRef(null);
   const previewLockedRef = useRef(false);
+  const previewNeedsPointerMoveRef = useRef(false);
 
   const cancelPendingSelect = () => {
     if (hoverTimerRef.current) {
@@ -22,9 +24,23 @@ export function useDeckSelection({ id, cards, setCards, showToast, t, language }
   };
 
   const schedulePreviewSelect = (item) => {
-    if (previewLockedRef.current) return;
+    if (previewLockedRef.current || previewNeedsPointerMoveRef.current) return;
     cancelPendingSelect();
     hoverTimerRef.current = setTimeout(() => setSelectedCard(item), 200);
+  };
+
+  const handlePreviewPointerMove = (item) => {
+    if (!previewNeedsPointerMoveRef.current) return;
+    previewNeedsPointerMoveRef.current = false;
+    schedulePreviewSelect(item);
+  };
+
+  const handleCloseArtPicker = () => {
+    cancelPendingSelect();
+    // Removing the modal can fire mouseenter on the card revealed beneath it.
+    // Require real pointer movement before allowing that card to take over the preview.
+    previewNeedsPointerMoveRef.current = true;
+    setShowArtPicker(false);
   };
 
   useEffect(() => cancelPendingSelect, []);
@@ -56,8 +72,8 @@ export function useDeckSelection({ id, cards, setCards, showToast, t, language }
     if (!selectedCard) return;
     const displayUrl = getImageUri(print.image_uris, "art_crop")
       || getImageUri(print.card_faces?.[0]?.image_uris, "art_crop");
-    const imageUrl = getExactImageUri(print.image_uris, "png")
-      || getExactImageUri(print.card_faces?.[0]?.image_uris, "png");
+    const imageUrl = getImageUri(print.image_uris, "normal")
+      || getImageUri(print.card_faces?.[0]?.image_uris, "normal");
     try {
       const res = await patchDeckCard(id, selectedCard.card_id, {
         print_id: print.id,
@@ -103,7 +119,7 @@ export function useDeckSelection({ id, cards, setCards, showToast, t, language }
     } catch {
       showToast(t("artChangeFailed"), "error");
     }
-    setShowArtPicker(false);
+    handleCloseArtPicker();
   };
 
   const handleResetArt = async () => {
@@ -152,7 +168,7 @@ export function useDeckSelection({ id, cards, setCards, showToast, t, language }
     } catch {
       showToast(t("artChangeFailed"), "error");
     }
-    setShowArtPicker(false);
+    handleCloseArtPicker();
   };
 
   useEffect(() => {
@@ -164,7 +180,7 @@ export function useDeckSelection({ id, cards, setCards, showToast, t, language }
   useEffect(() => {
     if (!selectedCard?.card_id) return;
     if (selectedCard.card.card_faces?.length >= 2) return;
-    if (!DOUBLE_FACED_LAYOUTS.has(selectedCard.card.layout)) return;
+    if (!hasDoubleFacedLayout(selectedCard.card)) return;
 
     let cancelled = false;
     const hydrateFaces = async () => {
@@ -212,14 +228,15 @@ export function useDeckSelection({ id, cards, setCards, showToast, t, language }
     showMobileSheet,
     setShowMobileSheet,
     showArtPicker,
-    setShowArtPicker,
     artPrints,
     loadingPrints,
     handleOpenArtPicker,
+    handleCloseArtPicker,
     handleSelectArt,
     handleResetArt,
     previewLockedRef,
     cancelPendingSelect,
     schedulePreviewSelect,
+    handlePreviewPointerMove,
   };
 }

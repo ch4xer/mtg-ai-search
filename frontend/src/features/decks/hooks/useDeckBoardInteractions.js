@@ -2,12 +2,25 @@ import { useEffect, useRef, useState } from "react";
 import { addDeckCard, patchDeckCover, removeDeckCard } from "../../../api/decks.js";
 import { getCardCoverImage } from "../deckModel.js";
 
+function getRemovalReplacement(groups, cardId, board) {
+  const orderedCards = groups.flatMap((group) => group.items);
+  const removedIndex = orderedCards.findIndex(
+    (card) => card.card_id === cardId && card.board === board
+  );
+
+  if (removedIndex < 0) return null;
+  return orderedCards[removedIndex + 1] || orderedCards[removedIndex - 1] || null;
+}
+
 export function useDeckBoardInteractions({
   id,
   cards,
   setCards,
   selectedCard,
   setSelectedCard,
+  mainboardGroups,
+  sideboardGroups,
+  cancelPendingSelect,
   setDeck,
   language,
   isOwner,
@@ -22,12 +35,13 @@ export function useDeckBoardInteractions({
   const longPressTimerRef = useRef(null);
 
   const handleRemoveCard = async (cardId, board) => {
+    cancelPendingSelect();
+    const boardGroups = board === "sideboard" ? sideboardGroups : mainboardGroups;
+    const replacementCard = getRemovalReplacement(boardGroups, cardId, board);
     const res = await removeDeckCard(id, cardId, board);
     if (res.ok) {
       setCards((prev) => prev.filter((card) => !(card.card_id === cardId && card.board === board)));
-      if (selectedCard?.card_id === cardId && selectedCard?.board === board) {
-        setSelectedCard(null);
-      }
+      setSelectedCard(replacementCard);
       showToast(t("cardRemoved"));
     }
   };

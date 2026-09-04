@@ -20,7 +20,7 @@ export const FORMATS = [
 
 const FORMAT_MAP = Object.fromEntries(FORMATS.map((f) => [f.key, f]));
 
-export function getFormat(key) {
+function getFormat(key) {
   return FORMAT_MAP[key] || FORMATS[0];
 }
 
@@ -40,11 +40,6 @@ export function getCardLegality(card, formatKey) {
   const legalities = card?.legalities;
   if (!legalities) return "unknown";
   return legalities[fmt.legalityKey] || "unknown";
-}
-
-export function isCardLegal(card, formatKey) {
-  const status = getCardLegality(card, formatKey);
-  return status === "legal" || status === "restricted";
 }
 
 export function legalityLabel(status, language = 'zh') {

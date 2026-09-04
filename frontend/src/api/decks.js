@@ -33,13 +33,13 @@ function setCached(cache, key, data) {
   cache.set(key, { data, cachedAt: now() });
 }
 
-export function invalidateUserDecksCache() {
+function invalidateUserDecksCache() {
   userDecksCacheVersion += 1;
   userDecksCache.clear();
   pendingUserDecks.clear();
 }
 
-export function invalidateSharedDeckCache(id) {
+function invalidateSharedDeckCache(id) {
   if (!id) return;
   sharedDeckCacheVersion += 1;
   const key = String(id);
@@ -93,11 +93,11 @@ export async function fetchUserDecks({ force = false } = {}) {
   return request;
 }
 
-export function fetchSharedDeck(id) {
+function fetchSharedDeck(id) {
   return fetch(`/api/shared/decks/${id}`);
 }
 
-export function fetchSharedDeckCards(id) {
+function fetchSharedDeckCards(id) {
   return fetch(`/api/shared/decks/${id}/cards`);
 }
 

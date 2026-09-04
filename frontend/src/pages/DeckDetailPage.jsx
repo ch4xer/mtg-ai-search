@@ -73,15 +73,16 @@ export default function DeckDetailPage() {
     showMobileSheet,
     setShowMobileSheet,
     showArtPicker,
-    setShowArtPicker,
     artPrints,
     loadingPrints,
     handleOpenArtPicker,
+    handleCloseArtPicker,
     handleSelectArt,
     handleResetArt,
     previewLockedRef,
     cancelPendingSelect,
     schedulePreviewSelect,
+    handlePreviewPointerMove,
   } = useDeckSelection({ id, cards, setCards, showToast, t, language });
 
   const {
@@ -109,6 +110,9 @@ export default function DeckDetailPage() {
     setCards,
     selectedCard,
     setSelectedCard,
+    mainboardGroups,
+    sideboardGroups,
+    cancelPendingSelect,
     setDeck,
     language,
     isOwner,
@@ -239,6 +243,7 @@ export default function DeckDetailPage() {
               onTouchMove: handleTouchMove,
               onTouchEnd: handleTouchEnd,
               onPreviewSelect: schedulePreviewSelect,
+              onPreviewPointerMove: handlePreviewPointerMove,
               onPreviewCancel: cancelPendingSelect,
               onSelectCard: (item) => {
                 setSelectedCard(item);
@@ -268,7 +273,7 @@ export default function DeckDetailPage() {
           artPrints={artPrints}
           loadingPrints={loadingPrints}
           language={language}
-          onClose={() => setShowArtPicker(false)}
+          onClose={handleCloseArtPicker}
           onResetArt={handleResetArt}
           onSelectArt={handleSelectArt}
           t={t}

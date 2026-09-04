@@ -95,7 +95,7 @@ async def import_owned_deck(deck_id: str, user_id: str, req: ImportDeckRequest) 
             selected_print = await get_card_print_by_set_cn(card_id, set_code, collector_num or "")
             if selected_print:
                 selected_print_id = selected_print["id"]
-                image_url = selected_print.get("image_png") or selected_print.get("image_large")
+                image_url = selected_print.get("image_normal") or selected_print.get("image_small")
                 display_url = selected_print.get("image_art_crop")
 
         if not card_id:
