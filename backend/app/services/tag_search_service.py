@@ -14,7 +14,6 @@ from datetime import datetime, timedelta, timezone
 
 from html import unescape
 from typing import Literal
-from urllib.parse import quote
 
 import httpx
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -22,39 +21,26 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from ..embedding import encode_batch_or_none, encode_queries
 from ..llm_provider import create_chat_llm, is_chat_provider_configured
 from ..repositories.cards import get_cards_by_ids
+from ..repositories.sql.card_search_order import order_cards_by_mana_value
 from ..repositories.database import get_pool
 from .card_query_constraints import build_structured_card_filters, extract_card_search_constraints
 from .llm_json import parse_llm_json_object
+from .tag_reranker import rerank_tags
 
 from app.config import USER_AGENT
 
 logger = logging.getLogger(__name__)
 
 TAGGER_TAGS_URL = "https://scryfall.com/docs/tagger-tags"
-SCRYFALL_SEARCH_URL = "https://scryfall.com/search?q="
 SCRYFALL_API_CARDS_SEARCH_URL = "https://api.scryfall.com/cards/search"
 REFRESH_INTERVAL = timedelta(hours=12)
 SAMPLE_CARDS_PER_TAG = 3
 SCRYFALL_SAMPLE_REQUEST_DELAY_SECONDS = float(os.getenv("SCRYFALL_SAMPLE_REQUEST_DELAY_SECONDS", "0.35"))
 TAG_EXPANSION_DB_VERSION = 1
 TAG_VECTOR_SEARCH_LIMIT = 40
-
-RERANK_SKIP_LEAD_RATIO = float(os.getenv("AI_SEARCH_RERANK_SKIP_LEAD_RATIO", "1.45"))
-RERANK_SKIP_MIN_GAP = float(os.getenv("AI_SEARCH_RERANK_SKIP_MIN_GAP", "0.006"))
+TAG_SLOT_QUERY_REPETITIONS = 2
 
 SUPPORTED_TAG_TYPES: set[Literal["function"]] = {"function"}
-
-TAG_RERANK_PROMPT = (
-    "You map Magic: The Gathering natural-language requests to Scryfall Tagger tags.\n"
-    "Pick only from the provided candidates. Never invent a tag.\n"
-    "Prefer the smallest set of tags that directly satisfies the request.\n"
-    "Preserve all gameplay qualifiers from the request when selecting tags; repeatable/recurring effects are not equivalent to one-shot effects.\n"
-    "Do not choose a generic one-shot tag over a repeatable/recurring tag when the request explicitly asks for repeatability.\n"
-    "Candidates may include a target slot. Preserve useful tags for each required slot so the final Boolean query remains faithful.\n"
-    "Treat art tags as visual/illustration concepts and function tags as Oracle/gameplay concepts.\n"
-    "Return JSON only in this shape: "
-    '{"selected":[{"id":1,"reason":"short reason"}]}.'
-)
 
 TAG_EXPANSION_PROMPT = (
     "You generate English retrieval metadata for Scryfall Tagger tags.\n"
@@ -1349,9 +1335,20 @@ def _single_tag_search_expr(tag: str) -> str:
 
 
 def _target_embedding_query_text(target: QueryTarget) -> str:
-    parts = [target.intent, *target.expansions]
-    deduped = [item for item in dict.fromkeys(" ".join(part.split()) for part in parts if part)]
-    return ". ".join(deduped)
+    semantic_parts = [
+        item
+        for item in dict.fromkeys(" ".join(part.split()) for part in (target.intent, *target.expansions) if part)
+        if item
+    ]
+    slot_text = " ".join(target.slot.replace("_", " ").split()).strip()
+    if re.fullmatch(r"(?:target|slot)(?: \d+)?", slot_text, re.IGNORECASE):
+        slot_text = ""
+
+    # The planner's slot is its concise canonical concept (for example
+    # ``lifelink`` or ``opponent discard``). Put it first and repeat it so a
+    # verbose intent cannot drown that high-signal term in a single embedding.
+    weighted_slot = [slot_text] * TAG_SLOT_QUERY_REPETITIONS if slot_text else []
+    return ". ".join([*weighted_slot, *semantic_parts])
 
 
 async def _vector_search_entries_for_target(
@@ -1450,23 +1447,16 @@ async def _vector_search_entries_for_targets(
         scored: list[dict] = []
         for row in rows:
             distance = float(row["distance"])
-            search_query = _single_tag_search_expr(row["tag"])
             scored.append(
                 {
                     "tag": row["tag"],
                     "label": row["label"],
                     "score": round(1.0 - distance, 6),
                     "reason": "Vector semantic match",
-                    "search_query": search_query,
-                    "search_url": f"{SCRYFALL_SEARCH_URL}{quote(search_query)}",
-                    "target_intent": target.intent,
                     "target_slot": target.slot,
-                    "retrieval_source": "vector",
-                    "vector_distance": round(distance, 6),
                     "aliases": _as_string_list(row["aliases"], max_items=5),
                     "retrieval_phrases": _as_string_list(row["retrieval_phrases"], max_items=8),
                     "description": row["description"] or "",
-                    "embedding_text": row["embedding_text"] or "",
                 }
             )
         return index, scored
@@ -1705,6 +1695,14 @@ async def _cards_for_tag_matches(
     if card_offset > 0:
         params.append(max(0, card_offset))
         offset_clause = f"OFFSET ${len(params)}"
+    result_order = order_cards_by_mana_value(
+        "matched_tag_count DESC",
+        "tag_score_sum DESC",
+        "best_tag_rank ASC",
+        "aggregated.name ASC",
+        "aggregated.card_id ASC",
+        card_alias="aggregated",
+    )
 
     try:
         rows = await pool.fetch(
@@ -1724,6 +1722,7 @@ async def _cards_for_tag_matches(
                 SELECT
                     ctt.card_id,
                     c.name,
+                    c.cmc,
                     selected.tag,
                     selected.tag_score,
                     selected.tag_rank,
@@ -1742,6 +1741,7 @@ async def _cards_for_tag_matches(
                 SELECT
                     card_id,
                     name,
+                    cmc,
                     COUNT(*) AS matched_tag_count,
                     SUM(tag_score) AS tag_score_sum,
                     MIN(tag_rank) AS best_tag_rank,
@@ -1757,7 +1757,7 @@ async def _cards_for_tag_matches(
                         ORDER BY tag_score DESC, tag
                     ) AS matched_tags
                 FROM matched
-                GROUP BY card_id, name
+                GROUP BY card_id, name, cmc
                 HAVING {having_clause}
             ),
             ranked AS (
@@ -1765,11 +1765,7 @@ async def _cards_for_tag_matches(
                     *,
                     COUNT(*) OVER () AS total_ranked
                 FROM aggregated
-                ORDER BY
-                    matched_tag_count DESC,
-                    tag_score_sum DESC,
-                    best_tag_rank ASC,
-                    name ASC
+                ORDER BY {result_order}
                 {limit_clause}
                 {offset_clause}
             )
@@ -1826,6 +1822,7 @@ async def _cards_for_structured_filters(
         return {"cards": [], "total": 0}
 
     pool = await get_pool()
+    result_order = order_cards_by_mana_value("c.name ASC", "c.id ASC")
     try:
         total = await pool.fetchval(
             f"""
@@ -1851,7 +1848,7 @@ async def _cards_for_structured_filters(
             SELECT c.id
             FROM cards c
             WHERE {where}
-            ORDER BY c.name ASC
+            ORDER BY {result_order}
             {limit_clause}
             {offset_clause}
             """,
@@ -2054,103 +2051,28 @@ def _extract_json(text: str) -> dict:
     return parse_llm_json_object(text)
 
 
-def _score_has_clear_lead(first: dict, second: dict | None) -> bool:
-    if second is None:
-        return True
-    first_score = float(first.get("score") or 0.0)
-    second_score = float(second.get("score") or 0.0)
-    if first_score <= 0:
-        return False
-    if second_score <= 0:
-        return True
-    return (
-        first_score >= second_score * RERANK_SKIP_LEAD_RATIO
-        and first_score - second_score >= RERANK_SKIP_MIN_GAP
-    )
+def _rerank_search_context(query: str, analysis: QueryAnalysis, target_meta: list[dict]) -> str:
+    lines = [f"Original user query: {query}"]
+    normalized_intent = analysis.intent.strip()
+    if normalized_intent and normalized_intent != query.strip():
+        lines.append(f"Normalized overall intent: {normalized_intent}")
+    for item in target_meta:
+        slot = str(item.get("slot") or "target").strip()
+        intent = str(item.get("intent") or "").strip()
+        if intent:
+            lines.append(f"Required target [{slot}]: {intent}")
+    return "\n".join(lines)
 
 
-def _select_confident_target_leaders(
-    target_candidates: dict[str, list[dict]],
-    targets: tuple[QueryTarget, ...],
-    limit: int,
-) -> tuple[list[dict], str] | None:
-    if limit <= 0 or not targets or len(targets) > limit:
-        return None
-
-    chosen: list[dict] = []
-    for target in targets:
-        candidates = target_candidates.get(target.slot, [])
-        if not candidates:
-            return None
-        if not _score_has_clear_lead(candidates[0], candidates[1] if len(candidates) > 1 else None):
-            return None
-        chosen.append(dict(candidates[0]))
-
-    return chosen[:limit], "top_score_lead"
-
-
-def _rerank_with_llm(query: str, candidates: list[dict], limit: int) -> tuple[list[dict], bool]:
-    if not candidates or not is_chat_provider_configured():
-        return candidates[:limit], False
-    if len(candidates) == 1:
-        return candidates[:limit], False
-
-    lines = []
-    for idx, candidate in enumerate(candidates, start=1):
-        slot = candidate.get("target_slot") or "target"
-        lines.append(
-            f'{idx}. [slot: {slot}] [function] {candidate["tag"]} '
-            f'(label: {candidate["label"]}; heuristic: {candidate["reason"]})'
-        )
-
-    llm = create_chat_llm(temperature=0)
-    response = llm.invoke(
-        [
-            SystemMessage(content=TAG_RERANK_PROMPT),
-            HumanMessage(
-                content=(
-                    f"User query: {query}\n"
-                    f"Select up to {limit} tags.\n"
-                    "Candidates:\n"
-                    + "\n".join(lines)
-                )
-            ),
-        ]
-    )
-    content = response.content if isinstance(response.content, str) else str(response.content)
-
-    try:
-        payload = _extract_json(content)
-    except Exception:
-        logger.warning("Failed to parse tag-selection LLM response: %s", content)
-        return candidates[:limit], False
-
-    selected = payload.get("selected", [])
-    chosen: list[dict] = []
-    for item in selected:
-        if not isinstance(item, dict):
-            continue
-        idx = item.get("id")
-        if not isinstance(idx, int) or idx < 1 or idx > len(candidates):
-            continue
-        candidate = dict(candidates[idx - 1])
-        reason = str(item.get("reason", "")).strip()
-        if reason:
-            candidate["reason"] = reason
-        chosen.append(candidate)
-
-    if not chosen:
-        return candidates[:limit], False
-
-    seen = set()
-    deduped: list[dict] = []
-    for candidate in chosen:
-        key = candidate["tag"]
-        if key in seen:
-            continue
-        seen.add(key)
-        deduped.append(candidate)
-    return deduped[:limit], True
+def _compact_tag_match(match: dict) -> dict:
+    """Keep only fields required by card lookup and persisted search plans."""
+    return {
+        "tag": str(match["tag"]),
+        "label": str(match.get("label") or match["tag"]),
+        "score": float(match.get("score") or 0.0),
+        "reason": str(match.get("reason") or ""),
+        "target_slot": str(match.get("target_slot") or "target_1"),
+    }
 
 
 def _generate_expansion_batch(
@@ -2441,7 +2363,6 @@ async def search_tags(
     vector_results_by_target = await _vector_search_entries_for_targets(targets)
     target_results: list[list[dict]] = []
     target_meta: list[dict] = []
-    target_candidates: dict[str, list[dict]] = {}
     for target_index, target in enumerate(targets):
         vector_scored = (
             vector_results_by_target[target_index]
@@ -2449,7 +2370,6 @@ async def search_tags(
             else []
         )
         target_results.append(vector_scored)
-        target_candidates[target.slot] = vector_scored
         target_meta.append(
             {
                 "slot": target.slot,
@@ -2472,28 +2392,19 @@ async def search_tags(
         len(candidates),
         time.perf_counter() - vector_started,
     )
-    rerank_query = analysis.intent or query
-    if target_meta:
-        target_summary = "; ".join(
-            f'{item["slot"]}={item["intent"]}' for item in target_meta if item.get("intent")
-        )
-        if target_summary:
-            rerank_query = f"{rerank_query}. Retrieval targets: {target_summary}"
+    rerank_query = _rerank_search_context(query, analysis, target_meta)
     rerank_started = time.perf_counter()
-    rerank_skip_reason = ""
-    confident_selection = _select_confident_target_leaders(target_candidates, targets, limit)
-    if confident_selection is not None:
-        chosen, rerank_skip_reason = confident_selection
-        llm_used = False
-    else:
-        chosen, llm_used = await asyncio.to_thread(_rerank_with_llm, rerank_query, candidates[:20], limit)
-    chosen = _ensure_target_coverage(chosen, candidates, targets, limit)
+    selection = await rerank_tags(rerank_query, candidates[:20], limit)
+    chosen = selection.matches
+    llm_used = selection.used_llm
+    if not llm_used:
+        chosen = _ensure_target_coverage(chosen, candidates, targets, limit)
+    chosen = [_compact_tag_match(match) for match in chosen]
     logger.info(
-        "<<< AI Search rerank selected %d tags from %d candidates, llm_used=%s skip=%s in %.2fs",
+        "<<< AI Search rerank selected %d tags from %d candidates, llm_used=%s in %.2fs",
         len(chosen),
         len(candidates),
         llm_used,
-        rerank_skip_reason or "none",
         time.perf_counter() - rerank_started,
     )
     selected_parts = [
@@ -2541,8 +2452,6 @@ async def search_tags(
         "type_hint": "function",
         "targets": target_meta,
         "logic": logic_dict,
-        "rerank_skipped": bool(rerank_skip_reason),
-        "rerank_skip_reason": rerank_skip_reason,
     }
     search_plan = {
         "chosen": chosen,

@@ -35,9 +35,15 @@ CONSTRAINT_EXTRACTION_PROMPT = (
     "- released_at: date condition like >2020-01-01.\n"
     "- layout: layout word like transform, modal_dfc, adventure.\n"
     "- cmc,power,toughness: numeric conditions using >,>=,<,<=,=.\n\n"
-    "Type allocation rules:\n"
-    "- If a token/word is a card supertype, type, creature type, planeswalker type, or any MTG subtype, put it in type first.\n"
-    "- Do not repeat the same semantic token in multiple fields.\n\n"
+    "Structured-filter scope rules:\n"
+    "- A structured filter describes a printed property of the cards the user wants returned, never a property of another card, spell, permanent, target, cost, or trigger event mentioned in rules text.\n"
+    "- Set type only when the user directly restricts the desired result cards to a supertype, card type, creature type, planeswalker type, or subtype.\n"
+    "- Card types mentioned inside an effect or trigger condition stay in a target intent and must not become result-card type filters.\n"
+    "- Apply the same scope rule to colors, mana value, power, toughness, layout, and release date.\n"
+    "- Do not repeat the same semantic constraint in both a structured field and a target.\n"
+    "- Example: 'find red creatures that trigger when I cast an instant or sorcery' uses type='Creature' and colors='R'; instant and sorcery belong only in the trigger target.\n"
+    "- Example: '每当施放瞬间或法术咒语时触发效果' has no type filter; preserve Instant and Sorcery in one cast-trigger target.\n"
+    "- Example: '每当施放红色咒语时触发' has no colors filter; red modifies the spell being cast, not the result card.\n\n"
     "Color DSL:\n"
     "- 'R W': all listed colors are required.\n"
     "- 'any:R W': any listed color is allowed.\n"
@@ -61,6 +67,7 @@ CONSTRAINT_EXTRACTION_PROMPT = (
     "Tag retrieval rules:\n"
     "- If no gameplay effect is requested, omit targets and logic.\n"
     "- targets is an array of focused functional retrieval goals; each target has slot and intent.\n"
+    "- slot must be a concise, stable English snake_case name for the canonical mechanic or effect, such as lifelink, opponent_discard, or draw_cards.\n"
     "- Create multiple targets when the user asks for multiple gameplay concepts.\n"
     "- Each target must describe exactly ONE atomic gameplay effect. Never merge multiple effects into one target.\n"
     "- Split conjunctive phrases like 'does A and B' into two separate targets, one per effect, even when they share the same actor, subject, or target.\n"
@@ -124,7 +131,7 @@ def _parse_optimizer_response(content: str) -> dict:
 
 def extract_card_search_constraints(query: str) -> tuple[dict, int, int]:
     """Extract structured card filters and effect text without invoking old AI Search."""
-    llm = create_chat_llm(temperature=0.3)
+    llm = create_chat_llm(temperature=0)
     response = llm.invoke(
         [
             SystemMessage(content=CONSTRAINT_EXTRACTION_PROMPT),

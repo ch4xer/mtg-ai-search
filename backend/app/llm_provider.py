@@ -21,10 +21,11 @@ class ChatProviderConfig:
 
 
 def get_chat_provider_config() -> ChatProviderConfig:
+    default_model = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash")
     return ChatProviderConfig(
         api_key=os.getenv("DEEPSEEK_API_KEY", ""),
         base_url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
-        model=os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash"),
+        model=default_model,
     )
 
 
@@ -32,14 +33,14 @@ def is_chat_provider_configured() -> bool:
     return bool(get_chat_provider_config().api_key)
 
 
-def create_chat_llm(**kwargs) -> ChatOpenAI:
+def create_chat_llm(*, model: str | None = None, **kwargs) -> ChatOpenAI:
     config = get_chat_provider_config()
     extra_body = dict(kwargs.pop("extra_body", {}) or {})
     extra_body["thinking"] = {"type": "disabled"}
     kwargs["extra_body"] = extra_body
 
     return ChatOpenAI(
-        model=config.model,
+        model=model or config.model,
         base_url=config.base_url,
         api_key=config.api_key,
         **kwargs,

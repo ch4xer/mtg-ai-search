@@ -102,6 +102,31 @@ class AiSearchPlanTest(unittest.TestCase):
 
         self.assertEqual(query, "Target opponent discards a card. Opponent loses life")
 
+    def test_embedding_query_weights_canonical_slot(self):
+        target = tag_search_service.QueryTarget(
+            intent="Deals damage and gains life equal to damage dealt.",
+            expansions=("Deals damage and gains life equal to damage dealt.",),
+            slot="lifelink",
+        )
+
+        query = tag_search_service._target_embedding_query_text(target)
+
+        self.assertEqual(
+            query,
+            "lifelink. lifelink. Deals damage and gains life equal to damage dealt.",
+        )
+
+    def test_embedding_query_ignores_generic_slot(self):
+        target = tag_search_service.QueryTarget(
+            intent="Draw a card.",
+            expansions=("Draw a card.",),
+            slot="target_1",
+        )
+
+        query = tag_search_service._target_embedding_query_text(target)
+
+        self.assertEqual(query, "Draw a card.")
+
     def test_plan_parses_multiple_and_targets(self):
         target_one = {
             "slot": "opponent_discard",
@@ -149,49 +174,6 @@ class AiSearchPlanTest(unittest.TestCase):
         logic_dict = tag_search_service._logic_node_to_dict(logic, (target_one, target_two))
 
         self.assertEqual(logic_dict, {"op": "and", "children": ["opponent_discard", "opponent_life_loss"]})
-
-    def test_rerank_skip_when_top_score_clearly_leads(self):
-        target = tag_search_service.QueryTarget(
-            intent="Target opponent discards a card.",
-            expansions=("discard a card",),
-            slot="opponent_discard",
-        )
-        selected = tag_search_service._select_confident_target_leaders(
-            {
-                "opponent_discard": [
-                    {"tag_type": "function", "tag": "discard", "score": 0.032, "target_slot": "opponent_discard"},
-                    {"tag_type": "function", "tag": "loot", "score": 0.016, "target_slot": "opponent_discard"},
-                ]
-            },
-            (target,),
-            12,
-        )
-
-        self.assertIsNotNone(selected)
-        chosen, reason = selected
-        self.assertEqual(reason, "top_score_lead")
-        self.assertEqual(chosen[0]["tag"], "discard")
-
-    def test_rerank_not_skipped_when_top_scores_are_close(self):
-        target = tag_search_service.QueryTarget(
-            intent="Target opponent discards a card.",
-            expansions=("discard a card",),
-            slot="opponent_discard",
-        )
-
-        selected = tag_search_service._select_confident_target_leaders(
-            {
-                "opponent_discard": [
-                    {"tag_type": "function", "tag": "discard", "score": 0.032, "target_slot": "opponent_discard"},
-                    {"tag_type": "function", "tag": "opponent-discards", "score": 0.030, "target_slot": "opponent_discard"},
-                ]
-            },
-            (target,),
-            12,
-        )
-
-        self.assertIsNone(selected)
-
 
 if __name__ == "__main__":
     unittest.main()
