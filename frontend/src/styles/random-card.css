@@ -56,7 +56,14 @@ body.modal-open {
   display: grid;
   grid-template-columns: minmax(240px, 360px) minmax(0, 1fr);
   gap: clamp(1.2rem, 3vw, 2.2rem);
+}
+
+.random-card-loading {
   align-items: start;
+}
+
+.random-card-content {
+  align-items: stretch;
 }
 
 .random-card-content.is-refreshing {
@@ -102,6 +109,8 @@ body.modal-open {
 }
 
 .random-card-details {
+  display: flex;
+  flex-direction: column;
   padding-top: 0.3rem;
 }
 
@@ -163,6 +172,10 @@ body.modal-open {
   justify-content: flex-end;
   gap: 0.65rem;
   border-top: 1px solid var(--border-subtle);
+}
+
+.random-card-details .random-card-actions {
+  margin-top: auto;
 }
 
 .random-card-image-skeleton,
@@ -231,6 +244,14 @@ body.modal-open {
   .random-card-content,
   .random-card-loading {
     grid-template-columns: 1fr;
+  }
+
+  .random-card-details {
+    display: block;
+  }
+
+  .random-card-details .random-card-actions {
+    margin-top: 1.25rem;
   }
 
   .random-card-visual,

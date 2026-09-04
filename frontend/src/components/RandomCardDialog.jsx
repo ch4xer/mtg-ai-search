@@ -59,6 +59,14 @@ function RandomCardDialog({ card, loading, error, onAgain, onClose }) {
     imageUrl: imageUri,
   } = presentation;
   const field = (name) => presentation[name] || "";
+  const actions = (
+    <footer className="random-card-actions">
+      <button type="button" className="btn-secondary" onClick={onClose}>{t("closeRandomCard")}</button>
+      <button type="button" className="btn-accent" onClick={() => onAgain(card?.id || null)} disabled={loading}>
+        {loading ? t("drawingRandomCard") : t("drawAgain")}
+      </button>
+    </footer>
+  );
 
   return createPortal(
     <div className="random-card-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
@@ -124,18 +132,13 @@ function RandomCardDialog({ card, loading, error, onAgain, onClose }) {
                 {field("set_name") && <><dt>{t("set")}</dt><dd>{field("set_name")}</dd></>}
                 {card.artist && <><dt>{t("artist")}</dt><dd>{card.artist}</dd></>}
               </dl>
+              {error && <p className="random-card-inline-error" role="alert">{error}</p>}
+              {actions}
             </div>
           </div>
         )}
 
-        {error && card && <p className="random-card-inline-error" role="alert">{error}</p>}
-
-        <footer className="random-card-actions">
-          <button type="button" className="btn-secondary" onClick={onClose}>{t("closeRandomCard")}</button>
-          <button type="button" className="btn-accent" onClick={() => onAgain(card?.id || null)} disabled={loading}>
-            {loading ? t("drawingRandomCard") : t("drawAgain")}
-          </button>
-        </footer>
+        {!card && actions}
       </section>
     </div>,
     document.body,
