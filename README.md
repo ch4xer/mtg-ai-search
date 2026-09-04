@@ -19,9 +19,15 @@ and returns matching cards.
   candidate tags → PostgreSQL tag-card joins yield ranked results. Pagination is
   session-based so "load more" reuses the original search plan without extra LLM
   calls.
-- **Exact Match.** Deterministic card search with filters for color, type,
+- **Exact Match.** Deterministic card search with filters for set, color, type,
   subtype, rarity, mana value, power/toughness, playtest cards, and keyword
-  abilities. Returns facet counts for each filter dimension.
+  abilities. Set filtering supports bilingual lookup and displays the matching
+  print version. Hovering a result shows bilingual explanations for its known
+  keyword abilities. Returns facet counts for each filter dimension.
+- **Random and similar cards.** Draw a random official card in a responsive
+  spotlight dialog, or use a result card's context menu to find cards sharing
+  any of its Scryfall Tagger function tags. Executed queries and Exact Match
+  filters are encoded in the URL for sharing and browser navigation.
 - **Bilingual card text.** English and 简体中文 UI. Chinese card names, types,
   oracle text, and flavor text are synced from MTGCH. Card images always use
   English Scryfall art. Switching the UI language instantly swaps displayed
@@ -82,7 +88,7 @@ All variables live in `.env` (see [`.env.example`](.env.example)).
 | `POSTGRES_PASSWORD` | Yes | Compose-provisioned Postgres password. |
 | `JWT_SECRET` | Yes | Signing key for auth tokens. Generate with `openssl rand -hex 32`. |
 | `DEEPSEEK_API_KEY` | For AI features | Chat model for AI Search, tag expansion, deck analysis, and keyword summaries. |
-| `DEEPSEEK_MODEL` | No | Model name (defaults to `deepseek-v4-pro` in code, overridden to `deepseek-v4-flash` in the Compose file). |
+| `DEEPSEEK_MODEL` | No | Chat model for all AI tasks; defaults to `deepseek-v4-flash`. |
 | `DEEPSEEK_BASE_URL` | No | Defaults to `https://api.deepseek.com`. |
 | `SILICONFLOW_API_KEY` | For AI Search | Embedding API key for vectorizing tag expansion text and search queries (model: `Qwen/Qwen3-Embedding-4B`). |
 | `ADMIN_USERNAME` / `ADMIN_PASSWORD` | No | Bootstrap or promote a built-in admin account on startup. |

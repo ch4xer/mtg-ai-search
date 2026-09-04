@@ -91,13 +91,13 @@ AI Search 是默认首页搜索模式。用户输入自然语言需求，例如�
    - 布尔逻辑树（logic）：and/or 操作符节点，表达 targets 之间的关系。
    - 如果 query 只是卡名没有游戏意图，返回空 targets，系统退化为纯结构化筛选。
 4. **向量检索**：将每个 target 的 intent 文本编码为 embedding，在 function tag catalog 中做向量余弦相似度搜索，每个 target 返回 top-40 候选 tags。多 target 时合并去重（同 tag 取最高分）。
-5. **Tag 选择**：如果每个 target 的 top-1 分数明显领先（≥ 第二名 × 1.45 且分差 ≥ 0.006），直接使用 top-1，跳过 LLM。否则调用 LLM 重排序（LLM 调用 2），从 top-20 候选中选择最能满足请求的 tag 组合，不得发明 tag。
-6. **Tag 覆盖保证**：确保每个 target slot 至少有一个 tag 被选中；如果缺失，从候选池中补充该 slot 的最高分 tag。
+5. **Tag 选择（LLM 调用 2）**：首次 AI 搜索统一把 top-20 候选交给 LLM 重排序，从真实候选中选择语义上恰好满足请求的最小 tag 组合，不得发明 tag；没有精确候选时可以不选择。向量分数只负责召回，不能绕过语义判断。
+6. **故障降级**：只有 LLM 未配置、调用失败或返回无效结构时，才退回向量排序，并为缺失的 target slot 补充最高分候选。LLM 正常返回空选择时不得补充近似 tag。
 7. **SQL 布尔逻辑求值**：使用 PostgreSQL `bool_or(slot = $N)` 聚合函数在 HAVING 子句中求值逻辑树，将 tags 转换为匹配的卡牌集合。
 8. **结构化筛选**：将步骤 3 抽取的颜色、类别、CMC 等筛选条件应用于卡牌结果。
 9. 返回分页卡牌结果。首次搜索创建 ai_search_sessions 记录保存 search plan；加载更多时使用 search_id 复用计划，避免重复调用 LLM。
 
-整个搜索流程最多 2 次 LLM 调用（约束提取 + tag 重排序），在分数分布极端时可降至 1 次。
+包含游戏效果目标的首次搜索固定进行 2 次 LLM 调用（约束提取 + tag 重排序）。纯结构化筛选只需要约束提取；分页通过 search plan 复用结果，不产生额外 LLM 调用。
 
 AI Search 应返回：
 
@@ -126,6 +126,7 @@ Exact Match 是确定性筛选搜索，不依赖 AI Search 的 tag 选择流程�
 - 类型：Creature、Instant、Sorcery、Enchantment、Artifact、Land、Planeswalker、Battle 等。
 - 子类别。
 - 稀有度：common、uncommon、rare、mythic。
+- 系列：按 Scryfall set code 多选；多个系列之间使用 OR 语义。
 - 关键字能力。
 - mana value 最小/最大。
 - power 最小/最大。
@@ -139,13 +140,17 @@ Exact Match 查询规则：
 - 即使用中文搜索，返回的卡图仍然使用英文 Scryfall 卡图。
 - 搜索结果应返回 facets，用于前端展示可选颜色、类型、稀有度、关键字、子类别、mana/power/toughness 范围。
 - 默认不展示 unofficial/playtest 卡，除非用户显式开启。
+- 系列和稀有度同时使用时必须命中同一个印刷版本；结果展示所选系列中最新的匹配版本。
 
 Exact Match 前端行为：
 
 - 路由为 `/exact-match`。
+- 搜索文本、功能标签和所有筛选条件都必须写入 URL；文本与功能标签统一编码在单个 `q` 参数中，功能标签使用 `tag:slug` 或 `tag:"label with spaces"`。
+- “寻找相似卡牌”选择的标签跳转到 Exact Match，并通过同一套 URL 状态与 `function_tags` 筛选执行，不维护第二套相似卡牌搜索流程。
 - 筛选器应以可收起的工具条形式展示。
 - 颜色用 mana symbol 按钮。
 - 类型、稀有度用下拉框。
+- 系列使用支持代码、英文名和中文名检索的多选菜单。
 - 数值范围用数字输入。
 - 能力关键字用多选菜单。
 - 子类别用输入框加 datalist。
@@ -163,6 +168,7 @@ Exact Match 前端行为：
 - 卡牌信息区域展示名称、mana cost、类别、规则文本、力量/防御/忠诚、系列图标、稀有度、合法性等。
 - mana cost 和 oracle text 中的 mana 符号应解析为 mana-font 图标。
 - 每张卡提供“选择卡图版本”按钮，打开该卡所有本地英文印刷版本的图片选择器。
+- 桌面端鼠标悬停在搜索结果卡牌上时，如果卡牌含有已知关键词异能，应在卡牌旁展示每项异能的简短解释，并随界面语言显示英文或简体中文。
 - 已登录用户或持有本地 token 的用户可以从卡片上把卡加入自己的卡组。
 
 ## 7. 认证与账号
@@ -334,7 +340,7 @@ API key：
 
 后台数据库维护区包含以下任务卡片：
 
-- Keyword sync：同步关键字能力，用于 Exact Match 能力筛选。
+- Keyword sync：同步关键字能力，并生成搜索结果悬停说明使用的中英文名称和短解释。
 - Function tag links：同步 Scryfall Tagger function tags 与卡牌关系，用于 AI Search。
 - Function tag embeddings：生成或补全 function tag 的语义扩展文本和 embedding。
 - Chinese card info：从 MTGCH 补全缺失的中文卡名、类别、规则文本、背景叙述和系列名。
@@ -386,7 +392,7 @@ Endpoint：`POST /api/external/exact-match`
 
 - `api_key`：必填。
 - `query`：文本关键词。
-- colors、types、rarities、keywords、subtypes、cmc_min、cmc_max、power_min、power_max、toughness_min、toughness_max、include_playtest。
+- colors、types、rarities、set_codes、keywords、subtypes、cmc_min、cmc_max、power_min、power_max、toughness_min、toughness_max、include_playtest。
 - `limit`：1 到 100。
 
 返回 `SearchResponse`。
@@ -408,9 +414,13 @@ Endpoint：`POST /api/external/exact-match`
 
 ### 11.2 Search
 
-- `POST /api/search`：AI Search。接受 `query`、`limit`、`offset`、`search_id`（加载更多）、`include_zh`。返回 `SearchResponse`（search_id、results、total、limit、offset、has_more）。
-- `POST /api/discover`：Exact Match。
+- `POST /api/search`：AI Search。接受 `query`、`limit`、`offset`、`search_id`（加载更多）。返回 `SearchResponse`（search_id、results、total、limit、offset、has_more）。
+- `POST /api/discover`：Exact Match；相似卡牌也通过该接口的 `function_tags` 与 `exclude_card_id` 筛选。
+- `GET /api/cards/random`：返回一张随机的正式、非 playtest 卡牌；可通过 `exclude_card_id` 避免连续重复。
+- `GET /api/cards/{oracle_id}/function-tags`：返回卡牌当前有效的 function tags。
 - `GET /api/keywords`：返回所有关键字能力。
+- `GET /api/keyword-abilities`：返回关键词异能的英文/中文名称和简短解释。
+- `GET /api/card-sets`：返回系列代码、英文/中文名称、类型、发布日期和卡牌数。
 - `GET /api/cards/{oracle_id}/prints`：返回指定卡牌的所有英文印刷版本。
 
 ### 11.3 Decks
