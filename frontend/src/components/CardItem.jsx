@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from "react";
 import { createPortal } from "react-dom";
+import { useNavigate } from "react-router-dom";
 import { addDeckCard, fetchUserDecks } from "../api/decks.js";
 import { fetchNormalizedCardPrints } from "../api/cards.js";
 import { useAuth } from "../contexts/AuthContext.jsx";
@@ -37,6 +38,7 @@ function CardItem({
   const [loadingDecks, setLoadingDecks] = useState(false);
   const [actionMenu, setActionMenu] = useState(null);
   const { language, t } = useLanguage();
+  const navigate = useNavigate();
   const cardRef = useRef(null);
   const menuRef = useRef(null);
   const { user } = useAuth();
@@ -118,6 +120,10 @@ function CardItem({
   };
 
   const handleOpenDeckMenu = async () => {
+    if (!canAddToDeck) {
+      navigate("/login");
+      return;
+    }
     if (showDeckMenu) {
       setShowDeckMenu(false);
       return;
