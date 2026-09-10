@@ -77,14 +77,13 @@ function RandomCardDialog({ card, loading, error, onAgain, onClose }) {
         aria-modal="true"
         aria-label={t("randomCard")}
       >
-        <button type="button" className="random-card-close" onClick={onClose} aria-label={t("closeRandomCard")}>
-          &times;
-        </button>
-
         {loading && !card && (
           <div className="random-card-loading" aria-busy="true">
             <div className="random-card-image-skeleton" />
-            <div className="random-card-copy-skeleton"><span /><span /><span /><span /></div>
+            <div className="random-card-copy-skeleton random-card-side">
+              <span /><span /><span /><span />
+              {actions}
+            </div>
           </div>
         )}
 
@@ -105,7 +104,7 @@ function RandomCardDialog({ card, loading, error, onAgain, onClose }) {
                 </button>
               )}
             </div>
-            <div className="random-card-details">
+            <div className="random-card-details random-card-side">
               <div className="random-card-title-row">
                 <div>
                   <h3>{displayName}</h3>
@@ -138,7 +137,7 @@ function RandomCardDialog({ card, loading, error, onAgain, onClose }) {
           </div>
         )}
 
-        {!card && actions}
+        {!card && !loading && actions}
       </section>
     </div>,
     document.body,
